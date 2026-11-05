@@ -498,20 +498,5 @@ class Guardian:
             print(f"[Guardian] Slack notification failed: {e}")
 
     async def _get_token(self) -> str:
-        # PayPal tokens expire after ~9h (expires_in=32400). Re-fetch 60s before expiry.
-        if self._token and time.monotonic() < self._token_expires_at - 60:
-            return self._token
-        import base64
-        creds = base64.b64encode(
-            f"{os.environ['PAYPAL_CLIENT_ID']}:{os.environ['PAYPAL_CLIENT_SECRET']}".encode()
-        ).decode()
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self.paypal_base}/v1/oauth2/token",
-                headers={"Authorization": f"Basic {creds}"},
-                data={"grant_type": "client_credentials"},
-            )
-            data = r.json()
-            self._token = data["access_token"]
-            self._token_expires_at = time.monotonic() + data.get("expires_in", 32400)
-            return self._token
+        from agents.paypal_client import get_client
+        return await get_client().get_token()

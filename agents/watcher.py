@@ -828,6 +828,37 @@ async def api_astropods_chat(request: Request):
         return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)
 
 
+# ── PayPal API endpoints ──────────────────────────────────────────────────────
+
+@app.get("/api/paypal/status")
+async def paypal_status():
+    """
+    Returns PayPal API connection status, OAuth health, open dispute count,
+    and webhook registrations.
+    Always returns a renderable payload; uses demo data when keys are absent.
+    """
+    from agents.paypal_client import get_client
+    return JSONResponse(await get_client().status_summary())
+
+
+@app.get("/api/paypal/disputes")
+async def paypal_disputes(state: str = "REQUIRED_ACTION", page_size: int = 10):
+    """
+    GET /api/paypal/disputes?state=REQUIRED_ACTION&page_size=10
+    Proxies PayPal's /v1/customer/disputes filtered by state.
+    Returns demo data when keys are absent.
+    """
+    from agents.paypal_client import get_client, _demo_status
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"demo": True, "items": _demo_status()["urgent_items"]})
+    try:
+        data = await client.list_disputes(dispute_state=state, page_size=page_size)
+        return JSONResponse(data)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Kernel Browser endpoints ──────────────────────────────────────────────────
 
 @app.get("/api/kernel/status")

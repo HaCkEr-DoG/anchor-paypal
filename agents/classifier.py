@@ -303,17 +303,5 @@ class DisputeClassifier:
             return None
 
     async def _get_token(self) -> str:
-        if self._token:
-            return self._token
-        import base64
-        creds = base64.b64encode(
-            f"{os.environ['PAYPAL_CLIENT_ID']}:{os.environ['PAYPAL_CLIENT_SECRET']}".encode()
-        ).decode()
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self.paypal_base}/v1/oauth2/token",
-                headers={"Authorization": f"Basic {creds}"},
-                data={"grant_type": "client_credentials"},
-            )
-            self._token = r.json()["access_token"]
-            return self._token
+        from agents.paypal_client import get_client
+        return await get_client().get_token()
