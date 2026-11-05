@@ -828,6 +828,54 @@ async def api_astropods_chat(request: Request):
         return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)
 
 
+# ── AG Grid endpoints ─────────────────────────────────────────────────────────
+
+@app.get("/api/aggrid/status")
+async def aggrid_status():
+    """
+    Returns AG Grid version, features used, row/column counts, and sample
+    columnDefs + rowData. Always returns a renderable payload.
+    """
+    from agents.aggrid import AGGridExporter
+    return JSONResponse(AGGridExporter().status_summary())
+
+
+@app.get("/api/aggrid/data")
+async def aggrid_data(grid: str = "disputes"):
+    """
+    GET /api/aggrid/data?grid=disputes  (default)
+    GET /api/aggrid/data?grid=recoveries
+
+    Returns {columnDefs, rowData, defaultColDef, gridOptions} ready for:
+        createGrid(el, { columnDefs: d.columnDefs, rowData: d.rowData })
+
+    Uses live Elasticsearch data when available; falls back to demo rows.
+    """
+    from agents.aggrid import AGGridExporter, _demo_disputes, _demo_recoveries
+    exporter = AGGridExporter()
+    rows: list[dict] = []
+
+    if grid == "recoveries":
+        try:
+            from agents.briefing import load_recent_recoveries
+            rows = await load_recent_recoveries(limit=50)
+        except Exception:
+            pass
+        if not rows:
+            rows = _demo_recoveries()
+        return JSONResponse(exporter.export_recoveries(rows))
+    else:
+        try:
+            from agents.briefing import load_recent_actions
+            records = await load_recent_actions(limit=50)
+            rows = [r.__dict__ if hasattr(r, "__dict__") else r for r in records]
+        except Exception:
+            pass
+        if not rows:
+            rows = _demo_disputes()
+        return JSONResponse(exporter.export_disputes(rows))
+
+
 # ── PayPal API endpoints ──────────────────────────────────────────────────────
 
 @app.get("/api/paypal/status")
