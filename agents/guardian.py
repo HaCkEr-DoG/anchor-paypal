@@ -103,6 +103,18 @@ class Guardian:
                 )
                 return
 
+        # Astropods AI Gateway — when configured, all LLM reasoning routes through
+        # the governance layer for audit trail, spend control, and model switching.
+        from agents.astropods import AstropodsGateway
+        _astro = AstropodsGateway()
+        if _astro.gateway_enabled():
+            print(
+                f"[Guardian] Astropods gateway active — "
+                f"LLM calls routed via {_astro.gateway_url} for governance audit"
+            )
+        else:
+            print("[Guardian] Astropods gateway not configured — set ASTRO_GATEWAY_URL + ASTRO_GATEWAY_API_KEY")
+
         # APIMatic context grounding — verify correct endpoint + required fields before
         # making any PayPal API call. Prevents hallucinated paths or wrong parameters.
         from agents.apimatic import ApiMaticClient

@@ -764,3 +764,65 @@ async def api_render_deploy(request: Request):
         return JSONResponse({"enabled": True, "deploy": deploy})
     except Exception as e:
         return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Astropods AI Governance endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/astropods/status")
+async def api_astropods_status():
+    """
+    Returns Astropods gateway config, available models with pricing,
+    and current-month billing usage.
+    Falls back to demo data when ASTRO_GATEWAY_API_KEY is not set.
+    """
+    from agents.astropods import AstropodsGateway
+    gw = AstropodsGateway()
+    result = await gw.status_summary()
+    return JSONResponse(result)
+
+
+@app.post("/api/astropods/chat")
+async def api_astropods_chat(request: Request):
+    """
+    Routes a chat completion through the Astropods AI Gateway.
+    Body: {"messages": [...], "model": "claude-sonnet-4-6"}
+    Demonstrates that Anchor can route LLM calls through Astropods for governance.
+    """
+    from agents.astropods import AstropodsGateway
+    gw = AstropodsGateway()
+    if not gw.gateway_enabled():
+        return JSONResponse({
+            "enabled": False,
+            "note": "ASTRO_GATEWAY_URL and ASTRO_GATEWAY_API_KEY must be set",
+            "demo_response": {
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "[Astropods demo] Guardian Agent reasoning: "
+                            "Dispute PP-D-00112233 — ITEM_NOT_RECEIVED, $245.00. "
+                            "EV(fight)=$142.80 > EV(accept)=$−245.00. "
+                            "Recommended action: PROVIDE_EVIDENCE. "
+                            "This response was routed through Astropods AI Gateway "
+                            "for governance audit and spend control."
+                        ),
+                    }
+                }],
+                "model": "claude-sonnet-4-6",
+                "usage": {"prompt_tokens": 48, "completion_tokens": 72, "total_tokens": 120},
+            },
+        })
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    messages = body.get("messages", [{"role": "user", "content": "Hello from Anchor — PayPal AI Hackathon 2026"}])
+    model    = body.get("model", "claude-sonnet-4-6")
+    try:
+        resp = await gw.chat_completion(messages, model=model)
+        return JSONResponse({"enabled": True, "response": resp})
+    except Exception as e:
+        return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)

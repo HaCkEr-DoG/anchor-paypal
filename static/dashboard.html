@@ -704,10 +704,70 @@
   </div>
 </div>
 
+<!-- Astropods AI Governance Panel -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:16px;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <!-- Astropods logo mark (stylised rocket/node) -->
+    <svg width="22" height="22" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+      <circle cx="16" cy="16" r="16" fill="#6366F1"/>
+      <circle cx="16" cy="16" r="5" fill="white"/>
+      <circle cx="16" cy="6"  r="2.5" fill="white" opacity=".7"/>
+      <circle cx="16" cy="26" r="2.5" fill="white" opacity=".7"/>
+      <circle cx="6"  cy="16" r="2.5" fill="white" opacity=".7"/>
+      <circle cx="26" cy="16" r="2.5" fill="white" opacity=".7"/>
+    </svg>
+    <div style="font-size:15px;font-weight:600;">Astropods AI Governance</div>
+    <span id="astro-gateway-badge" style="margin-left:auto;font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;border:1px solid;display:none;"></span>
+  </div>
+
+  <!-- Governance pitch -->
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6;">
+    Every Guardian Agent LLM reasoning call routes through Astropods for
+    <strong style="color:var(--text)">audit trail</strong>,
+    <strong style="color:var(--text)">spend control</strong>, and
+    <strong style="color:var(--text)">zero-code model switching</strong>.
+  </div>
+
+  <!-- Gateway URL -->
+  <div id="astro-gateway-url-row" style="display:none;margin-bottom:12px;font-size:12px;color:var(--muted);">
+    Gateway: <code id="astro-gateway-url" style="background:rgba(99,102,241,.12);color:#818cf8;padding:1px 6px;border-radius:4px;"></code>
+  </div>
+
+  <!-- Models table -->
+  <div id="astro-models-wrap" style="display:none;margin-bottom:14px;">
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;">Available Models &amp; Pricing</div>
+    <div id="astro-models-table" style="display:flex;flex-direction:column;gap:3px;"></div>
+  </div>
+
+  <!-- Billing -->
+  <div id="astro-billing-row" style="display:none;margin-bottom:14px;font-size:12px;"></div>
+
+  <!-- Demo chat button -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+    <button onclick="astroTestGateway(this)"
+      style="display:inline-flex;align-items:center;gap:6px;background:#6366F1;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      Test AI Gateway →
+    </button>
+    <button onclick="astroRefresh()"
+      style="display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--muted);border:1.5px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      Refresh
+    </button>
+  </div>
+
+  <div id="astro-chat-result" style="display:none;margin-bottom:10px;"></div>
+
+  <div style="font-size:11px;color:var(--muted);">
+    Powered by <a href="https://astropods.com" target="_blank" rel="noopener" style="color:#6366F1;text-decoration:none;">Astropods</a>
+    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_URL</code> + <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_API_KEY</code> to route live LLM calls
+  </div>
+</div>
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
-  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · <strong style="color:#46E3B7">Render</strong> · PayPal AI Hackathon 2026</span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · <strong style="color:#46E3B7">Render</strong> · <strong style="color:#6366F1">Astropods</strong> · PayPal AI Hackathon 2026</span>
 </footer>
 
 <script>
@@ -1335,11 +1395,138 @@ async function renderDeploy(btn, clearCache) {
   }
 }
 
+// ── Astropods AI governance panel ────────────────────────────────────────────
+const MAKER_COLORS = {
+  Anthropic: '#c084fc', OpenAI: '#10b981', Amazon: '#f59e0b',
+  Mistral: '#f97316', Qwen: '#06b6d4', Astropods: '#6366F1',
+};
+
+async function astroRefresh() {
+  try {
+    const r = await fetch('/api/astropods/status');
+    const data = await r.json();
+    _applyAstroStatus(data.demo || data);
+  } catch (e) {
+    console.error('Astropods status fetch failed:', e);
+  }
+}
+
+function _applyAstroStatus(d) {
+  if (!d) return;
+
+  // Gateway badge
+  const badge = document.getElementById('astro-gateway-badge');
+  if (badge) {
+    if (d.gateway_configured) {
+      badge.textContent   = 'Gateway Active';
+      badge.style.color   = '#6366F1';
+      badge.style.borderColor = '#6366F1';
+      badge.style.background  = 'rgba(99,102,241,.15)';
+    } else {
+      badge.textContent   = 'Demo Mode';
+      badge.style.color   = '#6b7280';
+      badge.style.borderColor = '#6b7280';
+      badge.style.background  = 'rgba(107,114,128,.1)';
+    }
+    badge.style.display = 'inline';
+  }
+
+  // Gateway URL
+  if (d.gateway_url || d.gateway_base_url) {
+    const urlEl = document.getElementById('astro-gateway-url');
+    const row   = document.getElementById('astro-gateway-url-row');
+    if (urlEl) urlEl.textContent = d.gateway_url || d.gateway_base_url;
+    if (row)   row.style.display = 'block';
+  }
+
+  // Models table
+  const models = d.models || [];
+  if (models.length) {
+    const container = document.getElementById('astro-models-table');
+    container.innerHTML = models.map(m => {
+      const col = MAKER_COLORS[m.maker] || '#6b7280';
+      const ctx = m.context_tokens ? `${(m.context_tokens/1000).toFixed(0)}k ctx` : '';
+      const inp = m.input_per_million_usd  ? `$${m.input_per_million_usd}/M in` : '';
+      const out = m.output_per_million_usd ? `$${m.output_per_million_usd}/M out` : '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:rgba(255,255,255,.03);">
+        <span style="width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;"></span>
+        <code style="font-size:12px;color:${col};min-width:160px;">${m.id}</code>
+        <span style="font-size:10px;color:var(--muted);background:rgba(255,255,255,.06);padding:1px 6px;border-radius:3px;flex-shrink:0;">${m.maker || ''}</span>
+        ${ctx ? `<span style="font-size:10px;color:var(--muted);">${ctx}</span>` : ''}
+        <span style="margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap;">${[inp,out].filter(Boolean).join(' · ')}</span>
+      </div>`;
+    }).join('');
+    document.getElementById('astro-models-wrap').style.display = 'block';
+  }
+
+  // Billing
+  const billing = d.billing || {};
+  if (billing.available !== undefined) {
+    const billingEl = document.getElementById('astro-billing-row');
+    const data = billing.data || {};
+    const spent = data.total_usd ? `$${data.total_usd} spent` : '';
+    const calls = data.calls    ? `${data.calls} calls` : '';
+    if (billingEl && (spent || calls)) {
+      billingEl.style.display = 'flex';
+      billingEl.style.gap = '12px';
+      billingEl.style.alignItems = 'center';
+      billingEl.innerHTML = `
+        <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">This Month</span>
+        ${spent ? `<span style="color:var(--text);font-weight:600;">${spent}</span>` : ''}
+        ${calls ? `<span style="color:var(--muted);">${calls}</span>` : ''}
+        ${billing.available ? '<span style="color:#22c55e;font-size:11px;">● Credits available</span>' : ''}
+      `;
+    }
+  }
+}
+
+async function astroTestGateway(btn) {
+  const resultDiv = document.getElementById('astro-chat-result');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Routing via Astropods…';
+  resultDiv.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/astropods/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        messages: [{
+          role: 'user',
+          content: 'You are Guardian Agent for Anchor. Dispute PP-D-00112233: ITEM_NOT_RECEIVED, $245.00, seller win rate 50%, account age 2 years. Should we fight or accept? Give a one-sentence recommendation.'
+        }],
+        model: 'claude-sonnet-4-6',
+      }),
+    });
+    const data = await r.json();
+
+    const content = data.demo_response?.choices?.[0]?.message?.content
+                 || data.response?.choices?.[0]?.message?.content
+                 || data.error || 'No response';
+
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = `<div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:7px;padding:12px 14px;">
+      <div style="font-size:10px;color:#818cf8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">
+        ${data.demo_response ? '⚡ Demo response (set ASTRO_GATEWAY_API_KEY for live)' : '✓ Routed via Astropods Gateway'}
+      </div>
+      <div style="font-size:13px;color:var(--text);line-height:1.6;">${content}</div>
+    </div>`;
+  } catch (e) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;">Request failed: ${e.message}</div>`;
+  } finally {
+    btn.innerHTML = orig;
+    btn.disabled = false;
+  }
+}
+
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
   renderRefreshStatus();
+  astroRefresh();
   setInterval(loadAll, 60000); // auto-refresh every 60s
 });
 </script>
