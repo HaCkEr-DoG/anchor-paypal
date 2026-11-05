@@ -489,6 +489,52 @@
 <!-- Tooltip (shared) -->
 <div class="tl-tooltip" id="tl-tooltip"></div>
 
+<!-- Channel3 Enrichment Demo Panel -->
+<div style="padding:24px 32px;border-top:1px solid var(--border);background:var(--surface);">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="font-size:15px;font-weight:600;">Channel3 Product Enrichment</div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(0,196,140,.1);color:#00c48c;border:1px solid rgba(0,196,140,.25);">Live</span>
+    <span style="font-size:12px;color:var(--muted);">— auto-generates ITEM_DESCRIPTION evidence for every dispute we fight</span>
+  </div>
+  <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;max-width:900px;">
+    <div style="flex:1;min-width:200px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:5px;">Item description</label>
+      <input id="c3-item" type="text" value="Nike Air Max 90"
+        style="width:100%;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;"
+        placeholder="e.g. Sony WH-1000XM5 headphones" />
+    </div>
+    <div style="width:120px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:5px;">Amount (USD)</label>
+      <input id="c3-amount" type="number" value="89.99"
+        style="width:100%;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;" />
+    </div>
+    <button onclick="runChannel3()"
+      style="padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
+      Enrich →
+    </button>
+  </div>
+
+  <div id="c3-result" style="display:none;margin-top:16px;border:1px solid var(--border);border-radius:6px;overflow:hidden;max-width:900px;">
+    <div style="display:flex;gap:0;">
+      <!-- Product card -->
+      <div id="c3-product" style="flex:1;padding:16px;border-right:1px solid var(--border);font-size:13px;line-height:1.7;">
+      </div>
+      <!-- Evidence text -->
+      <div style="flex:1;padding:16px;">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Evidence text → PayPal ITEM_DESCRIPTION</div>
+        <pre id="c3-evidence" style="font-family:monospace;font-size:11px;color:var(--text);white-space:pre-wrap;line-height:1.6;margin:0;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="c3-error" style="display:none;margin-top:12px;font-size:13px;color:var(--red);"></div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);">
+    Powered by <a href="https://trychannel3.com" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Channel3</a>
+    — 100M+ product graph · set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">CHANNEL3_API_KEY</code> in Render env vars to enable live lookups
+  </div>
+</div>
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
@@ -853,6 +899,65 @@ function switchTab(name) {
 }
 
 let _lastDisputes = [];
+
+// ── Channel3 enrichment demo ────────────────────────────────────────────────
+async function runChannel3() {
+  const item   = document.getElementById('c3-item').value.trim();
+  const amount = parseFloat(document.getElementById('c3-amount').value) || null;
+  const resDiv = document.getElementById('c3-result');
+  const errDiv = document.getElementById('c3-error');
+  const btn    = document.querySelector('[onclick="runChannel3()"]');
+
+  if (!item) return;
+
+  btn.textContent = 'Searching…';
+  btn.disabled = true;
+  resDiv.style.display = 'none';
+  errDiv.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/channel3/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_description: item, amount, dispute_id: 'PP-D-DEMO' }),
+    });
+    const data = await r.json();
+
+    if (data.error) {
+      errDiv.textContent = 'Channel3: ' + data.error;
+      errDiv.style.display = 'block';
+      return;
+    }
+
+    const p = data.product || data.demo;
+    const evidenceText = data.evidence_text || (data.demo && data.demo.evidence_text) || '';
+
+    // Product card
+    const imgs = p.images && p.images.length
+      ? `<img src="${p.images[0]}" style="max-width:120px;max-height:80px;border-radius:4px;object-fit:cover;float:right;margin-left:12px;" onerror="this.style.display='none'" />`
+      : '';
+    document.getElementById('c3-product').innerHTML = `
+      ${imgs}
+      <div style="font-weight:700;font-size:14px;margin-bottom:4px;">${p.title || item}</div>
+      ${p.brand ? `<div style="color:var(--muted)">Brand: ${p.brand}</div>` : ''}
+      ${p.category ? `<div style="color:var(--muted)">Category: ${p.category}</div>` : ''}
+      ${p.catalog_price != null ? `<div style="color:var(--green);font-weight:600;">$${Number(p.catalog_price).toFixed(2)} ${p.currency || 'USD'}</div>` : ''}
+      ${p.availability ? `<div style="color:${p.availability==='InStock'?'var(--green)':'var(--yellow)'};">${p.availability}</div>` : ''}
+      ${p.domain ? `<div style="color:var(--muted);font-size:11px;">via ${p.domain}</div>` : ''}
+      ${!data.enabled ? `<div style="margin-top:8px;padding:6px 10px;background:rgba(0,112,224,.1);border-radius:4px;font-size:11px;color:var(--accent);">Demo mode — set CHANNEL3_API_KEY for live lookups</div>` : ''}
+    `;
+
+    document.getElementById('c3-evidence').textContent = evidenceText;
+    resDiv.style.display = 'block';
+
+  } catch(e) {
+    errDiv.textContent = 'Request failed: ' + e.message;
+    errDiv.style.display = 'block';
+  } finally {
+    btn.textContent = 'Enrich →';
+    btn.disabled = false;
+  }
+}
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {

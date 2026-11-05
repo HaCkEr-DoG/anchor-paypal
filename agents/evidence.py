@@ -220,6 +220,38 @@ asyncio.run(capture())
                 f"Evidence submission failed: {resp.status_code} — {resp.text}"
             )
 
+    async def gather_product_evidence(
+        self,
+        item_description: str,
+        dispute_id: str,
+        transaction_amount: float | None,
+        tmp_dir: "Path",
+    ) -> "Optional[EvidenceFile]":
+        """
+        Uses Channel3's product graph to look up the disputed item and
+        generates an ITEM_DESCRIPTION evidence file for PayPal's
+        provide-evidence endpoint.
+
+        No API key → returns None gracefully (not a hard failure).
+        """
+        from agents.channel3 import Channel3Client
+
+        client = Channel3Client()
+        result = await client.enrich_dispute(dispute_id, item_description, transaction_amount)
+
+        if not result.succeeded:
+            return None
+
+        txt_path = tmp_dir / f"channel3_{dispute_id}.txt"
+        txt_path.write_text(result.evidence_text, encoding="utf-8")
+
+        return EvidenceFile(
+            evidence_type=EvidenceType.ITEM_DESCRIPTION,
+            file_path=txt_path,
+            notes=f"Product data for '{item_description}' — Channel3 catalog",
+            source="Channel3 product graph (trychannel3.com)",
+        )
+
     async def accept_dispute(self, dispute_id: str, note: str = "") -> dict:
         """
         Accept a dispute claim (Oracle recommends ACCEPT).

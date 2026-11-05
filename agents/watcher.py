@@ -372,6 +372,20 @@ async def _execute_approved_fight(dispute_id: str):
         for f in await assembler.gather_communication_evidence(buyer_email, tmp_dir):
             package.add(f)
 
+    # Channel3 product enrichment — auto-generate ITEM_DESCRIPTION evidence
+    item_name = ""
+    items = transaction.get("items") or []
+    if items:
+        item_name = items[0].get("name", "") or items[0].get("description", "")
+    if not item_name:
+        item_name = transaction.get("description", "") or f"PayPal dispute {dispute_id}"
+    product_evidence = await assembler.gather_product_evidence(
+        item_name, dispute_id, dispute_amount, tmp_dir
+    )
+    if product_evidence:
+        package.add(product_evidence)
+        print(f"[Watcher] Channel3 enriched {dispute_id} with product data for '{item_name}'")
+
     result = await assembler.submit(package) if package.is_sufficient() else None
 
     action = ActionRecord(
@@ -533,6 +547,81 @@ async def api_disputes():
     except Exception as e:
         print(f"[Dashboard] disputes query failed: {e}")
         return JSONResponse({"rows": [], "error": str(e)})
+
+
+@app.post("/api/channel3/enrich")
+async def api_channel3_enrich(request: Request):
+    """
+    Channel3 product enrichment endpoint.
+    Given a dispute item description + amount, returns canonical product data
+    from Channel3's 100M+ product graph.
+
+    Body: {"item_description": "Nike Air Max 90", "amount": 89.99, "dispute_id": "PP-D-..."}
+    Returns: Channel3 product match + formatted ITEM_DESCRIPTION evidence text.
+
+    Used by: Guardian (auto enrichment on dispute_fought), dashboard demo button.
+    """
+    from agents.channel3 import Channel3Client
+
+    body = await request.json()
+    item_description = body.get("item_description", "")
+    amount = body.get("amount")
+    dispute_id = body.get("dispute_id", "demo")
+
+    if not item_description:
+        return JSONResponse({"error": "item_description required"}, status_code=400)
+
+    client = Channel3Client()
+    if not client.enabled():
+        return JSONResponse({
+            "enabled": False,
+            "note": "CHANNEL3_API_KEY not configured — set it in Render env vars",
+            "demo": {
+                "product": "Nike Air Max 90",
+                "brand": "Nike",
+                "category": "Athletic Footwear",
+                "catalog_price": 90.00,
+                "currency": "USD",
+                "availability": "InStock",
+                "domain": "nike.com",
+                "evidence_text": (
+                    f"Product: Nike Air Max 90\n"
+                    f"Brand: Nike\n"
+                    f"Category: Athletic Footwear\n"
+                    f"Catalog price: USD 90.00\n"
+                    f"Transaction amount: USD {amount or '89.99'}\n"
+                    f"Price match: within 2% of catalog price ✓\n"
+                    f"Availability: InStock\n"
+                    f"Sold by: nike.com\n\n"
+                    f"Data source: Channel3 product graph — trychannel3.com (100M+ products)"
+                ),
+            }
+        })
+
+    result = await client.enrich_dispute(dispute_id, item_description, float(amount) if amount else None)
+
+    if not result.succeeded:
+        return JSONResponse({"enabled": True, "error": result.error})
+
+    p = result.product
+    return JSONResponse({
+        "enabled": True,
+        "dispute_id": dispute_id,
+        "query": result.query,
+        "product": {
+            "id": p.id,
+            "title": p.title,
+            "brand": p.brand,
+            "category": p.category,
+            "catalog_price": p.price,
+            "currency": p.currency,
+            "availability": p.availability,
+            "domain": p.domain,
+            "description": p.description[:200] + "…" if len(p.description) > 200 else p.description,
+            "images": p.images,
+        },
+        "evidence_text": result.evidence_text,
+    })
 
 
 @app.get("/api/recoveries")
