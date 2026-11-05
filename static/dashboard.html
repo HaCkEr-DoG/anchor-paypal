@@ -579,6 +579,31 @@
   </div>
 </div>
 
+<!-- Channel3 Integration Panel -->
+<div class="card" id="channel3-panel" style="border-top:3px solid #00c48c;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:15px;font-weight:600;">Channel3</div>
+    <span id="channel3-badge" style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(0,196,140,.1);color:#00c48c;border:1px solid rgba(0,196,140,.25);">loading…</span>
+    <span style="font-size:12px;color:var(--muted);">— 100M+ product graph · auto-generates ITEM_DESCRIPTION evidence</span>
+    <button onclick="channel3Refresh(this)" style="margin-left:auto;padding:7px 14px;border-radius:6px;border:none;background:#00c48c;color:#000;font-size:13px;cursor:pointer;font-weight:600;">↻ Refresh</button>
+  </div>
+
+  <div id="channel3-stats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+  <div id="channel3-features" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
+
+  <div id="channel3-preview" style="display:none;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;"></div>
+
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button onclick="channel3ShowHow(this)" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer;">How it works</button>
+  </div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);">
+    Powered by <a href="https://trychannel3.com" target="_blank" rel="noopener" style="color:#00c48c;text-decoration:none;">Channel3</a>
+    · Product Graph · <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">CHANNEL3_API_KEY</code> to enable live lookups
+  </div>
+</div>
+
 <!-- Channel3 Enrichment Demo Panel -->
 <div style="padding:24px 32px;border-top:1px solid var(--border);background:var(--surface);">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -1470,6 +1495,74 @@ async function loadApiMaticContext() {
   }
 }
 
+// ── Channel3 integration panel ───────────────────────────────────────────────
+async function channel3Refresh(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch('/api/channel3/status');
+    const d = await r.json();
+    _applyChannel3Status(d);
+  } catch (e) {
+    console.error('Channel3 status fetch failed:', e);
+  } finally {
+    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  }
+}
+
+function _applyChannel3Status(d) {
+  const badge = document.getElementById('channel3-badge');
+  badge.textContent = `${d.catalog_size || '100M+'} products · ACTIVE`;
+  badge.style.background = '#00c48c';
+  badge.style.color = '#000';
+
+  const stats = d.stats || [];
+  document.getElementById('channel3-stats').innerHTML = stats.map(s => `
+    <div style="background:rgba(0,196,140,.08);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${s.label}</div>
+      <div style="font-size:14px;font-weight:700;color:#00c48c;line-height:1.3;">${s.value}${s.unit ? '<span style="font-size:10px;font-weight:400;color:var(--muted);margin-left:3px;">' + s.unit + '</span>' : ''}</div>
+    </div>`).join('');
+
+  const feats = d.features || [];
+  if (feats.length) {
+    document.getElementById('channel3-features').innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        ${feats.map(f => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+            <td style="padding:5px 0;color:var(--text);font-weight:500;width:30%;">${f.name}</td>
+            <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
+          </tr>`).join('')}
+      </table>`;
+  }
+}
+
+function channel3ShowHow(btn) {
+  const previewDiv = document.getElementById('channel3-preview');
+  if (previewDiv.style.display !== 'none') { previewDiv.style.display = 'none'; btn.textContent = 'How it works'; return; }
+  btn.textContent = 'Hide';
+  previewDiv.style.display = 'block';
+  previewDiv.innerHTML = `
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px;">How Channel3 enrichment works</div>
+    <div style="font-size:12px;color:var(--text);line-height:1.8;">
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
+        <span style="color:#00c48c;font-weight:700;min-width:20px;">1.</span>
+        <span>Dispute arrives → Guardian reads item name from <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">disputed_transactions[].items[].name</code></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
+        <span style="color:#00c48c;font-weight:700;min-width:20px;">2.</span>
+        <span>Calls <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POST /v1/search</code> on Channel3 with item name → gets canonical product data</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
+        <span style="color:#00c48c;font-weight:700;min-width:20px;">3.</span>
+        <span>Formats brand, category, catalog price, description, and image URLs as <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ITEM_DESCRIPTION</code> evidence</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-start;">
+        <span style="color:#00c48c;font-weight:700;min-width:20px;">4.</span>
+        <span>Submits to PayPal's <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POST /v1/customer/disputes/{id}/provide-evidence</code> alongside tracking + communication evidence</span>
+      </div>
+    </div>`;
+}
+
 // ── Channel3 enrichment demo ────────────────────────────────────────────────
 async function runChannel3() {
   const item   = document.getElementById('c3-item').value.trim();
@@ -2173,6 +2266,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAll();
   renderRefreshStatus();
   apimRefresh();
+  channel3Refresh();
   aggridRefresh();
   bryntumRefresh();
   astroRefresh();

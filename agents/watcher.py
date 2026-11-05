@@ -589,6 +589,13 @@ async def api_apimatic_lookup(action: str):
     return JSONResponse(client.lookup_endpoint(action))
 
 
+@app.get("/api/channel3/status")
+async def api_channel3_status():
+    """Channel3 integration status — catalog size, features, API key state."""
+    from agents.channel3 import Channel3Client
+    return JSONResponse(Channel3Client().status_summary())
+
+
 @app.post("/api/channel3/enrich")
 async def api_channel3_enrich(request: Request):
     """

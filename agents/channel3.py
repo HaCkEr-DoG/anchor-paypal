@@ -197,3 +197,40 @@ class Channel3Client:
             product=p,
             evidence_text="\n".join(lines),
         )
+
+    def status_summary(self) -> dict:
+        """Dashboard panel payload — always renderable."""
+        demo_queries = [
+            "Nike Air Max 90",
+            "Sony WH-1000XM5",
+            "Apple AirPods Pro",
+        ]
+        return {
+            "enabled": True,
+            "api_key_set": self.enabled(),
+            "product": "Channel3 Product Graph",
+            "base_url": CHANNEL3_BASE,
+            "catalog_size": "100M+ products",
+            "stats": [
+                {"label": "Catalog",        "value": "100M+",  "unit": "products"},
+                {"label": "API Endpoint",   "value": "POST /v1/search"},
+                {"label": "Auth",           "value": "x-api-key header"},
+                {"label": "API Key",        "value": "Set" if self.enabled() else "Demo mode"},
+            ],
+            "features": [
+                {"name": "Product search",      "detail": "POST /v1/search — query by text, returns ranked matches"},
+                {"name": "Offer matching",      "detail": "Picks in-stock offer closest to disputed transaction amount"},
+                {"name": "Price validation",    "detail": "Flags if transaction amount deviates >20% from catalog price"},
+                {"name": "ITEM_DESCRIPTION",    "detail": "Formats result as PayPal ITEM_DESCRIPTION evidence text"},
+                {"name": "Brand + category",    "detail": "Canonical brand name and category from Channel3 graph"},
+                {"name": "Image URLs",          "detail": "Up to 3 product images for evidence attachments"},
+                {"name": "Auto-enrichment",     "detail": "Called automatically by Guardian on every dispute_fought"},
+            ],
+            "sample_queries": demo_queries,
+            "how_it_works": (
+                "On dispute_fought, Guardian calls enrich_dispute(dispute_id, item_name, amount). "
+                "Channel3 returns canonical product data which is formatted as ITEM_DESCRIPTION "
+                "evidence and submitted to PayPal's provide-evidence endpoint."
+            ),
+            "note": "Set CHANNEL3_API_KEY to enable live product lookups (trychannel3.com/sign-up/developer)",
+        }
