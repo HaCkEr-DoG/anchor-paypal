@@ -702,7 +702,16 @@ async def api_recoveries():
 
 
 # ---------------------------------------------------------------------------
-# Postman Collection endpoints
+# ── Postman Collection endpoints ─────────────────────────────────────────────
+
+@app.get("/api/postman/status")
+async def api_postman_status():
+    """Postman integration status — collection structure, request count, features."""
+    from agents.postman import PostmanClient
+    return JSONResponse(PostmanClient().status_summary())
+
+
+
 # ---------------------------------------------------------------------------
 
 @app.get("/api/postman/collection")

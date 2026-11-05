@@ -650,6 +650,33 @@
   </div>
 </div>
 
+<!-- Postman Integration Panel -->
+<div class="card" id="postman-panel" style="border-top:3px solid #FF6C37;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:15px;font-weight:600;">Postman</div>
+    <span id="postman-badge" style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(255,108,55,.1);color:#FF6C37;border:1px solid rgba(255,108,55,.25);">loading…</span>
+    <span style="font-size:12px;color:var(--muted);">— Collection v2.1 · import and test Anchor's full API in one click</span>
+    <button onclick="postmanRefresh(this)" style="margin-left:auto;padding:7px 14px;border-radius:6px;border:none;background:#FF6C37;color:#fff;font-size:13px;cursor:pointer;font-weight:600;">↻ Refresh</button>
+  </div>
+
+  <div id="postman-stats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+  <div id="postman-groups" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
+
+  <div id="postman-features" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;display:none;"></div>
+
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <a href="/api/postman/collection" download="anchor-postman-collection.json"
+       style="padding:7px 14px;border-radius:6px;border:1px solid #FF6C37;background:transparent;color:#FF6C37;font-size:12px;font-weight:600;text-decoration:none;">⬇ Download Collection JSON</a>
+    <button onclick="postmanShowFeatures(this)" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer;">View features</button>
+  </div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);">
+    Powered by <a href="https://postman.com" target="_blank" rel="noopener" style="color:#FF6C37;text-decoration:none;">Postman</a>
+    · Collection v2.1 · <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POSTMAN_API_KEY</code> to publish to workspace
+  </div>
+</div>
+
 <!-- Postman Collection Panel -->
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:16px;">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
@@ -1622,6 +1649,72 @@ async function runChannel3() {
   }
 }
 
+// ── Postman integration panel ─────────────────────────────────────────────────
+async function postmanRefresh(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch('/api/postman/status');
+    const d = await r.json();
+    _applyPostmanStatus(d);
+  } catch (e) {
+    console.error('Postman status fetch failed:', e);
+  } finally {
+    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  }
+}
+
+function _applyPostmanStatus(d) {
+  const badge = document.getElementById('postman-badge');
+  badge.textContent = `${d.schema || 'v2.1'} · ${d.total_requests || 0} requests · ACTIVE`;
+  badge.style.background = '#FF6C37';
+  badge.style.color = '#fff';
+
+  const statsData = [
+    {label: 'Requests',  value: d.total_requests || 0},
+    {label: 'Groups',    value: (d.groups || []).length},
+    {label: 'Schema',    value: d.schema || 'v2.1'},
+    {label: 'API Key',   value: d.api_key_set ? '✓ Set' : 'Demo'},
+  ];
+  document.getElementById('postman-stats').innerHTML = statsData.map(s => `
+    <div style="background:rgba(255,108,55,.08);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${s.label}</div>
+      <div style="font-size:${typeof s.value==='number'?'20':'14'}px;font-weight:700;color:#FF6C37;">${s.value}</div>
+    </div>`).join('');
+
+  const groups = d.groups || [];
+  if (groups.length) {
+    document.getElementById('postman-groups').innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px;">Collection Groups</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;">
+        ${groups.map(g => `
+          <div style="background:rgba(255,108,55,.1);border:1px solid rgba(255,108,55,.2);border-radius:6px;padding:6px 12px;font-size:12px;">
+            <span style="color:#FF6C37;font-weight:600;">${g.name}</span>
+            <span style="color:var(--muted);margin-left:6px;">${g.requests} req</span>
+          </div>`).join('')}
+      </div>
+      ${d.run_url ? `<div style="margin-top:10px;"><a href="${d.run_url}" target="_blank" rel="noopener" style="color:#FF6C37;font-size:12px;text-decoration:none;font-weight:600;">▶ Run in Postman ↗</a></div>` : ''}`;
+  }
+}
+
+function postmanShowFeatures(btn) {
+  const el = document.getElementById('postman-features');
+  if (el.style.display !== 'none') { el.style.display = 'none'; btn.textContent = 'View features'; return; }
+  btn.textContent = 'Hide features';
+  el.style.display = 'block';
+  fetch('/api/postman/status').then(r => r.json()).then(d => {
+    const feats = d.features || [];
+    el.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        ${feats.map(f => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+            <td style="padding:5px 0;color:var(--text);font-weight:500;width:28%;">${f.name}</td>
+            <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
+          </tr>`).join('')}
+      </table>`;
+  });
+}
+
 // ── Postman publish demo ─────────────────────────────────────────────────────
 async function publishPostman(btn) {
   const resultDiv = document.getElementById('pm-result');
@@ -2265,6 +2358,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
   renderRefreshStatus();
+  postmanRefresh();
   apimRefresh();
   channel3Refresh();
   aggridRefresh();

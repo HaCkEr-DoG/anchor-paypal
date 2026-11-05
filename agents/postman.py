@@ -428,3 +428,34 @@ class PostmanClient:
             "collection_name": collection["info"]["name"],
             "item_count": sum(len(g["item"]) for g in collection["item"]),
         }
+
+    def status_summary(self) -> dict:
+        """Dashboard panel payload — always renderable."""
+        collection = build_collection()
+        groups = collection["item"]
+        total_requests = sum(len(g.get("item", [])) for g in groups)
+        existing_uid = os.environ.get(COLLECTION_UID_ENV, "")
+        return {
+            "enabled": True,
+            "api_key_set": self.enabled(),
+            "product": "Postman API Collection",
+            "schema": "Collection v2.1",
+            "collection_name": collection["info"]["name"],
+            "total_requests": total_requests,
+            "groups": [
+                {"name": g["name"], "requests": len(g.get("item", []))}
+                for g in groups
+            ],
+            "published_uid": existing_uid or None,
+            "run_url": self.run_in_postman_url(existing_uid) if existing_uid else None,
+            "download_url": "/api/postman/collection",
+            "features": [
+                {"name": "Collection v2.1",   "detail": f"{total_requests} requests across {len(groups)} groups"},
+                {"name": "Variables",          "detail": "{{base_url}} pre-set to Render deployment URL"},
+                {"name": "Example responses",  "detail": "Health check includes saved 200 OK response"},
+                {"name": "Webhook examples",   "detail": "Signed PayPal webhook body with all required headers"},
+                {"name": "Publish API",        "detail": "POST /api/postman/publish creates/updates collection via Postman API"},
+                {"name": "One-click import",   "detail": "GET /api/postman/collection returns importable JSON"},
+            ],
+            "note": "Set POSTMAN_API_KEY to publish collection directly to your Postman workspace",
+        }
