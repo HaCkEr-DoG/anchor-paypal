@@ -549,6 +549,13 @@ async def api_disputes():
         return JSONResponse({"rows": [], "error": str(e)})
 
 
+@app.get("/api/apimatic/status")
+async def api_apimatic_status():
+    """APIMatic integration status — version, features, endpoint catalog counts."""
+    from agents.apimatic import ApiMaticClient
+    return JSONResponse(ApiMaticClient().status_summary())
+
+
 @app.get("/api/apimatic/context")
 async def api_apimatic_context():
     """

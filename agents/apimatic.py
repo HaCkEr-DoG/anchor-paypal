@@ -307,3 +307,38 @@ class ApiMaticClient:
         if not result:
             return {"error": f"Unknown action '{action}'. Known: {list(endpoints.keys())}"}
         return {"action": action, "source": "APIMatic context plugin", **result}
+
+    def status_summary(self) -> dict:
+        """Dashboard panel payload — always renderable."""
+        actions = [
+            "accept", "provide_evidence", "send_message", "appeal",
+            "escalate", "get_detail", "list", "create_invoice",
+            "send_invoice", "get_order", "get_token",
+        ]
+        endpoints_map = {a: self.lookup_endpoint(a) for a in actions}
+        return {
+            "enabled": True,
+            "api_key_set": self.enabled(),
+            "product": "APIMatic Context Plugin",
+            "version": "v1",
+            "transformer_url": TRANSFORMER_URL,
+            "context_chars": len(self.get_context()),
+            "context_cached": CONTEXT_CACHE_PATH.exists(),
+            "endpoints_documented": len(actions),
+            "api_groups": [
+                {"name": "Disputes v1",   "endpoints": 6, "base": "/v1/customer/disputes"},
+                {"name": "Invoicing v2",  "endpoints": 2, "base": "/v2/invoicing/invoices"},
+                {"name": "Orders v2",     "endpoints": 1, "base": "/v2/checkout/orders"},
+                {"name": "OAuth",         "endpoints": 1, "base": "/v1/oauth2/token"},
+            ],
+            "features": [
+                {"name": "Context Plugin",   "detail": "Deterministic API grounding — no hallucinated endpoints"},
+                {"name": "HATEOAS routing",  "detail": "Checks dispute.links[] before every action"},
+                {"name": "Transformer API",  "detail": "POST to regenerate context from live PayPal OpenAPI spec"},
+                {"name": "Lookup endpoint",  "detail": f"{len(actions)} actions mapped to path + method + required fields"},
+                {"name": "Error catalog",    "detail": "400/401/403/404/422/429 documented with recovery steps"},
+                {"name": "Oracle params",    "detail": "Break-even fee constants embedded in context"},
+            ],
+            "sample_lookup": endpoints_map.get("provide_evidence", {}),
+            "note": "Set APIMATIC_API_KEY to regenerate context from live PayPal OpenAPI spec via Transformer API",
+        }

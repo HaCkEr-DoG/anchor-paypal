@@ -496,6 +496,31 @@
 <!-- Tooltip (shared) -->
 <div class="tl-tooltip" id="tl-tooltip"></div>
 
+<!-- APIMatic Integration Panel -->
+<div class="card" id="apimatic-panel" style="border-top:3px solid #0070e0;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:15px;font-weight:600;">APIMatic</div>
+    <span id="apimatic-badge" style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(0,112,224,.1);color:#0070e0;border:1px solid rgba(0,112,224,.25);">loading…</span>
+    <span style="font-size:12px;color:var(--muted);">— deterministic API grounding · no hallucinated endpoints</span>
+    <button onclick="apimRefresh(this)" style="margin-left:auto;padding:7px 14px;border-radius:6px;border:none;background:#0070e0;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">↻ Refresh</button>
+  </div>
+
+  <div id="apimatic-stats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+  <div id="apimatic-features" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
+
+  <div id="apimatic-preview" style="display:none;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;"></div>
+
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button onclick="apimShowSample(this)" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer;">Preview sample lookup</button>
+  </div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);">
+    Powered by <a href="https://apimatic.io" target="_blank" rel="noopener" style="color:#0070e0;text-decoration:none;">APIMatic</a>
+    · Context Plugin · Transformer API · <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">APIMATIC_API_KEY</code> to regenerate live
+  </div>
+</div>
+
 <!-- APIMatic Context Plugin Panel -->
 <div style="padding:24px 32px;border-top:1px solid var(--border);background:#0f0f0f;">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -1320,6 +1345,79 @@ function switchTab(name) {
 
 let _lastDisputes = [];
 
+// ── APIMatic integration panel ───────────────────────────────────────────────
+async function apimRefresh(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch('/api/apimatic/status');
+    const d = await r.json();
+    _applyApimStatus(d);
+  } catch (e) {
+    console.error('APIMatic status fetch failed:', e);
+  } finally {
+    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  }
+}
+
+function _applyApimStatus(d) {
+  const badge = document.getElementById('apimatic-badge');
+  badge.textContent = `${d.product || 'APIMatic'} · ACTIVE`;
+  badge.style.background = '#0070e0';
+  badge.style.color = '#fff';
+
+  const groups = d.api_groups || [];
+  const statsItems = [
+    {label: 'API Groups',  value: groups.length},
+    {label: 'Endpoints',   value: d.endpoints_documented || 0},
+    {label: 'Context',     value: d.context_chars ? Math.round(d.context_chars / 1000) + 'k chars' : '—'},
+    {label: 'API Key',     value: d.api_key_set ? '✓ Set' : 'Demo'},
+  ];
+  document.getElementById('apimatic-stats').innerHTML = statsItems.map(s => `
+    <div style="background:rgba(0,112,224,.08);border-radius:8px;padding:10px;text-align:center;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${s.label}</div>
+      <div style="font-size:18px;font-weight:700;color:#0070e0;">${typeof s.value === 'number' ? s.value : ''}<span style="font-size:${typeof s.value === 'number' ? '12' : '14'}px;font-weight:${typeof s.value === 'number' ? '400' : '700'};color:${typeof s.value === 'number' ? 'var(--muted)' : '#0070e0'};">${typeof s.value === 'number' ? '' : s.value}</span></div>
+      ${groups.length && s.label === 'API Groups' ? `<div style="font-size:10px;color:var(--muted);">${groups.map(g=>g.name).join(' · ')}</div>` : ''}
+    </div>`).join('');
+
+  const feats = d.features || [];
+  if (feats.length) {
+    document.getElementById('apimatic-features').innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        ${feats.map(f => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+            <td style="padding:5px 0;color:var(--text);font-weight:500;width:28%;">${f.name}</td>
+            <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
+          </tr>`).join('')}
+      </table>`;
+  }
+}
+
+async function apimShowSample(btn) {
+  const orig = btn.innerHTML; btn.disabled = true; btn.textContent = 'Loading…';
+  const previewDiv = document.getElementById('apimatic-preview');
+  try {
+    const r = await fetch('/api/apimatic/lookup/provide_evidence');
+    const d = await r.json();
+    previewDiv.style.display = 'block';
+    previewDiv.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">
+        Sample lookup — provide_evidence endpoint
+      </div>
+      <pre style="font-size:10px;color:#0070e0;background:rgba(0,112,224,.07);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap;">${JSON.stringify(d, null, 2)}</pre>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">
+        Guardian calls
+        <code style="background:rgba(255,255,255,.07);padding:2px 6px;border-radius:3px;color:var(--text);">GET /api/apimatic/lookup/{action}</code>
+        before every PayPal API call.
+      </div>`;
+  } catch (e) {
+    previewDiv.style.display = 'block';
+    previewDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;">Failed: ${e.message}</div>`;
+  } finally {
+    btn.innerHTML = orig; btn.disabled = false;
+  }
+}
+
 // ── APIMatic context plugin demo ────────────────────────────────────────────
 async function lookupApiMatic() {
   const action = document.getElementById('am-action').value;
@@ -2074,6 +2172,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
   renderRefreshStatus();
+  apimRefresh();
   aggridRefresh();
   bryntumRefresh();
   astroRefresh();
