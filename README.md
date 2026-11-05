@@ -51,7 +51,7 @@ Anchor solves both using two AI agents powered by PayPal's APIs:
 The Settlement Oracle runs entirely offline. See how Anchor makes the fight-vs-accept decision:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/HaCkEr-DoG/anchor-paypal
 cd paypal
 pip install -r requirements.txt
 python scripts/demo.py
