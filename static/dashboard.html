@@ -593,10 +593,59 @@
   </div>
 </div>
 
+<!-- Postman Collection Panel -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:16px;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <svg width="22" height="22" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+      <circle cx="16" cy="16" r="16" fill="#FF6C37"/>
+      <path d="M20.5 11.5C20.5 14.26 18.26 16.5 15.5 16.5C12.74 16.5 10.5 14.26 10.5 11.5C10.5 8.74 12.74 6.5 15.5 6.5C18.26 6.5 20.5 8.74 20.5 11.5Z" fill="white"/>
+      <path d="M13 18L19 24M19 18L13 24" stroke="white" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    <div style="font-size:15px;font-weight:600;">Postman API Collection</div>
+    <span style="margin-left:auto;background:rgba(255,108,55,.15);color:#FF6C37;font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;border:1px solid rgba(255,108,55,.3);">POSTMAN</span>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+    <a id="pm-download-btn"
+       href="/api/postman/collection"
+       download="anchor-paypal-collection.json"
+       style="display:inline-flex;align-items:center;gap:6px;background:#FF6C37;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download Collection JSON
+    </a>
+    <button onclick="publishPostman(this)"
+      style="display:inline-flex;align-items:center;gap:6px;background:transparent;color:#FF6C37;border:1.5px solid #FF6C37;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      Publish to Postman →
+    </button>
+  </div>
+
+  <div id="pm-result" style="display:none;margin-bottom:12px;"></div>
+
+  <div style="background:rgba(255,255,255,.04);border-radius:6px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.6;">
+    <strong style="color:var(--text);font-size:12px;">Endpoints covered:</strong>
+    <span style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">GET /health</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">GET /api/stats</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">GET /api/disputes</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">GET /api/recoveries</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">POST /approve/:id</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">POST /api/channel3/enrich</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">GET /api/apimatic/context</span>
+      <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">POST /webhooks/paypal</span>
+    </span>
+  </div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);">
+    Powered by <a href="https://postman.com" target="_blank" rel="noopener" style="color:#FF6C37;text-decoration:none;">Postman</a>
+    — Collection v2.1 · set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POSTMAN_API_KEY</code> in Render env vars to enable one-click publish
+  </div>
+</div>
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
-  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · PayPal AI Hackathon 2026</span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · PayPal AI Hackathon 2026</span>
 </footer>
 
 <script>
@@ -1065,6 +1114,50 @@ async function runChannel3() {
     errDiv.style.display = 'block';
   } finally {
     btn.textContent = 'Enrich →';
+    btn.disabled = false;
+  }
+}
+
+// ── Postman publish demo ─────────────────────────────────────────────────────
+async function publishPostman(btn) {
+  const resultDiv = document.getElementById('pm-result');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Publishing…';
+  resultDiv.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/postman/publish', { method: 'POST' });
+    const data = await r.json();
+
+    if (data.error) {
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;padding:8px 12px;background:rgba(239,68,68,.1);border-radius:6px;">
+        Error: ${data.error}
+      </div>`;
+    } else if (!data.enabled) {
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `<div style="font-size:12px;color:var(--muted);padding:8px 12px;background:rgba(255,108,55,.08);border:1px solid rgba(255,108,55,.2);border-radius:6px;">
+        <strong style="color:#FF6C37;">POSTMAN_API_KEY not set</strong> —
+        collection JSON is ready to download above. Set the key in Render to enable one-click publish.
+      </div>`;
+    } else {
+      resultDiv.style.display = 'block';
+      const runUrl = data.run_url || '';
+      resultDiv.innerHTML = `<div style="font-size:12px;padding:10px 14px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:6px;">
+        <span style="color:#22c55e;font-weight:600;">Published!</span>
+        <span style="color:var(--muted);margin-left:8px;">${data.collection_name} · ${data.item_count} requests</span>
+        ${runUrl ? `<a href="${runUrl}" target="_blank" rel="noopener"
+          style="display:inline-flex;align-items:center;gap:4px;margin-left:12px;background:#FF6C37;color:#fff;padding:3px 10px;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600;">
+          Run in Postman ↗
+        </a>` : ''}
+      </div>`;
+    }
+  } catch (e) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;">Request failed: ${e.message}</div>`;
+  } finally {
+    btn.innerHTML = orig;
     btn.disabled = false;
   }
 }

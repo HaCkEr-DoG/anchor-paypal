@@ -685,3 +685,39 @@ async def api_recoveries():
     except Exception as e:
         print(f"[Dashboard] recoveries query failed: {e}")
         return JSONResponse({"rows": [], "error": str(e)})
+
+
+# ---------------------------------------------------------------------------
+# Postman Collection endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/postman/collection")
+async def api_postman_collection():
+    """
+    Returns Anchor's Postman Collection v2.1 JSON.
+    Import this into Postman, or use the 'Run in Postman' button on the dashboard.
+    """
+    from agents.postman import build_collection
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "https://anchor-paypal.onrender.com")
+    collection = build_collection(base_url)
+    from fastapi.responses import Response
+    return Response(
+        content=json.dumps(collection, indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": 'attachment; filename="anchor-paypal-collection.json"',
+        },
+    )
+
+
+@app.post("/api/postman/publish")
+async def api_postman_publish():
+    """
+    Creates or updates Anchor's collection on Postman via the Postman API.
+    Requires POSTMAN_API_KEY env var. Returns the 'Run in Postman' URL.
+    """
+    from agents.postman import PostmanClient
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "https://anchor-paypal.onrender.com")
+    client = PostmanClient()
+    result = await client.publish(base_url=base_url)
+    return JSONResponse(result)
