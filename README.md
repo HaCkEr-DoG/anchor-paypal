@@ -92,15 +92,14 @@ INVOICING.INVOICE.UPDATED
 uvicorn agents.watcher:app --reload
 ```
 
-### 4. Deploy to Railway (free, no sleep)
+### 4. Deploy to Koyeb (free, no card, no sleep)
 
-1. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub repo → `HaCkEr-DoG/anchor-paypal`
-2. Railway auto-detects `railway.toml` and deploys the web service
-3. Add env vars in the Railway dashboard (same keys as `.env.example`)
-4. Add two more services in the same Railway project for the cron jobs:
-   - **Recovery check**: start command `python scripts/cron_recovery.py`, cron `*/15 * * * *`
-   - **Morning brief**: start command `python scripts/cron_morning_brief.py`, cron `0 8 * * *`
-5. Copy the Railway public URL and register it as your PayPal webhook: `https://<your-url>.railway.app/webhooks/paypal`
+1. Go to [koyeb.com](https://koyeb.com) → Create App → GitHub → pick `HaCkEr-DoG/anchor-paypal`
+2. Koyeb auto-detects the `Procfile` — no extra config needed
+3. Add env vars in the Koyeb dashboard (same keys as `.env.example`)
+4. Copy the Koyeb public URL and register it as your PayPal webhook: `https://<your-app>.koyeb.app/webhooks/paypal`
+
+The app runs the recovery check (every 15 min) and morning brief (8 AM UTC) internally via APScheduler — no separate cron service needed.
 
 ---
 

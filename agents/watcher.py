@@ -21,9 +21,11 @@ import json
 import os
 import secrets
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 
@@ -33,7 +35,20 @@ from agents.guardian import Guardian
 from agents.recovery import RecoveryAgent
 import agents.onboarding as onboarding_module
 
-app = FastAPI()
+_scheduler = AsyncIOScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _scheduler.add_job(_run_recovery_check, "cron", minute="*/15", id="recovery")
+    _scheduler.add_job(_send_morning_brief, "cron", hour=8, minute=0, id="brief")
+    _scheduler.start()
+    print("[Watcher] Scheduler started — recovery every 15 min, brief at 08:00 UTC")
+    yield
+    _scheduler.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 onboarding_module.register_routes(app)
 
 PAYPAL_WEBHOOK_ID = os.environ["PAYPAL_WEBHOOK_ID"]
