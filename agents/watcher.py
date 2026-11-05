@@ -27,7 +27,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 
 from agents.classifier import DisputeClassifier
 from agents.invoice import InvoiceCollector
@@ -50,6 +50,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 onboarding_module.register_routes(app)
+
+# Dashboard HTML — read once at startup
+import pathlib
+_DASHBOARD_HTML = (
+    pathlib.Path(__file__).parent.parent / "static" / "dashboard.html"
+).read_text()
 
 PAYPAL_WEBHOOK_ID = os.environ["PAYPAL_WEBHOOK_ID"]
 PAYPAL_CLIENT_ID = os.environ["PAYPAL_CLIENT_ID"]
@@ -412,3 +418,148 @@ async def _send_morning_brief():
     guardian = Guardian()
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     await guardian.send_morning_brief(merchant_id)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    return HTMLResponse(_DASHBOARD_HTML)
+
+
+@app.get("/api/stats")
+async def api_stats():
+    """Aggregate stats for the dashboard header cards."""
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+
+    if not es_url or not es_key:
+        return JSONResponse({"demo": True})
+
+    import httpx
+    query = {
+        "query": {"term": {"merchant_id": merchant_id}},
+        "size": 0,
+        "aggs": {
+            "by_type": {"terms": {"field": "action_type.keyword", "size": 20}},
+            "total_amount": {"sum": {"field": "amount"}},
+        },
+    }
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{es_url}/anchor-actions/_search",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=query, timeout=5.0,
+            )
+        data = r.json()
+        buckets = {b["key"]: b["doc_count"] for b in data.get("aggregations", {}).get("by_type", {}).get("buckets", [])}
+        fought_amount_q = {
+            "query": {"bool": {"must": [
+                {"term": {"merchant_id": merchant_id}},
+                {"term": {"action_type.keyword": "dispute_fought"}},
+            ]}},
+            "size": 0,
+            "aggs": {"total": {"sum": {"field": "amount"}}},
+        }
+        async with httpx.AsyncClient() as c:
+            r2 = await c.post(
+                f"{es_url}/anchor-actions/_search",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=fought_amount_q, timeout=5.0,
+            )
+        fought_amt = r2.json().get("aggregations", {}).get("total", {}).get("value", 0)
+
+        recovery_q = {
+            "query": {"term": {"merchant_id": merchant_id}},
+            "size": 0,
+            "aggs": {
+                "total_rev": {"sum": {"field": "amount"}},
+                "recovered_count": {"filter": {"term": {"recovered": True}}},
+            },
+        }
+        async with httpx.AsyncClient() as c:
+            r3 = await c.post(
+                f"{es_url}/anchor-abandoned-orders/_search",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=recovery_q, timeout=5.0,
+            )
+        rec_data = r3.json().get("aggregations", {})
+
+        return {
+            "disputes_total":    sum(buckets.get(k, 0) for k in ("dispute_fought", "dispute_accepted", "dispute_pending")),
+            "disputes_fought":   buckets.get("dispute_fought", 0),
+            "disputes_accepted": buckets.get("dispute_accepted", 0),
+            "revenue_protected": round(fought_amt, 2),
+            "orders_recovered":  r3.json().get("hits", {}).get("total", {}).get("value", 0),
+            "revenue_recovered": round(rec_data.get("total_rev", {}).get("value", 0), 2),
+        }
+    except Exception as e:
+        print(f"[Dashboard] stats query failed: {e}")
+        return JSONResponse({"demo": True})
+
+
+@app.get("/api/disputes")
+async def api_disputes():
+    """Recent dispute actions for the AG Grid disputes table."""
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+
+    if not es_url or not es_key:
+        return JSONResponse({"rows": [], "demo": True})
+
+    import httpx
+    query = {
+        "query": {"bool": {"must": [
+            {"term": {"merchant_id": merchant_id}},
+            {"terms": {"action_type.keyword": ["dispute_fought", "dispute_accepted", "dispute_pending"]}},
+        ]}},
+        "sort": [{"timestamp": "desc"}],
+        "size": 200,
+    }
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{es_url}/anchor-actions/_search",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=query, timeout=5.0,
+            )
+        rows = [h["_source"] for h in r.json().get("hits", {}).get("hits", [])]
+        return {"rows": rows}
+    except Exception as e:
+        print(f"[Dashboard] disputes query failed: {e}")
+        return JSONResponse({"rows": [], "error": str(e)})
+
+
+@app.get("/api/recoveries")
+async def api_recoveries():
+    """Abandoned orders for the AG Grid recoveries table."""
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+
+    if not es_url or not es_key:
+        return JSONResponse({"rows": [], "demo": True})
+
+    import httpx
+    query = {
+        "query": {"term": {"merchant_id": merchant_id}},
+        "sort": [{"approved_at": "desc"}],
+        "size": 200,
+    }
+    try:
+        async with httpx.AsyncClient() as c:
+            r = await c.post(
+                f"{es_url}/anchor-abandoned-orders/_search",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=query, timeout=5.0,
+            )
+        rows = [h["_source"] for h in r.json().get("hits", {}).get("hits", [])]
+        return {"rows": rows}
+    except Exception as e:
+        print(f"[Dashboard] recoveries query failed: {e}")
+        return JSONResponse({"rows": [], "error": str(e)})

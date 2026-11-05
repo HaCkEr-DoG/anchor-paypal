@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Anchor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0d;
+      --surface: #161616;
+      --border: #2a2a2a;
+      --text: #e8e8e8;
+      --muted: #888;
+      --accent: #0070e0;
+      --green: #00c48c;
+      --red: #ff4d4f;
+      --yellow: #f5a623;
+      --purple: #8b5cf6;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 32px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .header-left { display: flex; align-items: center; gap: 12px; }
+    .logo { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgba(0,112,224,0.15);
+      color: var(--accent);
+      border: 1px solid rgba(0,112,224,0.3);
+    }
+    .header-right { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ── Stats cards ── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-card {
+      background: var(--surface);
+      padding: 20px 24px;
+    }
+    .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+    .stat-value { font-size: 26px; font-weight: 700; line-height: 1; }
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .c-green { color: var(--green); }
+    .c-red { color: var(--red); }
+    .c-yellow { color: var(--yellow); }
+    .c-blue { color: var(--accent); }
+    .c-purple { color: var(--purple); }
+
+    /* ── Tabs ── */
+    .tabs-bar {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 0 32px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .tab {
+      padding: 14px 20px;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 13px;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      transition: color .15s, border-color .15s;
+      user-select: none;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+    .tab-count {
+      display: inline-block;
+      margin-left: 6px;
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--border);
+      color: var(--muted);
+    }
+    .tab.active .tab-count { background: rgba(0,112,224,0.2); color: var(--accent); }
+
+    /* ── Grid container ── */
+    .grid-wrap {
+      padding: 24px 32px;
+    }
+    .grid-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .grid-title { font-size: 15px; font-weight: 600; }
+    .grid-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .refresh-btn {
+      padding: 6px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background .15s;
+    }
+    .refresh-btn:hover { background: var(--border); }
+
+    .ag-theme-custom {
+      height: 420px;
+      width: 100%;
+      --ag-background-color: var(--surface);
+      --ag-odd-row-background-color: #191919;
+      --ag-header-background-color: #1e1e1e;
+      --ag-border-color: var(--border);
+      --ag-row-border-color: var(--border);
+      --ag-font-size: 13px;
+      --ag-foreground-color: var(--text);
+      --ag-secondary-foreground-color: var(--muted);
+      --ag-header-foreground-color: var(--muted);
+      --ag-selected-row-background-color: rgba(0,112,224,0.12);
+      --ag-row-hover-color: rgba(255,255,255,0.03);
+      --ag-cell-horizontal-border: 1px solid transparent;
+      --ag-header-column-resize-handle-color: var(--border);
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Cell renderers ── */
+    .cell-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .3px;
+    }
+    .action-fought    { background: rgba(0,196,140,.12); color: #00c48c; border: 1px solid rgba(0,196,140,.25); }
+    .action-accepted  { background: rgba(245,166,35,.12); color: #f5a623;  border: 1px solid rgba(245,166,35,.25); }
+    .action-pending   { background: rgba(139,92,246,.12); color: #8b5cf6;  border: 1px solid rgba(139,92,246,.25); }
+    .action-recovery  { background: rgba(0,112,224,.12);  color: #0070e0;  border: 1px solid rgba(0,112,224,.25); }
+
+    .cell-attention {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+    }
+    .attention-yes { background: var(--red); }
+    .attention-no  { background: var(--green); }
+
+    .cell-status-recovered   { color: var(--green); font-weight: 600; }
+    .cell-status-pending     { color: var(--yellow); }
+    .cell-status-failed      { color: var(--red); }
+
+    /* ── Empty state ── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: 300px; color: var(--muted); gap: 10px;
+    }
+    .empty-state .icon { font-size: 36px; opacity: .4; }
+    .empty-state p { font-size: 13px; }
+
+    /* ── Loading ── */
+    .loading { color: var(--muted); font-size: 13px; padding: 32px; text-align: center; }
+
+    /* ── Footer ── */
+    .footer {
+      padding: 16px 32px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo">⚓ <span>Anchor</span></div>
+    <span class="badge">PayPal AI Hackathon 2026</span>
+  </div>
+  <div class="header-right">
+    <span class="dot-live"></span>
+    <span id="last-updated">Loading…</span>
+  </div>
+</header>
+
+<!-- Stats -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Disputes Handled</div>
+    <div class="stat-value c-blue" id="s-total">—</div>
+    <div class="stat-sub">all time</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Fought</div>
+    <div class="stat-value c-green" id="s-fought">—</div>
+    <div class="stat-sub">evidence submitted</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Accepted</div>
+    <div class="stat-value c-yellow" id="s-accepted">—</div>
+    <div class="stat-sub">low EV — right call</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Revenue Protected</div>
+    <div class="stat-value c-green" id="s-protected">—</div>
+    <div class="stat-sub">from fought disputes</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Recoveries</div>
+    <div class="stat-value c-blue" id="s-recovered">—</div>
+    <div class="stat-sub">abandoned checkouts</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Revenue Recovered</div>
+    <div class="stat-value c-purple" id="s-rev-recovered">—</div>
+    <div class="stat-sub">invoices sent to buyers</div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs-bar">
+  <div class="tab active" onclick="switchTab('disputes')">
+    Disputes <span class="tab-count" id="tab-disputes-count">0</span>
+  </div>
+  <div class="tab" onclick="switchTab('recoveries')">
+    Abandoned Checkouts <span class="tab-count" id="tab-recoveries-count">0</span>
+  </div>
+</div>
+
+<!-- Disputes panel -->
+<div class="tab-panel active" id="panel-disputes">
+  <div class="grid-wrap">
+    <div class="grid-header">
+      <div>
+        <div class="grid-title">Dispute Actions</div>
+        <div class="grid-subtitle">Every dispute Anchor handled — fought, accepted, or escalated to you</div>
+      </div>
+      <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+    </div>
+    <div id="disputes-grid" class="ag-theme-custom ag-theme-alpine-dark"></div>
+  </div>
+</div>
+
+<!-- Recoveries panel -->
+<div class="tab-panel" id="panel-recoveries">
+  <div class="grid-wrap">
+    <div class="grid-header">
+      <div>
+        <div class="grid-title">Abandoned Checkout Recovery</div>
+        <div class="grid-subtitle">Orders approved by buyer but never captured — recovery invoices sent automatically</div>
+      </div>
+      <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+    </div>
+    <div id="recoveries-grid" class="ag-theme-custom ag-theme-alpine-dark"></div>
+  </div>
+</div>
+
+<!-- Footer -->
+<footer class="footer">
+  <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid Community</strong> · PayPal AI Hackathon 2026</span>
+</footer>
+
+<script>
+// ── Demo data (shown when Elasticsearch isn't configured) ──────────────────
+const DEMO_DISPUTES = [
+  { timestamp:"2026-11-05T08:14:22Z", dispute_id:"PP-D-00112233", amount:245.00, action_type:"dispute_fought",   win_probability:0.92, outcome:"evidence_submitted", reasoning:"Delivery confirmation + tracking match buyer address", requires_attention:false },
+  { timestamp:"2026-11-04T22:03:11Z", dispute_id:"PP-D-00112201", amount:18.50,  action_type:"dispute_accepted", win_probability:0.21, outcome:"accepted",           reasoning:"No tracking info — EV(fight)=−$78, EV(accept)=−$18.50", requires_attention:false },
+  { timestamp:"2026-11-04T17:51:44Z", dispute_id:"PP-D-00112185", amount:189.99, action_type:"dispute_pending",  win_probability:0.61, outcome:"awaiting_approval",  reasoning:"Win prob 61% — above threshold but below auto-fight limit. Merchant approval needed.", requires_attention:true  },
+  { timestamp:"2026-11-04T09:22:08Z", dispute_id:"PP-D-00112140", amount:67.00,  action_type:"dispute_fought",   win_probability:0.84, outcome:"evidence_submitted", reasoning:"INQUIRY stage — sent buyer message first, escalated to CLAIM after no response", requires_attention:false },
+  { timestamp:"2026-11-03T20:45:30Z", dispute_id:"PP-D-00112099", amount:12.00,  action_type:"dispute_accepted", win_probability:0.18, outcome:"accepted",           reasoning:"Amount below break-even — refund cheaper than PayPal fight fee", requires_attention:false },
+  { timestamp:"2026-11-03T14:11:19Z", dispute_id:"PP-D-00112077", amount:412.50, action_type:"dispute_fought",   win_probability:0.88, outcome:"evidence_submitted", reasoning:"High-value INR — shipping manifest + photo evidence submitted", requires_attention:false },
+  { timestamp:"2026-11-02T11:33:55Z", dispute_id:"PP-D-00112044", amount:34.99,  action_type:"dispute_accepted", win_probability:0.29, outcome:"accepted",           reasoning:"SNAD dispute, item under $50 — EV favors accept", requires_attention:false },
+];
+
+const DEMO_RECOVERIES = [
+  { approved_at:"2026-11-05T06:12:00Z", order_id:"5XF32114HG881234B", buyer_email:"sarah.m@email.com",  amount:149.99, currency:"USD", recovery_attempts:1, status:"pending_recovery",    recovered:false },
+  { approved_at:"2026-11-04T23:48:11Z", order_id:"7YH44221KL992341C", buyer_email:"james.w@email.com",  amount:89.00,  currency:"USD", recovery_attempts:1, status:"completed_externally", recovered:true  },
+  { approved_at:"2026-11-04T18:30:44Z", order_id:"3AB99887MN110293D", buyer_email:"priya.r@email.com",  amount:220.00, currency:"USD", recovery_attempts:2, status:"pending_recovery",    recovered:false },
+  { approved_at:"2026-11-03T14:22:19Z", order_id:"9CD22334OP223849E", buyer_email:"lucas.t@email.com",  amount:55.50,  currency:"USD", recovery_attempts:1, status:"completed_externally", recovered:true  },
+  { approved_at:"2026-11-02T09:05:33Z", order_id:"2EF55671QR334950F", buyer_email:"aisha.k@email.com",  amount:310.00, currency:"USD", recovery_attempts:1, status:"pending_recovery",    recovered:false  },
+];
+
+// ── Grid instances ─────────────────────────────────────────────────────────
+let disputesGrid = null;
+let recoveriesGrid = null;
+
+// ── Formatters ──────────────────────────────────────────────────────────────
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', hour12:false });
+}
+function fmtAmt(v) {
+  if (v == null) return '—';
+  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
+}
+function fmtPct(v) {
+  if (v == null) return '—';
+  return (v * 100).toFixed(0) + '%';
+}
+
+// ── Cell renderers ──────────────────────────────────────────────────────────
+function actionRenderer(p) {
+  const v = p.value || '';
+  const map = {
+    dispute_fought:   ['FOUGHT',   'action-fought'],
+    dispute_accepted: ['ACCEPTED', 'action-accepted'],
+    dispute_pending:  ['PENDING',  'action-pending'],
+    recovery_attempted: ['RECOVERY', 'action-recovery'],
+  };
+  const [label, cls] = map[v] || [v, 'action-pending'];
+  return `<span class="cell-action ${cls}">${label}</span>`;
+}
+
+function attentionRenderer(p) {
+  const yes = p.value === true;
+  return `<span class="cell-attention ${yes ? 'attention-yes' : 'attention-no'}" title="${yes ? 'Needs attention' : 'Handled'}"></span>`;
+}
+
+function statusRenderer(p) {
+  const v = p.value || '';
+  if (v === 'completed_externally') return `<span class="cell-status-recovered">✓ Recovered</span>`;
+  if (v === 'pending_recovery')     return `<span class="cell-status-pending">⏳ Sent invoice</span>`;
+  return `<span>${v}</span>`;
+}
+
+// ── Grid column defs ────────────────────────────────────────────────────────
+const DISPUTE_COLS = [
+  { field:'timestamp',        headerName:'Date / Time',      width:160, valueFormatter: p => fmtDate(p.value), sort:'desc' },
+  { field:'dispute_id',       headerName:'Dispute ID',       width:170, cellStyle:{ fontFamily:'monospace', fontSize:'12px' } },
+  { field:'amount',           headerName:'Amount',           width:100, valueFormatter: p => fmtAmt(p.value), type:'numericColumn' },
+  { field:'action_type',      headerName:'Action',           width:130, cellRenderer: actionRenderer },
+  { field:'win_probability',  headerName:'Win Prob',         width:100, valueFormatter: p => fmtPct(p.value), type:'numericColumn' },
+  { field:'outcome',          headerName:'Outcome',          width:160, valueFormatter: p => (p.value||'').replace(/_/g,' ') },
+  { field:'requires_attention', headerName:'⚑', width:60, cellRenderer: attentionRenderer },
+  { field:'reasoning',        headerName:'Oracle Reasoning', flex:1,    wrapText:false, tooltipField:'reasoning' },
+];
+
+const RECOVERY_COLS = [
+  { field:'approved_at',         headerName:'Approved At',    width:160, valueFormatter: p => fmtDate(p.value), sort:'desc' },
+  { field:'order_id',            headerName:'Order ID',       width:200, cellStyle:{ fontFamily:'monospace', fontSize:'12px' } },
+  { field:'buyer_email',         headerName:'Buyer Email',    width:200 },
+  { field:'amount',              headerName:'Amount',         width:100, valueFormatter: p => fmtAmt(p.value), type:'numericColumn' },
+  { field:'currency',            headerName:'Currency',       width:90 },
+  { field:'recovery_attempts',   headerName:'Attempts',       width:100, type:'numericColumn' },
+  { field:'status',              headerName:'Status',         width:160, cellRenderer: statusRenderer },
+];
+
+// ── Init grids ──────────────────────────────────────────────────────────────
+function initGrids() {
+  const baseOptions = {
+    defaultColDef: {
+      resizable: true,
+      sortable: true,
+      filter: true,
+      suppressMovable: false,
+    },
+    rowHeight: 44,
+    headerHeight: 40,
+    animateRows: true,
+    suppressCellFocus: true,
+    tooltipShowDelay: 300,
+  };
+
+  disputesGrid = agGrid.createGrid(
+    document.getElementById('disputes-grid'),
+    { ...baseOptions, columnDefs: DISPUTE_COLS, rowData: [] }
+  );
+
+  recoveriesGrid = agGrid.createGrid(
+    document.getElementById('recoveries-grid'),
+    { ...baseOptions, columnDefs: RECOVERY_COLS, rowData: [] }
+  );
+}
+
+// ── Load data ───────────────────────────────────────────────────────────────
+async function loadAll() {
+  document.getElementById('last-updated').textContent = 'Refreshing…';
+
+  try {
+    const [statsRes, disputesRes, recoveriesRes] = await Promise.all([
+      fetch('/api/stats'),
+      fetch('/api/disputes'),
+      fetch('/api/recoveries'),
+    ]);
+
+    const stats      = await statsRes.json();
+    const disputes   = await disputesRes.json();
+    const recoveries = await recoveriesRes.json();
+
+    updateStats(stats);
+    disputesGrid.setGridOption('rowData', disputes.rows || disputes);
+    recoveriesGrid.setGridOption('rowData', recoveries.rows || recoveries);
+
+    document.getElementById('tab-disputes-count').textContent   = (disputes.rows || disputes).length;
+    document.getElementById('tab-recoveries-count').textContent = (recoveries.rows || recoveries).length;
+    document.getElementById('last-updated').textContent = 'Live · ' + new Date().toLocaleTimeString();
+
+  } catch (e) {
+    // Fall back to demo data
+    console.warn('API unavailable, showing demo data:', e.message);
+    loadDemo();
+  }
+}
+
+function loadDemo() {
+  disputesGrid.setGridOption('rowData', DEMO_DISPUTES);
+  recoveriesGrid.setGridOption('rowData', DEMO_RECOVERIES);
+
+  const fought    = DEMO_DISPUTES.filter(d => d.action_type === 'dispute_fought');
+  const accepted  = DEMO_DISPUTES.filter(d => d.action_type === 'dispute_accepted');
+  const protected_ = fought.reduce((s, d) => s + d.amount, 0);
+  const recovered  = DEMO_RECOVERIES.filter(r => r.recovered);
+  const revRec     = DEMO_RECOVERIES.reduce((s, r) => s + r.amount, 0);
+
+  updateStats({
+    disputes_total:   DEMO_DISPUTES.length,
+    disputes_fought:  fought.length,
+    disputes_accepted: accepted.length,
+    revenue_protected: protected_,
+    orders_recovered:  DEMO_RECOVERIES.length,
+    revenue_recovered: revRec,
+  });
+
+  document.getElementById('tab-disputes-count').textContent   = DEMO_DISPUTES.length;
+  document.getElementById('tab-recoveries-count').textContent = DEMO_RECOVERIES.length;
+  document.getElementById('last-updated').textContent         = 'Demo data · ' + new Date().toLocaleTimeString();
+}
+
+function updateStats(s) {
+  document.getElementById('s-total').textContent       = s.disputes_total    ?? '—';
+  document.getElementById('s-fought').textContent      = s.disputes_fought   ?? '—';
+  document.getElementById('s-accepted').textContent    = s.disputes_accepted ?? '—';
+  document.getElementById('s-protected').textContent   = s.revenue_protected != null ? '$' + Number(s.revenue_protected).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+  document.getElementById('s-recovered').textContent   = s.orders_recovered  ?? '—';
+  document.getElementById('s-rev-recovered').textContent = s.revenue_recovered != null ? '$' + Number(s.revenue_recovered).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+}
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.tab[onclick="switchTab('${name}')"]`).classList.add('active');
+  document.getElementById(`panel-${name}`).classList.add('active');
+
+  // Resize grid after reveal
+  if (name === 'disputes' && disputesGrid)   disputesGrid.sizeColumnsToFit();
+  if (name === 'recoveries' && recoveriesGrid) recoveriesGrid.sizeColumnsToFit();
+}
+
+// ── Bootstrap ───────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initGrids();
+  loadAll();
+  setInterval(loadAll, 60000); // auto-refresh every 60s
+});
+</script>
+</body>
+</html>
