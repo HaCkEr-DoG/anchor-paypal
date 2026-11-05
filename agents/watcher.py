@@ -721,3 +721,46 @@ async def api_postman_publish():
     client = PostmanClient()
     result = await client.publish(base_url=base_url)
     return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# Render Deployment endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/render/status")
+async def api_render_status():
+    """
+    Returns Anchor's current Render deployment status:
+    service info, latest deploy, and last 5 deploys.
+    Falls back to demo data when RENDER_API_KEY / RENDER_SERVICE_ID not set.
+    """
+    from agents.render_deploy import RenderClient
+    client = RenderClient()
+    result = await client.status_summary()
+    return JSONResponse(result)
+
+
+@app.post("/api/render/deploy")
+async def api_render_deploy(request: Request):
+    """
+    Triggers a new deploy on Render.
+    Requires RENDER_API_KEY and RENDER_SERVICE_ID env vars.
+    Optional body: {"clear_cache": true}
+    """
+    from agents.render_deploy import RenderClient
+    client = RenderClient()
+    if not client.enabled():
+        return JSONResponse({
+            "enabled": False,
+            "note": "RENDER_API_KEY and RENDER_SERVICE_ID must be set to trigger deploys",
+        })
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    clear_cache = bool(body.get("clear_cache", False))
+    try:
+        deploy = await client.trigger_deploy(clear_cache=clear_cache)
+        return JSONResponse({"enabled": True, "deploy": deploy})
+    except Exception as e:
+        return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)

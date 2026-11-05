@@ -642,10 +642,72 @@
   </div>
 </div>
 
+<!-- Render Deployment Panel -->
+<div id="render-panel" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:16px;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <!-- Render logo mark (simplified) -->
+    <svg width="22" height="22" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+      <rect width="32" height="32" rx="8" fill="#46E3B7"/>
+      <path d="M8 24V8h8a6 6 0 0 1 0 12H8M16 20l6 4" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div style="font-size:15px;font-weight:600;">Render Deployment</div>
+    <span id="render-status-badge" style="margin-left:auto;font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;border:1px solid;display:none;"></span>
+  </div>
+
+  <!-- Service info row -->
+  <div id="render-service-row" style="display:none;margin-bottom:14px;display:flex;align-items:center;flex-wrap:wrap;gap:12px;">
+    <a id="render-service-url" href="#" target="_blank" rel="noopener"
+       style="color:var(--accent);font-size:13px;font-weight:500;text-decoration:none;">
+      anchor-paypal.onrender.com ↗
+    </a>
+    <span id="render-service-region" style="font-size:11px;color:var(--muted);background:rgba(255,255,255,.06);padding:2px 8px;border-radius:4px;"></span>
+  </div>
+
+  <!-- Latest deploy card -->
+  <div id="render-latest" style="display:none;background:rgba(255,255,255,.04);border-radius:7px;padding:12px 14px;margin-bottom:12px;">
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Latest Deploy</div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span id="render-latest-dot" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
+      <span id="render-latest-label" style="font-size:13px;font-weight:600;"></span>
+      <code id="render-latest-commit" style="font-size:11px;background:rgba(255,255,255,.08);padding:1px 6px;border-radius:4px;"></code>
+      <span id="render-latest-msg" style="font-size:12px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+      <span id="render-latest-age" style="font-size:11px;color:var(--muted);white-space:nowrap;"></span>
+      <span id="render-latest-dur" style="font-size:11px;color:var(--muted);white-space:nowrap;"></span>
+    </div>
+  </div>
+
+  <!-- Recent deploys -->
+  <div id="render-history" style="display:none;margin-bottom:14px;">
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px;">Recent Deploys</div>
+    <div id="render-history-rows" style="display:flex;flex-direction:column;gap:4px;"></div>
+  </div>
+
+  <!-- Action buttons -->
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+    <button onclick="renderDeploy(this, false)"
+      style="display:inline-flex;align-items:center;gap:6px;background:#46E3B7;color:#0a1a1a;border:none;border-radius:6px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      Deploy Now
+    </button>
+    <button onclick="renderRefreshStatus()"
+      style="display:inline-flex;align-items:center;gap:6px;background:transparent;color:var(--muted);border:1.5px solid var(--border);border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      Refresh
+    </button>
+  </div>
+
+  <div id="render-deploy-result" style="display:none;margin-bottom:10px;"></div>
+
+  <div style="font-size:11px;color:var(--muted);">
+    Powered by <a href="https://render.com" target="_blank" rel="noopener" style="color:#46E3B7;text-decoration:none;">Render</a>
+    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">RENDER_API_KEY</code> + <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">RENDER_SERVICE_ID</code> to enable live status &amp; deploy triggers
+  </div>
+</div>
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
-  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · PayPal AI Hackathon 2026</span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · <strong style="color:#46E3B7">Render</strong> · PayPal AI Hackathon 2026</span>
 </footer>
 
 <script>
@@ -1162,10 +1224,122 @@ async function publishPostman(btn) {
   }
 }
 
+// ── Render deployment panel ──────────────────────────────────────────────────
+async function renderRefreshStatus() {
+  try {
+    const r = await fetch('/api/render/status');
+    const data = await r.json();
+    _applyRenderStatus(data.demo || data);
+  } catch (e) {
+    console.error('Render status fetch failed:', e);
+  }
+}
+
+function _applyRenderStatus(d) {
+  if (!d || !d.service) return;
+
+  // Service row
+  const urlEl = document.getElementById('render-service-url');
+  if (urlEl) {
+    urlEl.href        = d.service.url || '#';
+    urlEl.textContent = (d.service.url || '').replace('https://', '') + ' ↗';
+  }
+  const regionEl = document.getElementById('render-service-region');
+  if (regionEl && d.service.region) {
+    regionEl.textContent = d.service.region;
+    regionEl.style.display = 'inline';
+  }
+  const svcRow = document.getElementById('render-service-row');
+  if (svcRow) svcRow.style.display = 'flex';
+
+  // Status badge
+  const badge = document.getElementById('render-status-badge');
+  if (badge && d.latest_deploy) {
+    const ld = d.latest_deploy;
+    badge.textContent   = ld.label || ld.status;
+    badge.style.color   = ld.color || '#6b7280';
+    badge.style.borderColor = ld.color || '#6b7280';
+    badge.style.background  = (ld.color || '#6b7280') + '22';
+    badge.style.display = 'inline';
+  }
+
+  // Latest deploy card
+  if (d.latest_deploy) {
+    const ld = d.latest_deploy;
+    document.getElementById('render-latest-dot').style.background   = ld.color;
+    document.getElementById('render-latest-label').textContent      = ld.label;
+    document.getElementById('render-latest-label').style.color      = ld.color;
+    document.getElementById('render-latest-commit').textContent     = ld.commit_id || '';
+    document.getElementById('render-latest-msg').textContent        = ld.commit_msg || '';
+    document.getElementById('render-latest-age').textContent        = ld.age || '';
+    document.getElementById('render-latest-dur').textContent        = ld.duration_s ? `${ld.duration_s}s` : '';
+    document.getElementById('render-latest').style.display          = 'block';
+  }
+
+  // Recent deploys
+  const rows = d.recent_deploys || [];
+  if (rows.length) {
+    const container = document.getElementById('render-history-rows');
+    container.innerHTML = rows.map(dep => `
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:rgba(255,255,255,.03);">
+        <span style="width:7px;height:7px;border-radius:50%;background:${dep.color};flex-shrink:0;"></span>
+        <span style="font-size:12px;font-weight:600;color:${dep.color};min-width:90px;">${dep.label}</span>
+        <code style="font-size:10px;background:rgba(255,255,255,.07);padding:1px 5px;border-radius:3px;flex-shrink:0;">${dep.commit_id || ''}</code>
+        <span style="font-size:11px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${dep.commit_msg || ''}</span>
+        <span style="font-size:11px;color:var(--muted);white-space:nowrap;">${dep.age || ''}</span>
+      </div>
+    `).join('');
+    document.getElementById('render-history').style.display = 'block';
+  }
+}
+
+async function renderDeploy(btn, clearCache) {
+  const resultDiv = document.getElementById('render-deploy-result');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Triggering…';
+  resultDiv.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/render/deploy', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({clear_cache: clearCache}),
+    });
+    const data = await r.json();
+
+    if (data.error) {
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;padding:8px 12px;background:rgba(239,68,68,.1);border-radius:6px;">Error: ${data.error}</div>`;
+    } else if (!data.enabled) {
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `<div style="font-size:12px;color:var(--muted);padding:8px 12px;background:rgba(70,227,183,.08);border:1px solid rgba(70,227,183,.2);border-radius:6px;">
+        <strong style="color:#46E3B7;">RENDER_API_KEY / RENDER_SERVICE_ID not set</strong> — configure in Render env vars to enable deploy triggers.
+      </div>`;
+    } else {
+      const dep = data.deploy || {};
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = `<div style="font-size:12px;padding:8px 12px;background:rgba(70,227,183,.1);border:1px solid rgba(70,227,183,.25);border-radius:6px;">
+        <span style="color:#46E3B7;font-weight:600;">Deploy triggered!</span>
+        <span style="color:var(--muted);margin-left:8px;">status: ${dep.status || 'queued'}</span>
+      </div>`;
+      // Refresh status after a short delay
+      setTimeout(renderRefreshStatus, 3000);
+    }
+  } catch (e) {
+    resultDiv.style.display = 'block';
+    resultDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;">Request failed: ${e.message}</div>`;
+  } finally {
+    btn.innerHTML = orig;
+    btn.disabled = false;
+  }
+}
+
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
+  renderRefreshStatus();
   setInterval(loadAll, 60000); // auto-refresh every 60s
 });
 </script>
