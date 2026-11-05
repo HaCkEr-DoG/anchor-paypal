@@ -1,0 +1,30 @@
+# Secrets — never commit
+.env
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Logs & temp
+*.log
+tmp/
+temp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Research notes (session context, not submission material)
+research_notes/
+reports/
