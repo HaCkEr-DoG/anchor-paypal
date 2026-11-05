@@ -92,14 +92,18 @@ INVOICING.INVOICE.UPDATED
 uvicorn agents.watcher:app --reload
 ```
 
-### 4. Deploy to Koyeb (free, no card, no sleep)
+### 4. Deploy to Render (free, no card)
 
-1. Go to [koyeb.com](https://koyeb.com) → Create App → GitHub → pick `HaCkEr-DoG/anchor-paypal`
-2. Koyeb auto-detects the `Procfile` — no extra config needed
-3. Add env vars in the Koyeb dashboard (same keys as `.env.example`)
-4. Copy the Koyeb public URL and register it as your PayPal webhook: `https://<your-app>.koyeb.app/webhooks/paypal`
+**Live demo:** `https://anchor-paypal.onrender.com`
 
-The app runs the recovery check (every 15 min) and morning brief (8 AM UTC) internally via APScheduler — no separate cron service needed.
+1. Go to [render.com](https://render.com) → New → Web Service → GitHub → pick `HaCkEr-DoG/anchor-paypal`
+2. Build command: `pip install -r requirements.txt`
+3. Start command: `uvicorn agents.watcher:app --host 0.0.0.0 --port $PORT`
+4. Plan: **Free** ($0/month)
+5. Add env vars from `.env.example` in the Render dashboard
+6. Register the Render URL as your PayPal webhook: `https://anchor-paypal.onrender.com/webhooks/paypal`
+
+The app runs the recovery check (every 15 min) and morning brief (8 AM UTC) internally via APScheduler — no separate cron service needed. Note: the free tier sleeps after 15 min of inactivity (~30s cold start on wake).
 
 ---
 
