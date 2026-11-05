@@ -92,7 +92,15 @@ INVOICING.INVOICE.UPDATED
 uvicorn agents.watcher:app --reload
 ```
 
-Or deploy to Render — `render.yaml` is included with the web service and both cron jobs pre-configured.
+### 4. Deploy to Railway (free, no sleep)
+
+1. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub repo → `HaCkEr-DoG/anchor-paypal`
+2. Railway auto-detects `railway.toml` and deploys the web service
+3. Add env vars in the Railway dashboard (same keys as `.env.example`)
+4. Add two more services in the same Railway project for the cron jobs:
+   - **Recovery check**: start command `python scripts/cron_recovery.py`, cron `*/15 * * * *`
+   - **Morning brief**: start command `python scripts/cron_morning_brief.py`, cron `0 8 * * *`
+5. Copy the Railway public URL and register it as your PayPal webhook: `https://<your-url>.railway.app/webhooks/paypal`
 
 ---
 
