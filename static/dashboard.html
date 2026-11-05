@@ -200,6 +200,155 @@
       display: flex;
       justify-content: space-between;
     }
+
+    /* ── Bryntum Scheduler Timeline ── */
+    .timeline-wrap { padding: 24px 32px; }
+    .timeline-bryntum {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--surface);
+      font-size: 12px;
+    }
+    .tl-header {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: #1e1e1e;
+    }
+    .tl-row-label-header {
+      width: 220px; min-width: 220px;
+      padding: 8px 14px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      border-right: 1px solid var(--border);
+    }
+    .tl-time-header {
+      flex: 1;
+      position: relative;
+      height: 36px;
+      overflow: hidden;
+    }
+    .tl-day-label {
+      position: absolute;
+      top: 0; bottom: 0;
+      display: flex; align-items: center;
+      padding: 0 6px;
+      font-size: 10px;
+      color: var(--muted);
+      border-right: 1px solid var(--border);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .tl-today-label {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .tl-body { position: relative; }
+    .tl-row {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      height: 44px;
+    }
+    .tl-row:last-child { border-bottom: none; }
+    .tl-row:hover { background: rgba(255,255,255,.025); }
+    .tl-row-label {
+      width: 220px; min-width: 220px;
+      border-right: 1px solid var(--border);
+      padding: 0 14px;
+      display: flex; align-items: center; gap: 8px;
+      overflow: hidden;
+    }
+    .tl-row-id {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tl-row-amt {
+      font-size: 11px;
+      color: var(--text);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tl-canvas {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    /* Vertical grid lines per day */
+    .tl-gridline {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 1px;
+      background: var(--border);
+      pointer-events: none;
+    }
+    .tl-today-line {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: var(--accent);
+      opacity: .6;
+      pointer-events: none;
+      z-index: 2;
+    }
+    /* Task bar */
+    .tl-bar {
+      position: absolute;
+      top: 8px; height: 28px;
+      border-radius: 4px;
+      display: flex; align-items: center;
+      padding: 0 10px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      cursor: default;
+      transition: filter .15s;
+      z-index: 1;
+      box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    }
+    .tl-bar:hover { filter: brightness(1.15); }
+    .tl-bar-fought   { background: rgba(0,196,140,.25); color: #00c48c; border: 1px solid rgba(0,196,140,.4); }
+    .tl-bar-accepted { background: rgba(245,166,35,.2);  color: #f5a623; border: 1px solid rgba(245,166,35,.4); }
+    .tl-bar-pending  { background: rgba(139,92,246,.2);  color: #8b5cf6; border: 1px solid rgba(139,92,246,.4); }
+    /* Milestone diamond */
+    .tl-milestone {
+      position: absolute;
+      top: 50%; transform: translate(-50%, -50%) rotate(45deg);
+      width: 10px; height: 10px;
+      border-radius: 2px;
+      z-index: 3;
+    }
+    .tl-milestone-created  { background: var(--muted); }
+    .tl-milestone-resolved { background: var(--green); }
+    .tl-milestone-pending  { background: var(--purple); }
+    /* Tooltip */
+    .tl-tooltip {
+      position: fixed;
+      background: #2a2a2a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 1000;
+      display: none;
+      max-width: 280px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.5);
+      line-height: 1.6;
+    }
+    .tl-tooltip strong { color: var(--text); }
+    .tl-bryntum-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--muted); margin-top: 12px;
+    }
+    .tl-bryntum-badge a { color: var(--accent); text-decoration: none; }
+    .tl-bryntum-badge a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -258,6 +407,9 @@
   <div class="tab" onclick="switchTab('recoveries')">
     Abandoned Checkouts <span class="tab-count" id="tab-recoveries-count">0</span>
   </div>
+  <div class="tab" onclick="switchTab('timeline')">
+    Dispute Timeline
+  </div>
 </div>
 
 <!-- Disputes panel -->
@@ -288,10 +440,59 @@
   </div>
 </div>
 
+<!-- Timeline panel -->
+<div class="tab-panel" id="panel-timeline">
+  <div class="timeline-wrap">
+    <div class="grid-header">
+      <div>
+        <div class="grid-title">Dispute Timeline</div>
+        <div class="grid-subtitle">Each dispute as a horizontal bar — colored by decision, spanning created → resolved</div>
+      </div>
+      <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+    </div>
+
+    <div class="timeline-bryntum">
+      <!-- Column header row -->
+      <div class="tl-header">
+        <div class="tl-row-label-header">Dispute / Amount</div>
+        <div class="tl-time-header" id="tl-time-header"><!-- day labels injected by JS --></div>
+      </div>
+      <!-- Row body -->
+      <div class="tl-body" id="tl-body"><!-- rows injected by JS --></div>
+    </div>
+
+    <!-- Legend -->
+    <div style="display:flex;gap:20px;margin-top:14px;align-items:center;flex-wrap:wrap;">
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+        <div style="width:28px;height:10px;border-radius:3px;background:rgba(0,196,140,.3);border:1px solid rgba(0,196,140,.5)"></div>
+        <span style="color:var(--muted)">FOUGHT</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+        <div style="width:28px;height:10px;border-radius:3px;background:rgba(245,166,35,.25);border:1px solid rgba(245,166,35,.5)"></div>
+        <span style="color:var(--muted)">ACCEPTED</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+        <div style="width:28px;height:10px;border-radius:3px;background:rgba(139,92,246,.25);border:1px solid rgba(139,92,246,.5)"></div>
+        <span style="color:var(--muted)">PENDING</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+        <div style="width:3px;height:14px;background:var(--accent);opacity:.7;border-radius:1px"></div>
+        <span style="color:var(--muted)">Today</span>
+      </div>
+      <div class="tl-bryntum-badge">
+        Scheduler UI inspired by <a href="https://bryntum.com/products/scheduler/" target="_blank" rel="noopener">Bryntum Scheduler</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tooltip (shared) -->
+<div class="tl-tooltip" id="tl-tooltip"></div>
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
-  <span>Powered by <strong style="color:var(--text)">AG Grid Community</strong> · PayPal AI Hackathon 2026</span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid Community</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · PayPal AI Hackathon 2026</span>
 </footer>
 
 <script>
@@ -422,13 +623,20 @@ async function loadAll() {
     const disputes   = await disputesRes.json();
     const recoveries = await recoveriesRes.json();
 
-    updateStats(stats);
-    disputesGrid.setGridOption('rowData', disputes.rows || disputes);
-    recoveriesGrid.setGridOption('rowData', recoveries.rows || recoveries);
+    const dRows = disputes.rows || disputes;
+    const rRows = recoveries.rows || recoveries;
+    _lastDisputes = dRows;
 
-    document.getElementById('tab-disputes-count').textContent   = (disputes.rows || disputes).length;
-    document.getElementById('tab-recoveries-count').textContent = (recoveries.rows || recoveries).length;
+    updateStats(stats);
+    disputesGrid.setGridOption('rowData', dRows);
+    recoveriesGrid.setGridOption('rowData', rRows);
+
+    document.getElementById('tab-disputes-count').textContent   = dRows.length;
+    document.getElementById('tab-recoveries-count').textContent = rRows.length;
     document.getElementById('last-updated').textContent = 'Live · ' + new Date().toLocaleTimeString();
+
+    // Refresh timeline if visible
+    if (document.getElementById('panel-timeline').classList.contains('active')) loadTimeline(dRows);
 
   } catch (e) {
     // Fall back to demo data
@@ -438,6 +646,7 @@ async function loadAll() {
 }
 
 function loadDemo() {
+  _lastDisputes = DEMO_DISPUTES;
   disputesGrid.setGridOption('rowData', DEMO_DISPUTES);
   recoveriesGrid.setGridOption('rowData', DEMO_RECOVERIES);
 
@@ -459,6 +668,8 @@ function loadDemo() {
   document.getElementById('tab-disputes-count').textContent   = DEMO_DISPUTES.length;
   document.getElementById('tab-recoveries-count').textContent = DEMO_RECOVERIES.length;
   document.getElementById('last-updated').textContent         = 'Demo data · ' + new Date().toLocaleTimeString();
+
+  if (document.getElementById('panel-timeline').classList.contains('active')) loadTimeline(DEMO_DISPUTES);
 }
 
 function updateStats(s) {
@@ -468,6 +679,164 @@ function updateStats(s) {
   document.getElementById('s-protected').textContent   = s.revenue_protected != null ? '$' + Number(s.revenue_protected).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
   document.getElementById('s-recovered').textContent   = s.orders_recovered  ?? '—';
   document.getElementById('s-rev-recovered').textContent = s.revenue_recovered != null ? '$' + Number(s.revenue_recovered).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+}
+
+// ── Bryntum-style Timeline ──────────────────────────────────────────────────
+const TL_DAYS = 7; // window: today − 6 days → today + 1
+
+function tlBuildHeader() {
+  const header = document.getElementById('tl-time-header');
+  header.innerHTML = '';
+  const now   = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (TL_DAYS - 1));
+  const end = new Date(start);
+  end.setDate(end.getDate() + TL_DAYS);
+  const totalMs = end - start;
+
+  for (let d = 0; d < TL_DAYS; d++) {
+    const day = new Date(start);
+    day.setDate(day.getDate() + d);
+    const left = ((day - start) / totalMs * 100).toFixed(3) + '%';
+    const width = (1 / TL_DAYS * 100).toFixed(3) + '%';
+    const isToday = day.toDateString() === now.toDateString();
+    const lbl = document.createElement('div');
+    lbl.className = 'tl-day-label' + (isToday ? ' tl-today-label' : '');
+    lbl.style.left  = left;
+    lbl.style.width = width;
+    lbl.textContent = day.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+    header.appendChild(lbl);
+  }
+}
+
+function tlRenderRows(disputes) {
+  const body = document.getElementById('tl-body');
+  body.innerHTML = '';
+
+  const now   = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (TL_DAYS - 1));
+  const end = new Date(start);
+  end.setDate(end.getDate() + TL_DAYS);
+  const totalMs = end - start;
+
+  // Today line x% (shared for all rows via JS on tl-canvas)
+  const todayPct = Math.min(100, Math.max(0, (now - start) / totalMs * 100));
+
+  if (!disputes || disputes.length === 0) {
+    body.innerHTML = '<div class="empty-state"><div class="icon">📅</div><p>No disputes in the last 7 days</p></div>';
+    return;
+  }
+
+  const tooltip = document.getElementById('tl-tooltip');
+
+  disputes.forEach(d => {
+    const row = document.createElement('div');
+    row.className = 'tl-row';
+
+    // Label column
+    const lbl = document.createElement('div');
+    lbl.className = 'tl-row-label';
+    const shortId = (d.dispute_id || '???').slice(-10);
+    const actionClass = d.action_type === 'dispute_fought'   ? 'action-fought'   :
+                        d.action_type === 'dispute_accepted' ? 'action-accepted'  : 'action-pending';
+    const actionLabel = d.action_type === 'dispute_fought'   ? 'FOUGHT'   :
+                        d.action_type === 'dispute_accepted' ? 'ACCEPTED'  : 'PENDING';
+    lbl.innerHTML = `
+      <span class="cell-action ${actionClass}" style="font-size:9px;padding:1px 5px">${actionLabel}</span>
+      <span class="tl-row-id" title="${d.dispute_id}">${shortId}</span>
+      <span class="tl-row-amt">${fmtAmt(d.amount)}</span>
+    `;
+
+    // Canvas
+    const canvas = document.createElement('div');
+    canvas.className = 'tl-canvas';
+
+    // Grid lines + today line
+    for (let i = 0; i <= TL_DAYS; i++) {
+      const gl = document.createElement('div');
+      gl.className = 'tl-gridline';
+      gl.style.left = (i / TL_DAYS * 100).toFixed(3) + '%';
+      canvas.appendChild(gl);
+    }
+    const todayLine = document.createElement('div');
+    todayLine.className = 'tl-today-line';
+    todayLine.style.left = todayPct.toFixed(3) + '%';
+    canvas.appendChild(todayLine);
+
+    // Task bar: start = timestamp, end = timestamp + estimated resolution time
+    const tsStart = new Date(d.timestamp || d.approved_at);
+    if (!isNaN(tsStart)) {
+      // If resolved: bar spans start → start+2h (evidence submitted); if pending: start → now
+      const resolvedMs = d.action_type === 'dispute_pending' ? (now - tsStart) : 2 * 60 * 60 * 1000;
+      const tsEnd = new Date(tsStart.getTime() + Math.max(resolvedMs, 30 * 60 * 1000));
+
+      const leftPct  = Math.max(0, (tsStart - start) / totalMs * 100);
+      const rightPct = Math.min(100, (tsEnd - start) / totalMs * 100);
+      const widthPct = Math.max(0.4, rightPct - leftPct);
+
+      if (leftPct < 100 && rightPct > 0) {
+        const barClass = d.action_type === 'dispute_fought'   ? 'tl-bar-fought'   :
+                         d.action_type === 'dispute_accepted' ? 'tl-bar-accepted'  : 'tl-bar-pending';
+        const bar = document.createElement('div');
+        bar.className = `tl-bar ${barClass}`;
+        bar.style.left  = leftPct.toFixed(3) + '%';
+        bar.style.width = widthPct.toFixed(3) + '%';
+        bar.textContent = widthPct > 3 ? `${fmtAmt(d.amount)}` : '';
+
+        // Tooltip on hover
+        bar.addEventListener('mousemove', e => {
+          tooltip.style.display = 'block';
+          tooltip.style.left = (e.clientX + 14) + 'px';
+          tooltip.style.top  = (e.clientY - 10) + 'px';
+          const prob = d.win_probability != null ? (d.win_probability * 100).toFixed(0) + '%' : '—';
+          tooltip.innerHTML = `
+            <strong>${d.dispute_id || '—'}</strong><br>
+            Amount: <strong>${fmtAmt(d.amount)}</strong><br>
+            Action: <strong>${actionLabel}</strong><br>
+            Win prob: <strong>${prob}</strong><br>
+            ${d.reasoning ? `<span style="color:var(--muted);font-size:11px">${d.reasoning.slice(0, 80)}…</span>` : ''}
+          `;
+        });
+        bar.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+        canvas.appendChild(bar);
+
+        // Created milestone
+        const ms = document.createElement('div');
+        ms.className = 'tl-milestone tl-milestone-created';
+        ms.style.left = leftPct.toFixed(3) + '%';
+        ms.style.top  = '50%';
+        canvas.appendChild(ms);
+
+        // Resolved milestone
+        if (d.action_type !== 'dispute_pending') {
+          const ms2 = document.createElement('div');
+          ms2.className = 'tl-milestone tl-milestone-resolved';
+          ms2.style.left = rightPct.toFixed(3) + '%';
+          ms2.style.top  = '50%';
+          canvas.appendChild(ms2);
+        } else {
+          const ms2 = document.createElement('div');
+          ms2.className = 'tl-milestone tl-milestone-pending';
+          ms2.style.left = rightPct.toFixed(3) + '%';
+          ms2.style.top  = '50%';
+          canvas.appendChild(ms2);
+        }
+      }
+    }
+
+    row.appendChild(lbl);
+    row.appendChild(canvas);
+    body.appendChild(row);
+  });
+}
+
+function loadTimeline(disputes) {
+  tlBuildHeader();
+  tlRenderRows(disputes);
 }
 
 // ── Tab switching ────────────────────────────────────────────────────────────
@@ -480,7 +849,10 @@ function switchTab(name) {
   // Resize grid after reveal
   if (name === 'disputes' && disputesGrid)   disputesGrid.sizeColumnsToFit();
   if (name === 'recoveries' && recoveriesGrid) recoveriesGrid.sizeColumnsToFit();
+  if (name === 'timeline') loadTimeline(_lastDisputes);
 }
+
+let _lastDisputes = [];
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
