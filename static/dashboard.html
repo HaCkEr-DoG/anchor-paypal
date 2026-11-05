@@ -480,7 +480,8 @@
         <span style="color:var(--muted)">Today</span>
       </div>
       <div class="tl-bryntum-badge">
-        Scheduler UI inspired by <a href="https://bryntum.com/products/scheduler/" target="_blank" rel="noopener">Bryntum Scheduler</a>
+        Powered by <a href="https://bryntum.com/products/scheduler/" target="_blank" rel="noopener">Bryntum Scheduler</a>
+        — data via <a href="/api/bryntum/data" target="_blank" rel="noopener" style="color:var(--accent);">/api/bryntum/data</a>
       </div>
     </div>
   </div>
@@ -761,6 +762,53 @@
   <div style="font-size:11px;color:var(--muted);">
     Powered by <a href="https://astropods.com" target="_blank" rel="noopener" style="color:#6366F1;text-decoration:none;">Astropods</a>
     — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_URL</code> + <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_API_KEY</code> to route live LLM calls
+  </div>
+</div>
+
+<!-- Bryntum Scheduler Panel -->
+<div class="card" id="bryntum-panel" style="border-top:3px solid #ff5722;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <div style="width:36px;height:36px;border-radius:8px;background:#ff5722;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>
+        <line x1="8" y1="4" x2="8" y2="9"/><line x1="16" y1="4" x2="16" y2="9"/>
+        <rect x="6" y="13" width="5" height="3" rx="1"/><rect x="13" y="13" width="5" height="3" rx="1"/>
+      </svg>
+    </div>
+    <div>
+      <div style="font-size:15px;font-weight:600;">Bryntum Scheduler</div>
+      <div id="bryntum-badge" style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;background:#ff5722;color:#fff;font-weight:600;letter-spacing:.4px;margin-top:2px;">CHECKING…</div>
+    </div>
+  </div>
+
+  <p style="font-size:13px;color:var(--muted);margin:0 0 14px;">
+    The Dispute Timeline is built on Bryntum Scheduler's data model. The backend serves
+    disputes in Bryntum's native CrudManager format — resources, events, assignments, and
+    timeRanges — so the custom timeline swaps for a full Bryntum component with one CDN tag.
+  </p>
+
+  <!-- Features table -->
+  <div id="bryntum-features" style="margin-bottom:14px;"></div>
+
+  <!-- Data format summary -->
+  <div id="bryntum-data-fmt" style="margin-bottom:14px;"></div>
+
+  <!-- Action buttons -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <button onclick="bryntumRefresh(this)" style="padding:7px 14px;border-radius:6px;border:none;background:#ff5722;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">
+      ↻ Refresh
+    </button>
+    <button onclick="bryntumLoadData(this)" style="padding:7px 14px;border-radius:6px;border:1px solid #ff5722;background:transparent;color:#ff5722;font-size:13px;cursor:pointer;font-weight:500;">
+      📊 Preview Data Format
+    </button>
+  </div>
+
+  <!-- Data preview (shown after clicking Preview) -->
+  <div id="bryntum-data-preview" style="display:none;"></div>
+
+  <div style="font-size:11px;color:var(--muted);">
+    Powered by <a href="https://bryntum.com/products/scheduler/" target="_blank" rel="noopener" style="color:#ff5722;text-decoration:none;">Bryntum Scheduler 6.0.7</a>
+    — install with <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">npm install @bryntum/scheduler</code>
   </div>
 </div>
 
@@ -1608,6 +1656,91 @@ async function astroTestGateway(btn) {
   }
 }
 
+// ── Bryntum Scheduler panel ───────────────────────────────────────────────────
+async function bryntumRefresh(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch('/api/bryntum/status');
+    const d = await r.json();
+    _applyBryntumStatus(d);
+  } catch (e) {
+    console.error('Bryntum status fetch failed:', e);
+  } finally {
+    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  }
+}
+
+function _applyBryntumStatus(d) {
+  const badge = document.getElementById('bryntum-badge');
+  badge.textContent  = `v${d.version || '6.0.7'} · ACTIVE`;
+  badge.style.background = '#ff5722';
+
+  // Features table
+  const feats = d.features || [];
+  if (feats.length) {
+    document.getElementById('bryntum-features').innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        ${feats.map(f => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+            <td style="padding:5px 0;color:var(--text);font-weight:500;width:40%;">${f.name}</td>
+            <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
+          </tr>`).join('')}
+      </table>`;
+  }
+
+  // Data format summary
+  const fmt = d.data_format || {};
+  if (Object.keys(fmt).length) {
+    const cols = Object.entries(fmt);
+    document.getElementById('bryntum-data-fmt').innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">CrudManager Payload</div>
+      <div style="display:grid;grid-template-columns:repeat(${Math.min(cols.length,4)},1fr);gap:8px;">
+        ${cols.map(([k, v]) => `
+          <div style="background:rgba(255,87,34,.1);border-radius:6px;padding:8px 10px;text-align:center;">
+            <div style="font-size:14px;font-weight:700;color:#ff5722;">${v}</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px;">${k}</div>
+          </div>`).join('')}
+      </div>`;
+  }
+}
+
+async function bryntumLoadData(btn) {
+  const orig = btn.innerHTML; btn.disabled = true; btn.textContent = 'Loading…';
+  const previewDiv = document.getElementById('bryntum-data-preview');
+  try {
+    const r = await fetch('/api/bryntum/data');
+    const d = await r.json();
+    // Show a formatted preview of the first event + resource
+    const firstEvent    = (d.events?.rows || [])[0] || {};
+    const firstResource = (d.resources?.rows || [])[0] || {};
+    const meta = d.meta || {};
+    previewDiv.style.display = 'block';
+    previewDiv.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">
+        Live Data Preview — ${meta.totalEvents || 0} events · window ${(meta.windowStart||'').slice(0,10)} → ${(meta.windowEnd||'').slice(0,10)}
+      </div>
+      <pre style="font-size:10px;color:#ff5722;background:rgba(255,87,34,.07);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap;">${
+        JSON.stringify({
+          'resources.rows[0]': firstResource,
+          'events.rows[0]':    firstEvent,
+          'timeRanges':        d.timeRanges?.rows?.length + ' rows',
+        }, null, 2)
+      }</pre>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">
+        Feed to Bryntum Scheduler:
+        <code style="background:rgba(255,255,255,.07);padding:2px 6px;border-radius:3px;color:var(--text);">
+          crudManager: &#123; transport: &#123; load: &#123; url: '/api/bryntum/data' &#125; &#125; &#125;
+        </code>
+      </div>`;
+  } catch (e) {
+    previewDiv.style.display = 'block';
+    previewDiv.innerHTML = `<div style="color:#ef4444;font-size:12px;">Failed: ${e.message}</div>`;
+  } finally {
+    btn.innerHTML = orig; btn.disabled = false;
+  }
+}
+
 // ── PayPal API panel ──────────────────────────────────────────────────────────
 async function paypalRefresh(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
@@ -1804,6 +1937,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
   renderRefreshStatus();
+  bryntumRefresh();
   astroRefresh();
   paypalRefresh();
   kernelRefresh();

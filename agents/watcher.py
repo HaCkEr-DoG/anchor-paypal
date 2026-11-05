@@ -859,6 +859,43 @@ async def paypal_disputes(state: str = "REQUIRED_ACTION", page_size: int = 10):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ── Bryntum Scheduler endpoints ──────────────────────────────────────────────
+
+@app.get("/api/bryntum/status")
+async def bryntum_status():
+    """
+    Returns Bryntum Scheduler integration status and demo data formatted
+    in Bryntum's native resource/event/timeRange JSON schema.
+    """
+    from agents.bryntum import BryntumDataExporter
+    return JSONResponse(BryntumDataExporter().status_summary())
+
+
+@app.get("/api/bryntum/data")
+async def bryntum_data():
+    """
+    Returns live dispute data in Bryntum Scheduler's CrudManager format.
+    A Bryntum Scheduler component can load this endpoint directly:
+
+        crudManager: { transport: { load: { url: '/api/bryntum/data' } } }
+
+    Falls back to demo disputes when Elasticsearch is not configured.
+    """
+    from agents.bryntum import BryntumDataExporter, _demo_disputes
+    exporter = BryntumDataExporter()
+    # Try live data from Elasticsearch briefing store
+    disputes: list[dict] = []
+    try:
+        from agents.briefing import load_recent_actions
+        records = await load_recent_actions(limit=20)
+        disputes = [r.__dict__ if hasattr(r, "__dict__") else r for r in records]
+    except Exception:
+        pass
+    if not disputes:
+        disputes = _demo_disputes()
+    return JSONResponse(exporter.export(disputes))
+
+
 # ── Kernel Browser endpoints ──────────────────────────────────────────────────
 
 @app.get("/api/kernel/status")
