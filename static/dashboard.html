@@ -4,27 +4,33 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Anchor Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #0d0d0d;
-      --surface: #161616;
-      --border: #2a2a2a;
-      --text: #e8e8e8;
-      --muted: #888;
+      --bg: #0c0c0e;
+      --surface: #111114;
+      --surface-elevated: #17171b;
+      --border: #22222a;
+      --text: #f0ede8;
+      --muted: #6b6b78;
+      --muted-light: #9898a8;
       --accent: #0070e0;
-      --green: #00c48c;
-      --red: #ff4d4f;
-      --yellow: #f5a623;
-      --purple: #8b5cf6;
+      --green: #34d399;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --amber: #f59e0b;
+      --purple: #a78bfa;
     }
 
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, sans-serif;
+      font-feature-settings: "cv02","cv03","cv04","cv11";
       font-size: 14px;
       min-height: 100vh;
     }
@@ -43,11 +49,13 @@
     .logo span { color: var(--accent); }
     .badge {
       font-size: 11px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(0,112,224,0.15);
-      color: var(--accent);
-      border: 1px solid rgba(0,112,224,0.3);
+      padding: 3px 9px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.05);
+      color: var(--muted-light);
+      border: 1px solid var(--border);
+      font-weight: 500;
+      letter-spacing: 0.03em;
     }
     .header-right { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
     .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; animation: pulse 2s infinite; }
@@ -57,17 +65,17 @@
     .stats-row {
       display: grid;
       grid-template-columns: repeat(6, 1fr);
-      gap: 1px;
-      background: var(--border);
+      gap: 0;
       border-bottom: 1px solid var(--border);
     }
     .stat-card {
       background: var(--surface);
-      padding: 20px 24px;
+      padding: 24px 28px;
     }
-    .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
-    .stat-value { font-size: 26px; font-weight: 700; line-height: 1; }
-    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .stat-card:not(:last-child) { border-right: 1px solid var(--border); }
+    .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 8px; font-weight: 500; }
+    .stat-value { font-size: 28px; font-weight: 700; line-height: 1; letter-spacing: -.02em; }
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 5px; }
     .c-green { color: var(--green); }
     .c-red { color: var(--red); }
     .c-yellow { color: var(--yellow); }
@@ -94,17 +102,17 @@
       user-select: none;
     }
     .tab:hover { color: var(--text); }
-    .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+    .tab.active { color: var(--text); border-bottom-color: var(--text); font-weight: 600; }
     .tab-count {
       display: inline-block;
       margin-left: 6px;
       font-size: 11px;
       padding: 1px 6px;
-      border-radius: 999px;
-      background: var(--border);
+      border-radius: 4px;
+      background: rgba(255,255,255,.05);
       color: var(--muted);
     }
-    .tab.active .tab-count { background: rgba(0,112,224,0.2); color: var(--accent); }
+    .tab.active .tab-count { background: rgba(255,255,255,.1); color: var(--muted-light); }
 
     /* ── Grid container ── */
     .grid-wrap {
@@ -120,15 +128,41 @@
     .grid-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
     .refresh-btn {
       padding: 6px 14px;
-      background: var(--surface);
+      background: transparent;
       border: 1px solid var(--border);
       border-radius: 6px;
-      color: var(--text);
+      color: var(--muted-light);
       font-size: 12px;
       cursor: pointer;
-      transition: background .15s;
+      transition: background .15s, color .15s;
+      font-weight: 500;
     }
-    .refresh-btn:hover { background: var(--border); }
+    .refresh-btn:hover { background: rgba(255,255,255,.04); color: var(--text); }
+
+    /* ── Integration card panels ── */
+    .card {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      margin-bottom: 16px;
+    }
+
+    /* ── Integrations section ── */
+    .integrations-section {
+      padding: 32px;
+      border-top: 1px solid var(--border);
+    }
+    .integrations-section-heading {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--muted);
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
 
     .ag-theme-custom {
       height: 420px;
@@ -495,6 +529,72 @@
 
 <!-- Tooltip (shared) -->
 <div class="tl-tooltip" id="tl-tooltip"></div>
+
+<!-- Settlement Oracle Panel -->
+<div class="card" id="oracle-panel" style="border-top:3px solid #f59e0b;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:15px;font-weight:600;">Settlement Oracle</div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.3);">live EV calc</span>
+    <span style="font-size:12px;color:var(--muted);">— the math no other tool does</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
+        Amount (USD)
+        <input id="oracle-amount" type="number" value="245" step="1" min="1"
+          style="padding:7px 10px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
+        Claim Type
+        <select id="oracle-claim"
+          style="padding:7px 10px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+          <option value="ITEM_NOT_RECEIVED">Item Not Received</option>
+          <option value="SIGNIFICANTLY_NOT_AS_DESCRIBED">Significantly Not As Described</option>
+          <option value="UNAUTHORIZED">Unauthorized Transaction</option>
+          <option value="BILLING_ISSUE">Billing Issue</option>
+        </select>
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input id="oracle-tracking" type="checkbox" checked style="width:14px;height:14px;" />
+        Has tracking number
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input id="oracle-delivery" type="checkbox" checked style="width:14px;height:14px;" />
+        Has delivery confirmation
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input id="oracle-comm" type="checkbox" style="width:14px;height:14px;" />
+        Has buyer communication
+      </label>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input id="oracle-itemproof" type="checkbox" style="width:14px;height:14px;" />
+        Has item description proof
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input id="oracle-highvol" type="checkbox" style="width:14px;height:14px;" />
+        High-volume tier ($30 non-refundable fee)
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
+        Deadline (hours)
+        <input id="oracle-deadline" type="number" value="72" step="1" min="1"
+          style="padding:7px 10px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
+      </label>
+      <button onclick="oracleCalc()"
+        style="margin-top:auto;padding:10px 20px;border-radius:8px;border:none;background:#f59e0b;color:#0d0d0d;font-size:14px;cursor:pointer;font-weight:700;letter-spacing:.3px;">
+        Calculate →
+      </button>
+    </div>
+  </div>
+
+  <div id="oracle-result" style="display:none;border-top:1px solid var(--border);padding-top:16px;"></div>
+</div>
+
+<!-- Integrations Section -->
+<div class="integrations-section">
+<div class="integrations-section-heading">Integrations — 9 live · all status panels are always renderable</div>
 
 <!-- APIMatic Integration Panel -->
 <div class="card" id="apimatic-panel" style="border-top:3px solid #0070e0;">
@@ -1032,6 +1132,8 @@
   </div>
 </div>
 
+</div><!-- /integrations-section -->
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
@@ -1396,6 +1498,88 @@ function switchTab(name) {
 }
 
 let _lastDisputes = [];
+
+// ── Settlement Oracle ────────────────────────────────────────────────────────
+async function oracleCalc() {
+  const amount    = parseFloat(document.getElementById('oracle-amount').value) || 245;
+  const claimType = document.getElementById('oracle-claim').value;
+  const tracking  = document.getElementById('oracle-tracking').checked;
+  const delivery  = document.getElementById('oracle-delivery').checked;
+  const comm      = document.getElementById('oracle-comm').checked;
+  const itemProof = document.getElementById('oracle-itemproof').checked;
+  const highVol   = document.getElementById('oracle-highvol').checked;
+  const deadline  = parseInt(document.getElementById('oracle-deadline').value) || 72;
+
+  const btn = document.querySelector('#oracle-panel button');
+  btn.disabled = true; btn.textContent = 'Calculating…';
+
+  try {
+    const params = new URLSearchParams({
+      amount, claim_type: claimType,
+      has_tracking: tracking, has_delivery: delivery,
+      has_comm: comm, has_item_proof: itemProof,
+      high_volume: highVol, deadline_hours: deadline,
+    });
+    const r = await fetch('/api/oracle/calculate?' + params);
+    const d = await r.json();
+    _applyOracleResult(d);
+  } catch (e) {
+    document.getElementById('oracle-result').innerHTML =
+      `<div style="color:var(--red);font-size:13px;">Error: ${e.message}</div>`;
+    document.getElementById('oracle-result').style.display = 'block';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Calculate →';
+  }
+}
+
+function _applyOracleResult(d) {
+  const el = document.getElementById('oracle-result');
+  const rec = d.recommendation || 'UNKNOWN';
+  const recColors = {
+    'FIGHT': { bg: 'rgba(0,196,140,.15)', color: '#00c48c', border: 'rgba(0,196,140,.3)' },
+    'ACCEPT': { bg: 'rgba(255,77,79,.15)', color: '#ff4d4f', border: 'rgba(255,77,79,.3)' },
+    'GATHER_EVIDENCE': { bg: 'rgba(245,158,11,.15)', color: '#f59e0b', border: 'rgba(245,158,11,.3)' },
+    'GATHER EVIDENCE': { bg: 'rgba(245,158,11,.15)', color: '#f59e0b', border: 'rgba(245,158,11,.3)' },
+  };
+  const rc = recColors[rec] || { bg: 'rgba(255,255,255,.08)', color: '#e8e8e8', border: 'rgba(255,255,255,.2)' };
+  const pct = n => (n * 100).toFixed(1) + '%';
+  const dollar = n => (n >= 0 ? '+' : '') + '$' + Math.abs(n).toFixed(2);
+  const winPct = Math.min(100, Math.round(d.win_probability * 100));
+
+  const reasoningHtml = (d.reasoning || []).map((r, i) =>
+    `<li style="margin-bottom:4px;color:var(--muted);font-size:12px;">${i+1}. ${r}</li>`
+  ).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap;">
+      <span style="font-size:22px;font-weight:700;padding:6px 18px;border-radius:999px;background:${rc.bg};color:${rc.color};border:1px solid ${rc.border};">${rec.replace('_', ' ')}</span>
+      <div style="display:flex;gap:24px;">
+        <div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:2px;">EV(fight)</div>
+          <div style="font-size:22px;font-weight:700;color:${d.ev_fight >= 0 ? '#00c48c' : '#ff4d4f'};">${dollar(d.ev_fight)}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:2px;">EV(accept)</div>
+          <div style="font-size:22px;font-weight:700;color:#ff4d4f;">${dollar(d.ev_accept)}</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:5px;">
+        <span>Win probability: <strong style="color:var(--text);">${pct(d.win_probability)}</strong></span>
+        <span>Break-even: <strong style="color:var(--text);">${pct(d.break_even_probability)}</strong></span>
+      </div>
+      <div style="height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;">
+        <div style="height:100%;border-radius:999px;background:#f59e0b;width:${winPct}%;transition:width .4s;"></div>
+      </div>
+    </div>
+    <details style="margin-top:8px;">
+      <summary style="font-size:12px;color:var(--muted);cursor:pointer;user-select:none;">Reasoning steps (${(d.reasoning||[]).length})</summary>
+      <ol style="margin-top:8px;padding-left:16px;">${reasoningHtml}</ol>
+    </details>
+  `;
+  el.style.display = 'block';
+}
 
 // ── APIMatic integration panel ───────────────────────────────────────────────
 async function apimRefresh(btn) {

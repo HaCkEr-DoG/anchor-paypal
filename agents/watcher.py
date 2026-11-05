@@ -549,6 +549,58 @@ async def api_disputes():
         return JSONResponse({"rows": [], "error": str(e)})
 
 
+@app.get("/api/oracle/calculate")
+async def api_oracle_calculate(
+    amount: float = 245.0,
+    claim_type: str = "ITEM_NOT_RECEIVED",
+    has_tracking: bool = False,
+    has_delivery: bool = False,
+    has_comm: bool = False,
+    has_item_proof: bool = False,
+    high_volume: bool = False,
+    deadline_hours: int = 72,
+):
+    """Settlement Oracle — live EV calculation. No API key required."""
+    from oracle.decision import calculate, ClaimType, Evidence
+    ct_map = {
+        "ITEM_NOT_RECEIVED": ClaimType.ITEM_NOT_RECEIVED,
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": ClaimType.SIGNIFICANTLY_NOT_AS_DESCRIBED,
+        "UNAUTHORIZED": ClaimType.UNAUTHORIZED,
+        "BILLING_ISSUE": ClaimType.BILLING_ISSUE,
+    }
+    ct = ct_map.get(claim_type.upper(), ClaimType.ITEM_NOT_RECEIVED)
+    evidence = Evidence(
+        has_tracking_number=has_tracking,
+        has_delivery_confirmation=has_delivery,
+        has_buyer_communication=has_comm,
+        has_item_description_proof=has_item_proof,
+    )
+    decision = calculate(
+        dispute_amount=amount,
+        claim_type=ct,
+        evidence=evidence,
+        deadline_hours=deadline_hours,
+        seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
+        similar_dispute_win_rate=float(os.environ.get("SELLER_WIN_RATE", 0.5)),
+        high_volume_tier=high_volume,
+    )
+    return JSONResponse({
+        "recommendation": decision.recommendation.value,
+        "ev_fight": round(decision.ev_fight, 2),
+        "ev_accept": round(decision.ev_accept, 2),
+        "win_probability": round(decision.win_probability, 4),
+        "confidence": decision.confidence,
+        "break_even_probability": round(decision.break_even_probability, 4),
+        "reasoning": decision.reasoning,
+        "time_to_respond_hours": decision.time_to_respond_hours,
+        "inputs": {
+            "amount": amount, "claim_type": claim_type, "high_volume": high_volume,
+            "has_tracking": has_tracking, "has_delivery": has_delivery,
+            "has_comm": has_comm, "has_item_proof": has_item_proof,
+        },
+    })
+
+
 @app.get("/api/apimatic/status")
 async def api_apimatic_status():
     """APIMatic integration status — version, features, endpoint catalog counts."""

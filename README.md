@@ -3,6 +3,8 @@
 > **PayPal AI Hackathon 2026**
 > While you sleep, Anchor handles your PayPal disputes and recovers your abandoned sales.
 
+**[Live demo →](https://anchor-paypal.onrender.com)**
+
 ---
 
 ## What it does
@@ -16,7 +18,7 @@ Anchor solves both using two AI agents powered by PayPal's APIs:
 
 ### Guardian Agent — dispute economics
 - Receives `CUSTOMER.DISPUTE.CREATED` webhooks instantly
-- Runs a **Settlement Oracle**: calculates EV(fight) vs EV(accept) using PayPal's two-tier dispute fee model ($15 refundable vs $30 non-refundable at high-volume)
+- Runs the **Settlement Oracle**: calculates EV(fight) vs EV(accept) using PayPal's two-tier dispute fee model ($15 refundable vs $30 non-refundable at high-volume)
 - Checks PayPal's **HATEOAS links** before every action — knows whether the dispute is in INQUIRY or CLAIM stage and acts accordingly
 - During INQUIRY: sends a buyer message via `send-message` to resolve before escalation (fee-free window)
 - Autonomously fights high-EV disputes, accepts low-EV ones, asks the merchant for decisions in between
@@ -35,14 +37,38 @@ Anchor solves both using two AI agents powered by PayPal's APIs:
 
 ---
 
+## Integrations
+
+| Integration | Role |
+|---|---|
+| **PayPal API** | Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2 — the entire runtime |
+| **Settlement Oracle** | Closed-form EV engine: `P(win) × amount − effective_cost` with evidence scoring |
+| **AG Grid** | Community 31.3.2 — disputes and recovery tables with live row data |
+| **Bryntum Scheduler** | Timeline view of disputes and recoveries with CrudManager format |
+| **APIMatic** | Context Plugin — deterministic PayPal endpoint routing, eliminates hallucinated paths |
+| **Channel3** | 100M+ product graph — enriches dispute evidence with canonical product data |
+| **Postman** | Collection v2.1 (7 groups, 20+ requests) — one-click import for judges |
+| **Render** | Web service with auto-deploy on push; deploy trigger + status panel on dashboard |
+| **Astropods** | AI governance gateway — routes Guardian LLM calls for auditing and spend control |
+| **Kernel** | Bot-resistant cloud browser — carrier tracking screenshots for dispute evidence |
+
+---
+
 ## Built With
 
-- **PayPal APIs**: Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2
-- **AI**: Settlement Oracle — a closed-form expected-value engine with evidence scoring and historical win-rate blending
-- **Claude** (Anthropic): powers classification, evidence reasoning, and buyer message generation
-- **FastAPI** — webhook server, approval endpoints
-- **Elasticsearch** — action log, dispute history, abandoned order tracking, deduplication
-- **Render** — deployment, cron scheduling
+- **PayPal APIs** — Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2
+- **Settlement Oracle** — closed-form expected-value engine with evidence scoring and historical win-rate blending
+- **Claude** (Anthropic) — classification, evidence reasoning, buyer message generation
+- **FastAPI** + **APScheduler** — webhook server, cron scheduling (recovery every 15 min, brief at 08:00 UTC)
+- **AG Grid Community 31.3.2** — disputes and recoveries data grid
+- **Bryntum Scheduler 6.0.7** — timeline / Gantt view
+- **APIMatic** — deterministic API context plugin for grounded LLM calls
+- **Channel3** — product graph enrichment for ITEM_DESCRIPTION evidence
+- **Postman** — Anchor's full API surface as a shareable collection
+- **Render** — free-tier deployment, auto-deploys on GitHub push
+- **Astropods** — AI governance gateway
+- **Kernel** — stealth browser for carrier tracking
+- **Elasticsearch** — action log, dispute history, deduplication
 
 ---
 
@@ -52,12 +78,12 @@ The Settlement Oracle runs entirely offline. See how Anchor makes the fight-vs-a
 
 ```bash
 git clone https://github.com/HaCkEr-DoG/anchor-paypal
-cd paypal
+cd anchor-paypal
 pip install -r requirements.txt
 python scripts/demo.py
 ```
 
-Expected output shows four dispute scenarios, the HATEOAS awareness demo, the Recovery agent flow, and a sample morning brief.
+Expected output: four dispute scenarios, HATEOAS lifecycle demo, Recovery agent flow, and a sample morning brief.
 
 ---
 
@@ -68,7 +94,7 @@ Expected output shows four dispute scenarios, the HATEOAS awareness demo, the Re
 ```bash
 cp .env.example .env
 # Fill in: PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID
-# Optional: ELASTICSEARCH_URL, ELASTICSEARCH_API_KEY, SLACK_WEBHOOK_URL
+# Optional: ELASTICSEARCH_URL, CHANNEL3_API_KEY, APIMATIC_API_KEY, POSTMAN_API_KEY ...
 ```
 
 All secrets are environment variables. Nothing is committed.
@@ -96,14 +122,14 @@ uvicorn agents.watcher:app --reload
 
 **Live demo:** `https://anchor-paypal.onrender.com`
 
-1. Go to [render.com](https://render.com) → New → Web Service → GitHub → pick `HaCkEr-DoG/anchor-paypal`
+1. Render → New → Web Service → GitHub → `HaCkEr-DoG/anchor-paypal`
 2. Build command: `pip install -r requirements.txt`
 3. Start command: `uvicorn agents.watcher:app --host 0.0.0.0 --port $PORT`
 4. Plan: **Free** ($0/month)
-5. Add env vars from `.env.example` in the Render dashboard
-6. Register the Render URL as your PayPal webhook: `https://anchor-paypal.onrender.com/webhooks/paypal`
+5. Add env vars from `.env.example`
+6. Register webhook: `https://anchor-paypal.onrender.com/webhooks/paypal`
 
-The app runs the recovery check (every 15 min) and morning brief (8 AM UTC) internally via APScheduler — no separate cron service needed. Note: the free tier sleeps after 15 min of inactivity (~30s cold start on wake).
+The app runs recovery (every 15 min) and morning brief (8 AM UTC) internally via APScheduler. No separate cron service needed.
 
 ---
 
@@ -127,6 +153,8 @@ High-volume tier ($30 non-refundable, triggered at ≥1.5% dispute rate):
 A $245 INR dispute with delivery confirmation: **FIGHT** (92% win probability, EV = +$148).
 An $18.50 INR dispute without tracking: **ACCEPT** (EV = −$78 to fight).
 
+**Try it live** on the dashboard at [anchor-paypal.onrender.com](https://anchor-paypal.onrender.com) — the Settlement Oracle panel lets you adjust any input and recalculates in real time.
+
 No other PayPal dispute tool does this calculation.
 
 ---
@@ -135,24 +163,35 @@ No other PayPal dispute tool does this calculation.
 
 ```
 agents/
-  guardian.py      # Dispute agent — HATEOAS, thresholds, INQUIRY handling
-  recovery.py      # Abandoned checkout recovery agent
-  classifier.py    # Dispute intake + Oracle routing
-  evidence.py      # Evidence assembly + PayPal multipart submission
-  briefing.py      # Morning brief generator
-  watcher.py       # FastAPI webhook server + cron endpoints
-  invoice.py       # Invoice follow-up
-  config.py        # Pre-authorization thresholds (configurable per merchant)
+  guardian.py        # Dispute agent — HATEOAS, thresholds, INQUIRY handling
+  recovery.py        # Abandoned checkout recovery agent
+  classifier.py      # Dispute intake + Oracle routing
+  evidence.py        # Evidence assembly + PayPal multipart submission
+  briefing.py        # Morning brief generator
+  watcher.py         # FastAPI webhook server + all API endpoints
+  invoice.py         # Invoice follow-up
+  config.py          # Pre-authorization thresholds (configurable per merchant)
+  aggrid.py          # AG Grid exporter — dispute + recovery column defs
+  apimatic.py        # APIMatic Context Plugin — PayPal endpoint grounding
+  bryntum.py         # Bryntum Scheduler data — CrudManager format
+  channel3.py        # Channel3 product graph — dispute evidence enrichment
+  kernel_browser.py  # Kernel cloud browser — carrier tracking screenshots
+  paypal_client.py   # PayPal REST API client (OAuth2, Disputes, Orders, Invoices)
+  postman.py         # Postman Collection v2.1 — full API surface
 
 oracle/
-  decision.py      # Settlement EV engine — the economic brain
+  decision.py        # Settlement EV engine — the economic brain
 
 scripts/
   demo.py               # Full offline demo — run this first
-  cron_recovery.py      # Recovery cron entry point (Render)
-  cron_morning_brief.py # Morning brief cron entry point (Render)
+  cron_recovery.py      # Recovery cron entry point
+  cron_morning_brief.py # Morning brief cron entry point
 
-render.yaml        # Render deployment config
+static/
+  dashboard.html     # AG Grid + Bryntum + Oracle + all integration panels
+
+render.yaml          # Render deployment config
+.env.example         # All environment variables documented
 ```
 
 ---
@@ -167,3 +206,5 @@ render.yaml        # Render deployment config
 | High-volume tier ($30 fee) | ✅ Separate break-even formula | ❌ Flat fee assumption |
 | Abandoned checkout recovery | ✅ PayPal invoice on approved+uncaptured | ❌ Not in scope |
 | PayPal-native (no card network) | ✅ Disputes v1 + Orders v2 + Invoicing v2 | ❌ Card-network chargebacks |
+| Product evidence enrichment | ✅ Channel3 100M+ product graph | ❌ Manual only |
+| API grounding | ✅ APIMatic context plugin | ❌ Prompt engineering |
