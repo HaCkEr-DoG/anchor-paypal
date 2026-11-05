@@ -61,26 +61,98 @@
     .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-    /* ── Stats cards ── */
-    .stats-row {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .stat-card {
-      background: var(--surface);
-      padding: 24px 28px;
-    }
-    .stat-card:not(:last-child) { border-right: 1px solid var(--border); }
-    .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 8px; font-weight: 500; }
-    .stat-value { font-size: 28px; font-weight: 700; line-height: 1; letter-spacing: -.02em; }
-    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 5px; }
+    /* ── Stats cards (hidden — IDs kept for compat) ── */
+    .stats-row { display: none; }
+    .stat-label,.stat-value,.stat-sub { display:none; }
     .c-green { color: var(--green); }
     .c-red { color: var(--red); }
     .c-yellow { color: var(--yellow); }
     .c-blue { color: var(--accent); }
     .c-purple { color: var(--purple); }
+
+    /* ── Hero Card Grid ─────────────────────────────── */
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr 1fr;
+      grid-template-rows: auto auto;
+      gap: 16px;
+      padding: 24px 32px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .hero-card {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.2);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+      position: relative;
+    }
+    .hero-card-tall { grid-row: span 2; }
+    .hero-card-accent {
+      background: linear-gradient(135deg, #4c1d95 0%, #5b21b6 50%, #6d28d9 100%);
+      border-color: rgba(139,92,246,.3);
+    }
+    .hero-card-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted-light);
+    }
+    .hero-card-header { display: flex; align-items: center; justify-content: space-between; }
+    .hero-metric { font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1; color: var(--text); }
+    .hero-metric-sm { font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1; color: var(--text); }
+    .hero-sub { font-size: 11px; color: var(--muted); margin-top: -4px; }
+    .hero-chip {
+      font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0;
+    }
+    .hero-chip.purple { background: rgba(167,139,250,.15); color: var(--purple); border: 1px solid rgba(167,139,250,.2); }
+    .hero-chip.amber  { background: rgba(245,158,11,.15);  color: var(--amber);  border: 1px solid rgba(245,158,11,.2); }
+    .hero-chip.green  { background: rgba(52,211,153,.15);  color: var(--green);  border: 1px solid rgba(52,211,153,.2); }
+    .hero-breakdown { display: flex; flex-direction: column; gap: 7px; }
+    .hero-breakdown-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); font-weight: 500; }
+    .hero-pill {
+      font-size: 9px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+      text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0;
+    }
+    .hero-pill.green  { background: rgba(52,211,153,.15); color: var(--green); }
+    .hero-pill.yellow { background: rgba(251,191,36,.15); color: var(--yellow); }
+    .hero-pill.muted  { background: rgba(255,255,255,.07); color: var(--muted-light); }
+    .hero-spark-wrap { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
+    .hero-spark-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; font-weight: 500; }
+    .spark-bars-svg { width: 100%; height: 56px; }
+    .spark-line-svg  { width: 100%; height: 48px; }
+    .hero-highlight {
+      background: rgba(52,211,153,.06); border: 1px solid rgba(52,211,153,.15);
+      border-radius: 10px; padding: 12px 16px; margin-top: auto;
+    }
+    .hero-highlight-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; font-weight: 600; }
+    .hero-highlight-value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; color: var(--green); }
+    .ring-card-inner { display: flex; align-items: center; gap: 20px; }
+    .ring-legend { display: flex; flex-direction: column; gap: 8px; }
+    .ring-legend-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+    .ring-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .ring-legend-val { font-weight: 600; color: var(--text); font-size: 13px; margin-left: auto; }
+    .oracle-formula-box {
+      background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.12);
+      border-radius: 8px; padding: 10px 12px;
+      font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--muted-light); line-height: 1.6;
+    }
+    .oracle-link {
+      display: inline-block; font-size: 12px; color: var(--amber); text-decoration: none;
+      font-weight: 500; margin-top: auto; padding-top: 4px;
+    }
+    .oracle-link:hover { text-decoration: underline; }
+    .hero-card-accent .hero-card-label { color: rgba(255,255,255,.55); }
+    .hero-card-accent .hero-metric     { color: #fff; }
+    .hero-card-accent .hero-sub        { color: rgba(255,255,255,.5); }
+    .hero-card-accent .hero-breakdown-row { color: rgba(255,255,255,.8); }
 
     /* ── Tabs ── */
     .tabs-bar {
@@ -399,38 +471,132 @@
   </div>
 </header>
 
-<!-- Stats -->
-<div class="stats-row">
-  <div class="stat-card">
-    <div class="stat-label">Disputes Handled</div>
-    <div class="stat-value c-blue" id="s-total">—</div>
-    <div class="stat-sub">all time</div>
+<!-- Hero Card Grid -->
+<div class="hero-grid">
+
+  <!-- Card A: Guardian Agent (tall, left col) -->
+  <div class="hero-card hero-card-tall">
+    <div class="hero-card-header">
+      <div class="hero-card-label">Guardian Agent</div>
+      <span class="hero-chip green">Auto-pilot</span>
+    </div>
+    <div class="hero-metric" id="hc-total">—</div>
+    <div class="hero-sub">disputes handled autonomously</div>
+
+    <div class="hero-breakdown">
+      <div class="hero-breakdown-row">
+        <span class="hero-pill green">Fought</span>
+        <span id="hc-fought">—</span>
+        <span style="color:var(--muted);font-size:11px;" id="hc-fought-pct"></span>
+      </div>
+      <div class="hero-breakdown-row">
+        <span class="hero-pill yellow">Accepted</span>
+        <span id="hc-accepted">—</span>
+        <span style="color:var(--muted);font-size:11px;" id="hc-accepted-pct"></span>
+      </div>
+      <div class="hero-breakdown-row">
+        <span class="hero-pill muted">Pending</span>
+        <span id="hc-pending">—</span>
+      </div>
+    </div>
+
+    <div class="hero-spark-wrap">
+      <div class="hero-spark-label">Last 7 disputes</div>
+      <svg id="spark-bars-svg" class="spark-bars-svg" viewBox="0 0 196 56" preserveAspectRatio="none"></svg>
+    </div>
+
+    <div class="hero-highlight">
+      <div class="hero-highlight-label">Revenue Protected</div>
+      <div class="hero-highlight-value" id="hc-protected">—</div>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Fought</div>
-    <div class="stat-value c-green" id="s-fought">—</div>
-    <div class="stat-sub">evidence submitted</div>
+
+  <!-- Card B: Recovery Agent (top middle) -->
+  <div class="hero-card">
+    <div class="hero-card-header">
+      <div class="hero-card-label">Recovery Agent</div>
+      <span class="hero-chip purple">Checkout</span>
+    </div>
+    <div class="hero-metric-sm" id="hc-rev-recovered">—</div>
+    <div class="hero-sub">revenue recovered from abandoned checkouts</div>
+    <svg id="spark-line-recovery" class="spark-line-svg" viewBox="0 0 200 48" preserveAspectRatio="none" style="margin-top:4px;"></svg>
+    <div style="display:flex;align-items:center;gap:6px;margin-top:auto;">
+      <span style="font-size:18px;font-weight:700;color:var(--text);" id="hc-recovered">—</span>
+      <span style="font-size:11px;color:var(--muted);">invoices sent</span>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Accepted</div>
-    <div class="stat-value c-yellow" id="s-accepted">—</div>
-    <div class="stat-sub">low EV — right call</div>
+
+  <!-- Card C: Fight Rate ring chart (top right) -->
+  <div class="hero-card" style="align-items:center;">
+    <div class="hero-card-label" style="align-self:flex-start;">Fight Rate</div>
+    <svg id="ring-chart-svg" viewBox="0 0 110 110" width="100" height="100">
+      <circle cx="55" cy="55" r="42" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="11"/>
+      <circle cx="55" cy="55" r="42" fill="none" stroke="var(--green)" stroke-width="11"
+        stroke-dasharray="264" stroke-dashoffset="264"
+        stroke-linecap="round" transform="rotate(-90 55 55)" id="ring-arc-fought"/>
+      <circle cx="55" cy="55" r="42" fill="none" stroke="var(--yellow)" stroke-width="11"
+        stroke-dasharray="264" stroke-dashoffset="264"
+        stroke-linecap="round" transform="rotate(-90 55 55)" id="ring-arc-accepted"/>
+      <text x="55" y="50" text-anchor="middle" fill="var(--text)" font-size="17" font-weight="700" id="ring-pct-text">—%</text>
+      <text x="55" y="64" text-anchor="middle" fill="var(--muted)" font-size="9" font-weight="500" letter-spacing="1">FOUGHT</text>
+    </svg>
+    <div class="ring-legend" style="width:100%;flex-direction:row;gap:12px;flex-wrap:wrap;justify-content:center;">
+      <div class="ring-legend-row" style="gap:5px;">
+        <span class="ring-dot" style="background:var(--green)"></span>
+        <span>Fought</span>
+        <span class="ring-legend-val" id="ring-fought-val">—</span>
+      </div>
+      <div class="ring-legend-row" style="gap:5px;">
+        <span class="ring-dot" style="background:var(--yellow)"></span>
+        <span>Accepted</span>
+        <span class="ring-legend-val" id="ring-accepted-val">—</span>
+      </div>
+      <div class="ring-legend-row" style="gap:5px;">
+        <span class="ring-dot" style="background:var(--muted)"></span>
+        <span>Pending</span>
+        <span class="ring-legend-val" id="ring-pending-val">—</span>
+      </div>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Revenue Protected</div>
-    <div class="stat-value c-green" id="s-protected">—</div>
-    <div class="stat-sub">from fought disputes</div>
+
+  <!-- Card D: Settlement Oracle quick (bottom middle) -->
+  <div class="hero-card">
+    <div class="hero-card-header">
+      <div class="hero-card-label">Settlement Oracle</div>
+      <span class="hero-chip amber">EV Math</span>
+    </div>
+    <div class="oracle-formula-box">
+      EV(fight) = p_win × amount − cost<br>
+      Break-even: (cost + $15) / (amount + $15)
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:2px;">
+      Avg win prob across fought:
+      <span style="font-weight:700;color:var(--text);font-size:14px;" id="hc-avg-win">—%</span>
+    </div>
+    <a href="#oracle-panel" class="oracle-link" onclick="document.getElementById('oracle-panel').scrollIntoView({behavior:'smooth'});return false;">
+      Open Oracle Calculator →
+    </a>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Recoveries</div>
-    <div class="stat-value c-blue" id="s-recovered">—</div>
-    <div class="stat-sub">abandoned checkouts</div>
+
+  <!-- Card E: AI Confidence (bottom right, purple accent) -->
+  <div class="hero-card hero-card-accent">
+    <div class="hero-card-header">
+      <div class="hero-card-label">AI Confidence</div>
+    </div>
+    <div class="hero-metric" style="color:#fff;" id="hc-avg-win-pct">—%</div>
+    <div class="hero-sub" style="color:rgba(255,255,255,.5);">avg win probability across fought</div>
+    <svg id="spark-line-wins" class="spark-line-svg" viewBox="0 0 200 48" preserveAspectRatio="none" style="margin-top:4px;"></svg>
+    <div class="hero-breakdown-row" style="margin-top:auto;">
+      <span style="font-size:22px;font-weight:700;color:#fff;" id="hc-attention-count">—</span>
+      <span style="font-size:12px;color:rgba(255,255,255,.6);">disputes need attention</span>
+    </div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Revenue Recovered</div>
-    <div class="stat-value c-purple" id="s-rev-recovered">—</div>
-    <div class="stat-sub">invoices sent to buyers</div>
-  </div>
+
+</div>
+<!-- Hidden compat IDs for updateStats() -->
+<div style="display:none" aria-hidden="true">
+  <span id="s-total"></span><span id="s-fought"></span><span id="s-accepted"></span>
+  <span id="s-protected"></span><span id="s-recovered"></span><span id="s-rev-recovered"></span>
 </div>
 
 <!-- Tabs -->
@@ -1324,6 +1490,119 @@ function updateStats(s) {
   document.getElementById('s-protected').textContent   = s.revenue_protected != null ? '$' + Number(s.revenue_protected).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
   document.getElementById('s-recovered').textContent   = s.orders_recovered  ?? '—';
   document.getElementById('s-rev-recovered').textContent = s.revenue_recovered != null ? '$' + Number(s.revenue_recovered).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+  updateHeroCards(s);
+}
+
+// ── Hero card rendering ────────────────────────────────────────────────────
+
+function drawSparkBars(disputes) {
+  const svg = document.getElementById('spark-bars-svg');
+  if (!svg) return;
+  const items = (disputes || DEMO_DISPUTES).slice(-7);
+  if (!items.length) return;
+  const W = 196, H = 56, barW = 22, gap = 6;
+  const maxAmt = Math.max(...items.map(d => d.amount), 1);
+  svg.innerHTML = items.map((d, i) => {
+    const h = Math.max(6, (d.amount / maxAmt) * (H - 8));
+    const x = i * (barW + gap);
+    const y = H - h;
+    const color = d.action_type === 'dispute_fought'   ? 'var(--green)'  :
+                  d.action_type === 'dispute_accepted' ? 'var(--yellow)' : 'var(--purple)';
+    return `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="4" fill="${color}" opacity="0.75"/>`;
+  }).join('');
+}
+
+function drawSparkLine(id, values, color) {
+  const svg = document.getElementById(id);
+  if (!svg || !values.length) return;
+  const W = 200, H = 48, pad = 4;
+  const minV = Math.min(...values), maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+  const pts = values.map((v, i) => {
+    const x = (i / Math.max(values.length - 1, 1)) * W;
+    const y = H - pad - ((v - minV) / range) * (H - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const gradId = 'lg' + id.replace(/-/g, '');
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity="0.25"/>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5"
+      stroke-linejoin="round" stroke-linecap="round"/>`;
+}
+
+function drawRingChart(fought, accepted, pending) {
+  const total = (fought + accepted + pending) || 1;
+  const circ  = 2 * Math.PI * 42;
+  const fightRatio  = fought   / total;
+  const acceptRatio = accepted / total;
+  const fightDash  = fightRatio  * circ;
+  const acceptDash = acceptRatio * circ;
+  const arcFought   = document.getElementById('ring-arc-fought');
+  const arcAccepted = document.getElementById('ring-arc-accepted');
+  if (arcFought) {
+    arcFought.setAttribute('stroke-dasharray', `${fightDash.toFixed(1)} ${(circ - fightDash).toFixed(1)}`);
+    arcFought.setAttribute('stroke-dashoffset', '0');
+    arcFought.setAttribute('transform', 'rotate(-90 55 55)');
+  }
+  if (arcAccepted) {
+    arcAccepted.setAttribute('stroke-dasharray', `${acceptDash.toFixed(1)} ${(circ - acceptDash).toFixed(1)}`);
+    arcAccepted.setAttribute('stroke-dashoffset', '0');
+    arcAccepted.setAttribute('transform', `rotate(${(fightRatio * 360 - 90).toFixed(1)} 55 55)`);
+  }
+  const pctEl = document.getElementById('ring-pct-text');
+  if (pctEl) pctEl.textContent = Math.round(fightRatio * 100) + '%';
+  const fv = document.getElementById('ring-fought-val');
+  const av = document.getElementById('ring-accepted-val');
+  const pv = document.getElementById('ring-pending-val');
+  if (fv) fv.textContent = fought;
+  if (av) av.textContent = accepted;
+  if (pv) pv.textContent = pending;
+}
+
+function updateHeroCards(s) {
+  const total    = s.disputes_total    || 0;
+  const fought   = s.disputes_fought   || 0;
+  const accepted = s.disputes_accepted || 0;
+  const pending  = Math.max(0, total - fought - accepted);
+  const protected_ = s.revenue_protected || 0;
+  const recovered  = s.orders_recovered  || 0;
+  const revRec     = s.revenue_recovered || 0;
+  const fmtMoney = v => '$' + Number(v).toLocaleString('en-US', {maximumFractionDigits:0});
+  const pct = n => total ? ' (' + Math.round(n / total * 100) + '%)' : '';
+  const el = id => document.getElementById(id);
+  if (el('hc-total'))        el('hc-total').textContent        = total || '—';
+  if (el('hc-fought'))       el('hc-fought').textContent       = fought;
+  if (el('hc-fought-pct'))   el('hc-fought-pct').textContent   = pct(fought);
+  if (el('hc-accepted'))     el('hc-accepted').textContent     = accepted;
+  if (el('hc-accepted-pct')) el('hc-accepted-pct').textContent = pct(accepted);
+  if (el('hc-pending'))      el('hc-pending').textContent      = pending;
+  if (el('hc-protected'))    el('hc-protected').textContent    = fmtMoney(protected_);
+  if (el('hc-rev-recovered')) el('hc-rev-recovered').textContent = fmtMoney(revRec);
+  if (el('hc-recovered'))    el('hc-recovered').textContent    = recovered;
+  const disputes = window._lastDisputes || DEMO_DISPUTES;
+  const foughtDisputes = disputes.filter(d => d.action_type === 'dispute_fought');
+  const avgWin = foughtDisputes.length
+    ? foughtDisputes.reduce((s, d) => s + (d.win_probability || 0), 0) / foughtDisputes.length
+    : 0.78;
+  const avgWinPct = Math.round(avgWin * 100);
+  const attentionCount = disputes.filter(d => d.requires_attention).length;
+  if (el('hc-avg-win'))         el('hc-avg-win').textContent         = avgWinPct + '%';
+  if (el('hc-avg-win-pct'))     el('hc-avg-win-pct').textContent     = avgWinPct + '%';
+  if (el('hc-attention-count')) el('hc-attention-count').textContent = attentionCount;
+  drawRingChart(fought, accepted, pending);
+  drawSparkBars(disputes.slice(-7));
+  const recoveries = window.DEMO_RECOVERIES || [];
+  const recAmounts = recoveries.length
+    ? recoveries.map((_, i) => recoveries.slice(0, i + 1).reduce((acc, r) => acc + r.amount, 0))
+    : [0, 50, 120, 90, 180, 220, 310, 460, 559];
+  drawSparkLine('spark-line-recovery', recAmounts, 'var(--purple)');
+  const winPcts = foughtDisputes.map(d => Math.round((d.win_probability || 0) * 100));
+  drawSparkLine('spark-line-wins', winPcts.length ? winPcts : [60,65,72,68,75,80,84,88,92,88], 'rgba(255,255,255,0.7)');
 }
 
 // ── Bryntum-style Timeline ──────────────────────────────────────────────────
