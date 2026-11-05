@@ -549,6 +549,39 @@ async def api_disputes():
         return JSONResponse({"rows": [], "error": str(e)})
 
 
+@app.get("/api/apimatic/context")
+async def api_apimatic_context():
+    """
+    Returns the APIMatic-generated PayPal Disputes API context document.
+    This is what the Guardian agent loads before every PayPal API call
+    to ensure correct endpoints and parameters.
+    """
+    from agents.apimatic import ApiMaticClient
+    client = ApiMaticClient()
+    context = client.get_context()
+    return JSONResponse({
+        "enabled": client.enabled(),
+        "source": "APIMatic Context Plugin — apimatic.io",
+        "context": context,
+        "note": "Set APIMATIC_API_KEY to regenerate from live PayPal OpenAPI spec",
+    })
+
+
+@app.get("/api/apimatic/lookup/{action}")
+async def api_apimatic_lookup(action: str):
+    """
+    Looks up the correct PayPal endpoint for a given dispute action.
+    Called by Guardian before every API call — this is the runtime benefit
+    of APIMatic's Context Plugin: deterministic, hallucination-free routing.
+
+    Actions: accept, provide_evidence, send_message, appeal, escalate,
+             get_detail, list, create_invoice, send_invoice, get_order, get_token
+    """
+    from agents.apimatic import ApiMaticClient
+    client = ApiMaticClient()
+    return JSONResponse(client.lookup_endpoint(action))
+
+
 @app.post("/api/channel3/enrich")
 async def api_channel3_enrich(request: Request):
     """

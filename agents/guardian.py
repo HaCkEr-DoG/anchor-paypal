@@ -103,6 +103,18 @@ class Guardian:
                 )
                 return
 
+        # APIMatic context grounding — verify correct endpoint + required fields before
+        # making any PayPal API call. Prevents hallucinated paths or wrong parameters.
+        from agents.apimatic import ApiMaticClient
+        _apimatic = ApiMaticClient()
+        _ep_accept  = _apimatic.lookup_endpoint("accept")
+        _ep_evidence = _apimatic.lookup_endpoint("provide_evidence")
+        _ep_message  = _apimatic.lookup_endpoint("send_message")
+        print(
+            f"[Guardian] APIMatic context loaded — "
+            f"accept={_ep_accept['path']}, evidence={_ep_evidence['path']}"
+        )
+
         # State-awareness: check which actions the API currently permits for this dispute.
         # PayPal's dispute lifecycle has stages (INQUIRY, CLAIM, etc.) and only exposes
         # HATEOAS links for actions valid in the current state. Acting outside those links

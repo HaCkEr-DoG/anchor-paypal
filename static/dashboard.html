@@ -489,6 +489,64 @@
 <!-- Tooltip (shared) -->
 <div class="tl-tooltip" id="tl-tooltip"></div>
 
+<!-- APIMatic Context Plugin Panel -->
+<div style="padding:24px 32px;border-top:1px solid var(--border);background:#0f0f0f;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+    <div style="font-size:15px;font-weight:600;">APIMatic Context Plugin</div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(0,112,224,.1);color:var(--accent);border:1px solid rgba(0,112,224,.25);">Active</span>
+    <span style="font-size:12px;color:var(--muted);">— Guardian loads this before every PayPal API call. No hallucinated endpoints.</span>
+  </div>
+
+  <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px;">
+    <div>
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:5px;">Dispute action</label>
+      <select id="am-action"
+        style="background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;">
+        <option value="accept">accept</option>
+        <option value="provide_evidence" selected>provide_evidence</option>
+        <option value="send_message">send_message</option>
+        <option value="appeal">appeal</option>
+        <option value="get_detail">get_detail</option>
+        <option value="create_invoice">create_invoice</option>
+        <option value="send_invoice">send_invoice</option>
+        <option value="get_order">get_order</option>
+        <option value="get_token">get_token</option>
+      </select>
+    </div>
+    <button onclick="lookupApiMatic()"
+      style="padding:8px 18px;background:#1a1a2e;color:var(--accent);border:1px solid rgba(0,112,224,.4);border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">
+      Lookup →
+    </button>
+    <button onclick="loadApiMaticContext()"
+      style="padding:8px 18px;background:#1a1a1a;color:var(--muted);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">
+      View full context
+    </button>
+  </div>
+
+  <div id="am-result" style="display:none;border:1px solid var(--border);border-radius:6px;overflow:hidden;max-width:900px;">
+    <div style="display:flex;gap:0;">
+      <div style="flex:1;padding:16px;border-right:1px solid var(--border);">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Endpoint</div>
+        <div id="am-endpoint" style="font-family:monospace;font-size:13px;line-height:1.8;color:var(--text);"></div>
+      </div>
+      <div style="flex:1;padding:16px;">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Required fields / notes</div>
+        <div id="am-fields" style="font-size:12px;line-height:1.8;color:var(--text);"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="am-context" style="display:none;border:1px solid var(--border);border-radius:6px;padding:16px;margin-top:14px;max-width:900px;max-height:300px;overflow-y:auto;">
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">PayPal Disputes API Context (APIMatic-generated)</div>
+    <pre id="am-context-text" style="font-family:monospace;font-size:11px;color:var(--text);white-space:pre-wrap;line-height:1.6;margin:0;"></pre>
+  </div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);">
+    Powered by <a href="https://apimatic.io" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">APIMatic</a>
+    — deterministic API context from OpenAPI specs · set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">APIMATIC_API_KEY</code> to regenerate from live PayPal spec
+  </div>
+</div>
+
 <!-- Channel3 Enrichment Demo Panel -->
 <div style="padding:24px 32px;border-top:1px solid var(--border);background:var(--surface);">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
@@ -538,7 +596,7 @@
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
-  <span>Powered by <strong style="color:var(--text)">AG Grid Community</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · PayPal AI Hackathon 2026</span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · PayPal AI Hackathon 2026</span>
 </footer>
 
 <script>
@@ -899,6 +957,58 @@ function switchTab(name) {
 }
 
 let _lastDisputes = [];
+
+// ── APIMatic context plugin demo ────────────────────────────────────────────
+async function lookupApiMatic() {
+  const action = document.getElementById('am-action').value;
+  const resDiv = document.getElementById('am-result');
+  const ctxDiv = document.getElementById('am-context');
+
+  try {
+    const r = await fetch(`/api/apimatic/lookup/${action}`);
+    const d = await r.json();
+
+    if (d.error) {
+      document.getElementById('am-endpoint').textContent = d.error;
+      resDiv.style.display = 'block';
+      return;
+    }
+
+    const methodColor = d.method === 'GET' ? 'var(--green)' : 'var(--accent)';
+    document.getElementById('am-endpoint').innerHTML =
+      `<span style="color:${methodColor};font-weight:700">${d.method}</span>  ${d.path}` +
+      (d.content_type ? `<br><span style="color:var(--muted);font-size:11px">Content-Type: ${d.content_type}</span>` : '') +
+      (d.hateoas_rel ? `<br><span style="color:var(--purple);font-size:11px">HATEOAS rel: ${d.hateoas_rel}</span>` : '') +
+      `<br><span style="color:var(--muted);font-size:10px">Source: ${d.source}</span>`;
+
+    const fields = [];
+    if (d.required) fields.push(`<strong>Required:</strong> ${Array.isArray(d.required) ? d.required.join(', ') : d.required}`);
+    if (d.optional_body) fields.push(`<strong>Optional:</strong> ${JSON.stringify(d.optional_body)}`);
+    if (d.evidence_types) fields.push(`<strong>Evidence types:</strong><br>${d.evidence_types.join(', ')}`);
+    if (d.query_params) fields.push(`<strong>Query params:</strong> ${d.query_params.join(', ')}`);
+    if (d.note) fields.push(`<em style="color:var(--yellow)">⚑ ${d.note}</em>`);
+    document.getElementById('am-fields').innerHTML = fields.join('<br>') || '—';
+
+    resDiv.style.display = 'block';
+    ctxDiv.style.display = 'none';
+  } catch(e) {
+    console.error('APIMatic lookup failed:', e);
+  }
+}
+
+async function loadApiMaticContext() {
+  const ctxDiv = document.getElementById('am-context');
+  if (ctxDiv.style.display !== 'none') { ctxDiv.style.display = 'none'; return; }
+
+  try {
+    const r = await fetch('/api/apimatic/context');
+    const d = await r.json();
+    document.getElementById('am-context-text').textContent = d.context || '';
+    ctxDiv.style.display = 'block';
+  } catch(e) {
+    console.error('APIMatic context load failed:', e);
+  }
+}
 
 // ── Channel3 enrichment demo ────────────────────────────────────────────────
 async function runChannel3() {
