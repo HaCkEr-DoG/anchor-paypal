@@ -99,29 +99,43 @@ class EvidenceAssembler:
         if not url:
             return None
 
-        # KERNEL call: spin up a browser, navigate, screenshot delivery confirmation
-        # KERNEL spins up in <30ms and is bot-resistant — carrier sites block regular scrapers
+        # KERNEL: bot-resistant cloud browser — carrier sites block standard scrapers
+        # kernel.sh · stealth=True enables anti-detection fingerprints + CAPTCHA solver
         screenshot_path = tmp_dir / f"delivery_{tracking_number}.png"
 
-        kernel_script = f"""
-import asyncio
-from kernel import Browser
-
-async def capture():
-    async with Browser() as b:
-        page = await b.new_page()
-        await page.goto("{url}", wait_until="networkidle")
-        # Wait for tracking result to load
-        await page.wait_for_selector(".tracking-result, .status, .delivery-status", timeout=10000)
-        await page.screenshot(path="{screenshot_path}", full_page=True)
-        return str("{screenshot_path}")
-
-asyncio.run(capture())
-"""
-        # In production: subprocess.run(["kernel", "exec", kernel_script])
-        # For now, write the script for manual/automated execution
-        script_path = tmp_dir / "kernel_tracking.py"
-        script_path.write_text(kernel_script)
+        try:
+            from agents.kernel_browser import KernelBrowser
+            kb = KernelBrowser()
+            if kb.enabled():
+                png_bytes = await kb.screenshot_url(
+                    url,
+                    wait_selector=".tracking-result, .status, .delivery-status",
+                    timeout_ms=10000,
+                )
+                if png_bytes:
+                    screenshot_path.write_bytes(png_bytes)
+            else:
+                # Kernel not configured — write a placeholder script for manual use
+                script_path = tmp_dir / "kernel_tracking.py"
+                script_path.write_text(
+                    f"# Run with: pip install kernel && python {script_path.name}\n"
+                    f"# Requires KERNEL_API_KEY env var (dashboard.onkernel.com)\n\n"
+                    f"import os, asyncio\n"
+                    f"from kernel import Kernel\n\n"
+                    f"async def capture():\n"
+                    f"    client = Kernel(api_key=os.environ['KERNEL_API_KEY'])\n"
+                    f"    browser = client.browsers.create(stealth=True)\n"
+                    f"    client.browsers.playwright.execute(browser.session_id, code=\"\"\"\n"
+                    f"const page = await context.newPage();\n"
+                    f"await page.goto('{url}', {{waitUntil:'networkidle'}});\n"
+                    f"await page.wait_for_selector('.tracking-result,.status,.delivery-status', {{timeout:10000}});\n"
+                    f"await page.screenshot({{path:'{screenshot_path}',fullPage:true}});\n"
+                    f"\"\"\")\n"
+                    f"    client.browsers.delete_by_id(browser.session_id)\n\n"
+                    f"asyncio.run(capture())\n"
+                )
+        except Exception as e:
+            print(f"[Evidence] Kernel screenshot failed: {e}")
 
         if screenshot_path.exists():
             return EvidenceFile(

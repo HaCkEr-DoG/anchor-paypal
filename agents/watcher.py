@@ -826,3 +826,69 @@ async def api_astropods_chat(request: Request):
         return JSONResponse({"enabled": True, "response": resp})
     except Exception as e:
         return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)
+
+
+# ── Kernel Browser endpoints ──────────────────────────────────────────────────
+
+@app.get("/api/kernel/status")
+async def kernel_status():
+    """
+    Returns Kernel browser config and capabilities.
+    Always returns a renderable payload; uses demo data when KERNEL_API_KEY is absent.
+
+    Demo mode: shows stealth capabilities + carrier support without a real key.
+    Live mode: verifies the key with a lightweight /browsers list call.
+    """
+    from agents.kernel_browser import KernelBrowser
+    kb = KernelBrowser()
+    return JSONResponse(await kb.status_summary())
+
+
+@app.post("/api/kernel/screenshot")
+async def kernel_screenshot(request: Request):
+    """
+    Demonstrates Kernel browser automation: spin up a stealth browser,
+    navigate to a URL, return screenshot metadata.
+
+    Body: {"url": "https://...", "wait_selector": ".optional-selector"}
+    Returns demo metadata when KERNEL_API_KEY is not set.
+    """
+    from agents.kernel_browser import KernelBrowser
+    kb = KernelBrowser()
+
+    if not kb.enabled():
+        return JSONResponse({
+            "enabled": False,
+            "demo": True,
+            "note": "Set KERNEL_API_KEY to capture real screenshots",
+            "demo_result": {
+                "url": "https://www.ups.com/track?tracknum=1Z999AA10123456784",
+                "carrier": "UPS",
+                "status": "Delivered — October 28, 2026 at 2:14 P.M.",
+                "screenshot_size_kb": 184,
+                "spin_up_ms": 28,
+                "stealth": True,
+            },
+        })
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+
+    url           = body.get("url", "")
+    wait_selector = body.get("wait_selector")
+
+    if not url:
+        return JSONResponse({"error": "url is required"}, status_code=400)
+
+    try:
+        png_bytes = await kb.screenshot_url(url, wait_selector=wait_selector)
+        return JSONResponse({
+            "enabled": True,
+            "url": url,
+            "screenshot_size_kb": round(len(png_bytes) / 1024, 1),
+            "stealth": True,
+        })
+    except Exception as e:
+        return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)

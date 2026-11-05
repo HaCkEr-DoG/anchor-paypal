@@ -764,10 +764,59 @@
   </div>
 </div>
 
+<!-- Kernel Browser Panel -->
+<div class="card" id="kernel-panel" style="border-top:3px solid #0ea5e9;">
+  <!-- Kernel logo mark (browser/window) -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+    <div style="width:36px;height:36px;border-radius:8px;background:#0ea5e9;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+      </svg>
+    </div>
+    <div>
+      <div style="font-size:15px;font-weight:600;">Kernel Browser Automation</div>
+      <div id="kernel-badge" style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;background:#0ea522;color:#fff;font-weight:600;letter-spacing:.4px;margin-top:2px;">CHECKING…</div>
+    </div>
+  </div>
+
+  <p style="font-size:13px;color:var(--muted);margin:0 0 14px;">
+    Kernel spins up a bot-resistant Chromium browser in &lt;30ms and photographs
+    carrier tracking pages for dispute evidence. Carrier sites block standard scrapers —
+    Kernel's stealth fingerprints and residential proxies bypass them transparently.
+  </p>
+
+  <!-- Capabilities table -->
+  <div id="kernel-capabilities" style="margin-bottom:14px;"></div>
+
+  <!-- Carrier support pills -->
+  <div style="margin-bottom:14px;">
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Carrier Support</div>
+    <div id="kernel-carriers" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+  </div>
+
+  <!-- Last capture row -->
+  <div id="kernel-last-capture" style="margin-bottom:14px;"></div>
+
+  <!-- Action buttons -->
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+    <button onclick="kernelRefresh(this)" style="padding:7px 14px;border-radius:6px;border:none;background:#0ea5e9;color:#fff;font-size:13px;cursor:pointer;font-weight:500;">
+      ↻ Refresh
+    </button>
+    <button onclick="kernelTestScreenshot(this)" style="padding:7px 14px;border-radius:6px;border:1px solid #0ea5e9;background:transparent;color:#0ea5e9;font-size:13px;cursor:pointer;font-weight:500;">
+      📷 Demo Screenshot
+    </button>
+  </div>
+
+  <div style="font-size:11px;color:var(--muted);">
+    Powered by <a href="https://kernel.sh" target="_blank" rel="noopener" style="color:#0ea5e9;text-decoration:none;">Kernel</a>
+    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">KERNEL_API_KEY</code> to capture live carrier screenshots
+  </div>
+</div>
+
 <!-- Footer -->
 <footer class="footer">
   <span>Anchor — Autonomous PayPal Dispute &amp; Recovery Agent · <a href="https://github.com/HaCkEr-DoG/anchor-paypal" style="color:var(--accent);text-decoration:none">GitHub</a></span>
-  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · <strong style="color:#46E3B7">Render</strong> · <strong style="color:#6366F1">Astropods</strong> · PayPal AI Hackathon 2026</span>
+  <span>Powered by <strong style="color:var(--text)">AG Grid</strong> · <strong style="color:var(--text)">Bryntum Scheduler</strong> · <strong style="color:var(--text)">APIMatic</strong> · <strong style="color:var(--text)">Channel3</strong> · <strong style="color:#FF6C37">Postman</strong> · <strong style="color:#46E3B7">Render</strong> · <strong style="color:#6366F1">Astropods</strong> · <strong style="color:#0ea5e9">Kernel</strong> · PayPal AI Hackathon 2026</span>
 </footer>
 
 <script>
@@ -1521,12 +1570,110 @@ async function astroTestGateway(btn) {
   }
 }
 
+// ── Kernel Browser panel ─────────────────────────────────────────────────────
+async function kernelRefresh(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+  try {
+    const r = await fetch('/api/kernel/status');
+    const d = await r.json();
+    _applyKernelStatus(d);
+  } catch (e) {
+    console.error('Kernel status fetch failed:', e);
+  } finally {
+    if (btn) { btn.textContent = '↻ Refresh'; btn.disabled = false; }
+  }
+}
+
+function _applyKernelStatus(d) {
+  const badge = document.getElementById('kernel-badge');
+  const src   = d.demo ? d.demo : d;
+
+  if (d.enabled || d.demo) {
+    badge.textContent  = d.enabled ? 'ACTIVE' : 'DEMO MODE';
+    badge.style.background = d.enabled ? '#22c55e' : '#f59e0b';
+  } else {
+    badge.textContent  = 'NOT CONFIGURED';
+    badge.style.background = '#6b7280';
+  }
+
+  // Capabilities table
+  const caps = (src.capabilities || []);
+  const capDiv = document.getElementById('kernel-capabilities');
+  if (caps.length) {
+    capDiv.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Capabilities</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        ${caps.map(c => `
+          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+            <td style="padding:5px 0;color:var(--text);font-weight:500;">${c.name}</td>
+            <td style="padding:5px 0;color:var(--muted);text-align:right;">${c.detail}</td>
+          </tr>`).join('')}
+      </table>`;
+  }
+
+  // Carrier pills
+  const carriers = src.carrier_support || ['USPS','UPS','FedEx','DHL'];
+  const colors = { USPS:'#004B87', UPS:'#582C83', FedEx:'#4D148C', DHL:'#FFCC00' };
+  const textC  = { USPS:'#fff',    UPS:'#fff',    FedEx:'#fff',     DHL:'#333'   };
+  document.getElementById('kernel-carriers').innerHTML = carriers.map(c =>
+    `<span style="padding:4px 10px;border-radius:12px;font-size:11px;font-weight:600;background:${colors[c]||'#374151'};color:${textC[c]||'#fff'}">${c}</span>`
+  ).join('');
+
+  // Last capture
+  const lastCapDiv = document.getElementById('kernel-last-capture');
+  if (src.last_capture) {
+    lastCapDiv.innerHTML = `
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px;">Last Evidence Capture</div>
+      <div style="font-size:12px;color:var(--text);">${src.last_capture}</div>`;
+  }
+}
+
+async function kernelTestScreenshot(btn) {
+  const orig = btn.innerHTML;
+  btn.innerHTML = 'Spinning up browser…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/kernel/screenshot', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ url: 'https://www.ups.com/track?tracknum=1Z999AA10123456784' }),
+    });
+    const d = await r.json();
+    const panel = document.getElementById('kernel-panel');
+    const existing = panel.querySelector('.kernel-result');
+    if (existing) existing.remove();
+    const el = document.createElement('div');
+    el.className = 'kernel-result';
+    if (d.demo) {
+      el.style.cssText = 'margin-top:10px;padding:10px;background:rgba(14,165,233,.12);border-radius:6px;font-size:12px;';
+      el.innerHTML = `
+        <div style="color:#0ea5e9;font-weight:600;margin-bottom:4px;">⚡ Demo result (set KERNEL_API_KEY for live)</div>
+        <div style="color:var(--text);">URL: ${d.demo_result.url}</div>
+        <div style="color:var(--text);">Status: <strong>${d.demo_result.status}</strong></div>
+        <div style="color:var(--muted);">Spin-up: ${d.demo_result.spin_up_ms}ms · Screenshot: ${d.demo_result.screenshot_size_kb}KB · Stealth: ${d.demo_result.stealth}</div>`;
+    } else {
+      el.style.cssText = 'margin-top:10px;padding:10px;background:rgba(34,197,94,.12);border-radius:6px;font-size:12px;';
+      el.innerHTML = `
+        <div style="color:#22c55e;font-weight:600;margin-bottom:4px;">✓ Screenshot captured via Kernel</div>
+        <div style="color:var(--text);">URL: ${d.url}</div>
+        <div style="color:var(--muted);">Size: ${d.screenshot_size_kb}KB · Stealth: ${d.stealth}</div>`;
+    }
+    panel.querySelector('.card > div:last-of-type')?.before(el) || panel.appendChild(el);
+  } catch (e) {
+    console.error('Kernel screenshot demo failed:', e);
+  } finally {
+    btn.innerHTML = orig;
+    btn.disabled = false;
+  }
+}
+
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
   renderRefreshStatus();
   astroRefresh();
+  kernelRefresh();
   setInterval(loadAll, 60000); // auto-refresh every 60s
 });
 </script>
