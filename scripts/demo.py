@@ -100,6 +100,16 @@ SCENARIOS = [
         "expected": "ACCEPT",
         "why": "$30 non-refundable fee + no delivery confirmation → EV(fight) < 0; standard tier would fight this",
     },
+    {
+        "name": "SNAD — fight with item proof",
+        "dispute_id": "PP-D-DEMO-005",
+        "amount": 320.00,
+        "reason_code": "SIGNIFICANTLY_NOT_AS_DESCRIBED",
+        "has_item_description_proof": True,
+        "has_buyer_communication": True,
+        "expected": "FIGHT",
+        "why": "Listing proof plus buyer communication raises the evidence-adjusted win rate",
+    },
 ]
 
 
@@ -115,7 +125,7 @@ async def run_oracle_demo():
 
     header("Settlement Oracle — Economic Decision Engine")
     print(f"\n  The Oracle calculates EV(fight) vs EV(accept) for every dispute.")
-    print(f"  No other tool does this for PayPal's dispute lifecycle.\n")
+    print(f"  The core decision model runs locally without PayPal credentials.\n")
 
     for s in SCENARIOS:
         step(s["dispute_id"], f"{BOLD}{s['name']}{RESET}")
@@ -125,8 +135,9 @@ async def run_oracle_demo():
             has_tracking_number=s.get("has_tracking", False),
             has_delivery_confirmation=s.get("has_delivery_confirmation", False),
             has_buyer_communication=s.get("has_buyer_communication", False),
-            seller_account_age_days=730,
-            seller_dispute_win_rate=0.55,
+            has_item_description_proof=s.get("has_item_description_proof", False),
+            seller_account_age_days=365,
+            seller_dispute_win_rate=0.5,
         )
 
         result = calculate(
@@ -145,51 +156,35 @@ async def run_oracle_demo():
 
 
 async def run_guardian_demo():
-    try:
-        from agents.config import GuardianConfig
-        from agents.guardian import Guardian
-    except ImportError:
-        header("Guardian Agent — HATEOAS State Awareness")
-        warn("Run `pip install -r requirements.txt` to see this section")
-        return
-
     header("Guardian Agent — HATEOAS State Awareness")
-    print(f"\n  Before acting autonomously, Guardian fetches PayPal's HATEOAS links.")
-    print(f"  Only actions PayPal currently permits are attempted.\n")
+    print("\n  Offline walkthrough — no PayPal credentials or optional integrations required.")
+    print("  Live webhook actions require configured PayPal sandbox credentials.\n")
 
-    cfg = GuardianConfig(
-        merchant_id="demo-merchant",
-        auto_accept_below=60.0,
-        auto_fight_above=200.0,
-        auto_fight_min_prob=0.60,
-    )
-    g = Guardian(config=cfg)
+    step("HATEOAS", "Illustrative live-action gate (not called by this offline demo)")
 
-    step("HATEOAS", "Checking permitted actions for a live sandbox dispute")
-
-    # Simulate what Guardian does — show the state check logic
+    # Show the decision and state checks without implying a PayPal call occurred.
     print(f"""
-    {DIM}# Guardian code — runs before EVERY autonomous action:
-    token = await self._get_token()
-    permitted = await self._fetch_permitted_actions(dispute_id, token)
+    {DIM}# Simplified Guardian flow:
+    decision = oracle.calculate(dispute)
+    permitted = await paypal.get_dispute(dispute_id)  # inspect current HATEOAS links
 
-    if cfg.auto_accept(amount):
+    if cfg.auto_accept(amount) and decision.recommendation == ACCEPT and decision.ev_fight <= 0:
         if "accept-claim" not in permitted:
             # State gate — defer to manual review
             await self._request_approval(...)
             return
         await self._accept_dispute(...)
 
-    elif cfg.auto_fight(amount, win_probability):
+    elif cfg.auto_fight(amount, decision.win_probability) and decision.recommendation == FIGHT and decision.ev_fight > 0:
         if "provide-evidence" not in permitted:
-            # State gate — don't crash, defer
+            # State gate — use another permitted action or defer
             await self._request_approval(...)
             return
         await self._fight_dispute(...){RESET}
     """)
 
-    ok("State-awareness prevents acting outside PayPal's allowed lifecycle stage")
-    ok("Fails safe to manual review — never crashes, never acts on stale state")
+    ok("Guardian fetches the current dispute and checks permitted HATEOAS links")
+    ok("If PayPal does not permit the action, Guardian defers for merchant review")
 
 
 async def run_recovery_demo():
@@ -227,16 +222,8 @@ async def run_recovery_demo():
 
 
 async def run_morning_brief_demo():
-    try:
-        from agents.briefing import Brief, generate_brief
-    except ImportError:
-        header("Morning Brief — Overnight Summary")
-        warn("Run `pip install -r requirements.txt` to see this section")
-        return
-
-    header("Morning Brief — Overnight Summary")
-    print(f"\n  Every morning at 8 AM, Anchor sends a brief covering what happened")
-    print(f"  while the merchant slept. No dashboard to check.\n")
+    header("Morning Brief — Illustrative Sample")
+    print(f"\n  Example format only. A live brief requires configured data and delivery credentials.\n")
 
     # Show a sample brief structure
     sample_brief = """
@@ -262,7 +249,7 @@ async def run_morning_brief_demo():
 └──────────────────────────────────────────────────────┘
     """
     print(CYAN + sample_brief + RESET)
-    ok("Sent to Slack at 8 AM — merchant wakes up knowing exactly what happened")
+    ok("Sample shows how recorded events can be summarized in one brief")
     ok("Pending items surfaced with one-tap approve link (48h token, dispute-bound)")
     ok("Recovery stats alongside dispute stats — single overnight view of lost revenue")
 
@@ -272,9 +259,8 @@ async def run_full_demo():
     print(f"  ANCHOR — Autonomous Dispute Management")
     print(f"  PayPal AI Hackathon 2026")
     print(f"{'='*60}{RESET}")
-    print(f"\n  While you sleep, Anchor handles your PayPal disputes.")
-    print(f"  Fight the ones worth fighting. Accept the ones that aren't.")
-    print(f"  Tell you what happened in the morning.")
+    print(f"\n  Offline prototype walkthrough — live actions need PayPal credentials")
+    print(f"  and an always-on deployment. The free demo may sleep between requests.")
 
     await run_oracle_demo()
     await run_guardian_demo()
@@ -283,23 +269,19 @@ async def run_full_demo():
 
     header("Summary")
     print(f"""
-  What makes Anchor different from every existing tool:
+  Anchor prototype capabilities shown above:
 
   {GREEN}✓{RESET} HATEOAS-aware — checks PayPal's live permitted actions before acting
   {GREEN}✓{RESET} Economic Oracle — calculates EV(fight) vs EV(accept), not just "always fight"
   {GREEN}✓{RESET} Two-tier fee model — $15 refundable vs $30 non-refundable at high-volume
-  {GREEN}✓{RESET} Calibrated Unauthorized base rate — 10% (not the industry-myth 21%)
-  {GREEN}✓{RESET} Pre-authorized thresholds — merchant decides once, Anchor executes forever
-  {GREEN}✓{RESET} Morning brief — no dashboard to check; it reports to you
+  {GREEN}✓{RESET} Assumed Unauthorized base rate — 10%, configurable and not validated
+  {GREEN}✓{RESET} Configurable thresholds — live actions require credentials and permitted PayPal links
+  {GREEN}✓{RESET} Morning brief — scheduled while the web process is running
   {GREEN}✓{RESET} Recovery Agent — finds approved-but-uncaptured orders, sends buyer invoices
   {GREEN}✓{RESET} Two problems solved: disputes managed AND abandoned sales recovered
 
-  Competitors (Chargeflow, Disputifier, Chargehound):
-  {RED}✗{RESET} Template-driven, not lifecycle-aware
-  {RED}✗{RESET} Skip PayPal's inquiry stage entirely
-  {RED}✗{RESET} No EV calculation — always fight regardless of cost
-  {RED}✗{RESET} No HATEOAS check — fail silently when state doesn't match
-  {RED}✗{RESET} Zero recovery capability — don't touch abandoned checkouts
+  Integrations overlap and vary by plan. Compare current vendor capabilities,
+  contracts, and supported workflows directly before choosing a product.
     """)
 
 

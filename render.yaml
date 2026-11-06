@@ -2,11 +2,11 @@ services:
   - type: web
     name: anchor-api
     runtime: python
-    plan: starter
+    plan: free
     region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn agents.watcher:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
+    healthCheckPath: /api/stats
     envVars:
       - key: PAYPAL_CLIENT_ID
         sync: false
@@ -46,55 +46,3 @@ services:
         value: "2"
       - key: PYTHON_VERSION
         value: "3.12.0"
-
-  - type: cron
-    name: anchor-recovery-check
-    runtime: python
-    plan: starter
-    region: oregon
-    schedule: "*/15 * * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python scripts/cron_recovery.py
-    envVars:
-      - key: PAYPAL_CLIENT_ID
-        sync: false
-      - key: PAYPAL_CLIENT_SECRET
-        sync: false
-      - key: ELASTICSEARCH_URL
-        sync: false
-      - key: ELASTICSEARCH_API_KEY
-        sync: false
-      - key: MERCHANT_ID
-        sync: false
-      - key: MERCHANT_EMAIL
-        sync: false
-      - key: SLACK_WEBHOOK_URL
-        sync: false
-      - key: RECOVERY_DELAY_MINUTES
-        value: "30"
-      - key: RECOVERY_MIN_AMOUNT
-        value: "10"
-      - key: RECOVERY_MAX_ATTEMPTS
-        value: "2"
-
-  - type: cron
-    name: anchor-morning-brief
-    runtime: python
-    plan: starter
-    region: oregon
-    schedule: "0 8 * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: python scripts/cron_morning_brief.py
-    envVars:
-      - key: PAYPAL_CLIENT_ID
-        sync: false
-      - key: PAYPAL_CLIENT_SECRET
-        sync: false
-      - key: ELASTICSEARCH_URL
-        sync: false
-      - key: ELASTICSEARCH_API_KEY
-        sync: false
-      - key: MERCHANT_ID
-        sync: false
-      - key: SLACK_WEBHOOK_URL
-        sync: false

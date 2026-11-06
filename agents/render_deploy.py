@@ -119,7 +119,18 @@ class RenderClient:
             return {
                 "enabled": False,
                 "note": "Set RENDER_API_KEY and RENDER_SERVICE_ID in Render env vars",
-                "demo": _demo_status(),
+                "demo": {
+                    "service": {
+                        "name": os.environ.get("RENDER_SERVICE_NAME", "anchor-paypal"),
+                        "url": os.environ.get("RENDER_EXTERNAL_URL", "https://anchor-paypal.onrender.com"),
+                        "suspended": False,
+                        "region": os.environ.get("RENDER_REGION", ""),
+                    },
+                    "current_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
+                    "latest_deploy": {},
+                    "recent_deploys": [],
+                    "status_note": "Live deploy details require RENDER_API_KEY and RENDER_SERVICE_ID.",
+                },
             }
 
         try:
@@ -166,6 +177,7 @@ class RenderClient:
 
         return {
             "enabled": True,
+            "current_commit": os.environ.get("RENDER_GIT_COMMIT", latest.get("commit_id", "")),
             "service": {
                 "name":      svc.get("name", "anchor-paypal"),
                 "url":       (svc.get("serviceDetails") or {}).get("url", "https://anchor-paypal.onrender.com"),
@@ -188,30 +200,16 @@ import asyncio
 # ---------------------------------------------------------------------------
 
 def _demo_status() -> dict:
+    """Return configured service metadata without inventing deploy history."""
     return {
         "service": {
-            "name": "anchor-paypal",
-            "url": "https://anchor-paypal.onrender.com",
-            "suspended": False,
-            "region": "oregon",
+            "name": os.environ.get("RENDER_SERVICE_NAME", "anchor-paypal"),
+            "url": os.environ.get("RENDER_EXTERNAL_URL", "https://anchor-paypal.onrender.com"),
+            "suspended": None,
+            "region": os.environ.get("RENDER_REGION", ""),
         },
-        "latest_deploy": {
-            "id": "dep-demo",
-            "status": "live",
-            "label": "Live",
-            "color": "#22c55e",
-            "commit_msg": "feat: add Postman integration",
-            "commit_id": "53a87dd",
-            "created_at": "",
-            "finished_at": "",
-            "duration_s": 87,
-            "age": "12m ago",
-        },
-        "recent_deploys": [
-            {"id": "d1", "status": "live",            "label": "Live",          "color": "#22c55e", "commit_msg": "feat: add Postman integration",  "commit_id": "53a87dd", "age": "12m ago",  "duration_s": 87},
-            {"id": "d2", "status": "live",            "label": "Live",          "color": "#22c55e", "commit_msg": "feat: add Channel3 integration", "commit_id": "d6dd33f", "age": "2h ago",   "duration_s": 91},
-            {"id": "d3", "status": "live",            "label": "Live",          "color": "#22c55e", "commit_msg": "feat: add APIMatic integration",  "commit_id": "a1b2c3d", "age": "4h ago",   "duration_s": 78},
-            {"id": "d4", "status": "build_failed",    "label": "Build Failed",  "color": "#ef4444", "commit_msg": "fix: timeline edge case",         "commit_id": "ff1234a", "age": "6h ago",   "duration_s": 34},
-            {"id": "d5", "status": "live",            "label": "Live",          "color": "#22c55e", "commit_msg": "feat: Bryntum timeline",          "commit_id": "bea7721", "age": "8h ago",   "duration_s": 95},
-        ],
+        "current_commit": os.environ.get("RENDER_GIT_COMMIT", ""),
+        "latest_deploy": {},
+        "recent_deploys": [],
+        "status_note": "Live deploy details require RENDER_API_KEY and RENDER_SERVICE_ID.",
     }

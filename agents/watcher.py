@@ -57,10 +57,6 @@ _DASHBOARD_HTML = (
     pathlib.Path(__file__).parent.parent / "static" / "dashboard.html"
 ).read_text()
 
-PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
-PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "")
-PAYPAL_CLIENT_SECRET = os.environ.get("PAYPAL_CLIENT_SECRET", "")
-
 # Secret for signing approval tokens — set via APPROVAL_TOKEN_SECRET env var.
 # Render auto-generates this; for local dev set it in .env.
 APPROVAL_TOKEN_SECRET = os.environ.get("APPROVAL_TOKEN_SECRET", secrets.token_hex(32))
@@ -152,43 +148,30 @@ async def _verify_paypal_signature(body: bytes, headers: dict):
 
     if not all([transmission_id, timestamp, cert_url, actual_sig]):
         raise HTTPException(400, "Missing PayPal signature headers")
+    if not os.environ.get("PAYPAL_WEBHOOK_ID"):
+        # Fail closed. A missing webhook ID is a configuration error, never a
+        # reason to accept an unverified event in demo mode.
+        raise HTTPException(503, "PAYPAL_WEBHOOK_ID is not configured")
 
-    # Verify against PayPal's verification endpoint
-    # In production: use PayPal SDK verify_webhook_signature
-    # This is the correct approach — don't roll your own crypto
-    async with httpx.AsyncClient() as client:
-        access_token = await _get_access_token()
-        resp = await client.post(
-            "https://api.sandbox.paypal.com/v1/notifications/verify-webhook-signature",
-            headers={"Authorization": f"Bearer {access_token}"},
-            json={
-                "transmission_id": transmission_id,
-                "transmission_time": timestamp,
-                "cert_url": cert_url,
-                "auth_algo": auth_algo,
-                "transmission_sig": actual_sig,
-                "webhook_id": PAYPAL_WEBHOOK_ID,
-                "webhook_event": json.loads(body),
-            },
+    from agents.paypal_client import get_client
+    try:
+        verified = await get_client().verify_webhook_signature(
+            auth_algo=auth_algo,
+            cert_url=cert_url,
+            transmission_id=transmission_id,
+            transmission_sig=actual_sig,
+            transmission_time=timestamp,
+            webhook_event=json.loads(body),
         )
-
-    result = resp.json()
-    if result.get("verification_status") != "SUCCESS":
-        raise HTTPException(403, f"Webhook signature verification failed: {result}")
+    except Exception as e:
+        raise HTTPException(503, f"PayPal signature verification unavailable: {e}") from e
+    if not verified:
+        raise HTTPException(403, "Webhook signature verification failed")
 
 
 async def _get_access_token() -> str:
-    import httpx, base64
-    creds = base64.b64encode(
-        f"{PAYPAL_CLIENT_ID}:{PAYPAL_CLIENT_SECRET}".encode()
-    ).decode()
-    async with httpx.AsyncClient() as c:
-        r = await c.post(
-            "https://api.sandbox.paypal.com/v1/oauth2/token",
-            headers={"Authorization": f"Basic {creds}"},
-            data={"grant_type": "client_credentials"},
-        )
-        return r.json()["access_token"]
+    from agents.paypal_client import get_client
+    return await get_client().get_token()
 
 
 async def _handle_dispute_created(event: dict):
@@ -208,6 +191,19 @@ async def _handle_dispute_created(event: dict):
         resource.get("dispute_amount", {}).get("value", 0)
     )
     reason = resource.get("reason", "ITEM_NOT_RECEIVED")
+    lifecycle_stage = resource.get("dispute_life_cycle_stage", "").upper()
+    eligible_claim = lifecycle_stage in {"CHARGEBACK", "CLAIM"} and reason.upper() in {
+        "ITEM_NOT_RECEIVED", "SIGNIFICANTLY_NOT_AS_DESCRIBED"
+    }
+    await _record_merchant_metric_event(
+        # Stable claim key means CREATED and UPDATED webhooks upsert the same
+        # eligible claim instead of inflating the fee-tier ratio.
+        event_id=(f"claim-{dispute_id}" if eligible_claim else event.get("id") or f"dispute-{dispute_id}"),
+        event_type="eligible_dispute" if eligible_claim else "dispute",
+        amount=dispute_amount,
+        reason=reason,
+        timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+    )
     seller_transaction_id = resource.get("disputed_transactions", [{}])[0].get(
         "seller_transaction_id"
     )
@@ -229,6 +225,19 @@ async def _handle_dispute_updated(event: dict):
     resource = event.get("resource", {})
     dispute_id = resource.get("dispute_id")
     status = resource.get("status")
+    stage = resource.get("dispute_life_cycle_stage", "").upper()
+    if stage in {"CHARGEBACK", "CLAIM"} and resource.get("reason", "").upper() in {
+        "ITEM_NOT_RECEIVED", "SIGNIFICANTLY_NOT_AS_DESCRIBED"
+    }:
+        try:
+            amount = float(resource.get("dispute_amount", {}).get("value", 0))
+        except (TypeError, ValueError):
+            amount = 0.0
+        await _record_merchant_metric_event(
+            event_id=f"claim-{dispute_id}", event_type="eligible_dispute", amount=amount,
+            reason=resource.get("reason", ""),
+            timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+        )
     print(f"[Watcher] Dispute {dispute_id} updated → {status}")
     # Update Bryntum board state, notify if resolved in seller's favor
 
@@ -258,9 +267,50 @@ async def _handle_order_approved(event: dict):
 async def _handle_capture(event: dict):
     """New payment — baseline data for future dispute risk scoring."""
     resource = event.get("resource", {})
-    # Index transaction in Elasticsearch for dispute pattern matching
-    # Used by Settlement Oracle's historical win rate lookup
+    amount = resource.get("amount", {})
+    if not amount:
+        amount = resource.get("seller_receivable_breakdown", {}).get("gross_amount", {})
+    try:
+        value = float(amount.get("value", 0))
+    except (TypeError, ValueError):
+        value = 0.0
+    await _record_merchant_metric_event(
+        event_id=event.get("id") or f"capture-{resource.get('id', secrets.token_hex(8))}",
+        event_type="capture",
+        amount=value,
+        reason="",
+        timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+    )
     print(f"[Watcher] Capture {resource.get('id')} — indexing for dispute baseline")
+
+
+async def _record_merchant_metric_event(
+    event_id: str, event_type: str, amount: float, reason: str, timestamp: str
+) -> None:
+    """Persist the minimal merchant-scoped aggregates used by the fee-tier estimate."""
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+    if not es_url or not es_key:
+        return
+    import httpx
+    payload = {
+        "event_id": event_id,
+        "event_type": event_type,
+        "merchant_id": os.environ.get("MERCHANT_ID", "default"),
+        "amount": amount,
+        "reason": reason,
+        "timestamp": timestamp,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            response = await client.put(
+                f"{es_url}/anchor-events/_doc/{event_id}",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=payload,
+            )
+            response.raise_for_status()
+    except Exception as e:
+        print(f"[Watcher] Could not persist merchant metric event {event_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +408,7 @@ async def _execute_approved_fight(dispute_id: str):
     )
 
     tracking = transaction.get("items", [{}])[0].get("tracking_info", {}) if transaction.get("items") else {}
-    if tracking.get("tracking_number"):
+    if tracking.get("tracking_number") and str(tracking.get("status", "")).upper() == "DELIVERED":
         f = await assembler.gather_tracking_evidence(
             tracking["tracking_number"],
             tracking.get("carrier_name", "USPS"),
@@ -372,30 +422,27 @@ async def _execute_approved_fight(dispute_id: str):
         for f in await assembler.gather_communication_evidence(buyer_email, tmp_dir):
             package.add(f)
 
-    # Channel3 product enrichment — auto-generate ITEM_DESCRIPTION evidence
+    # Channel3 catalog data is context only. It is not proof of what this merchant
+    # listed or shipped, so it must not be submitted without merchant verification.
     item_name = ""
     items = transaction.get("items") or []
     if items:
         item_name = items[0].get("name", "") or items[0].get("description", "")
     if not item_name:
         item_name = transaction.get("description", "") or f"PayPal dispute {dispute_id}"
-    product_evidence = await assembler.gather_product_evidence(
-        item_name, dispute_id, dispute_amount, tmp_dir
-    )
-    if product_evidence:
-        package.add(product_evidence)
-        print(f"[Watcher] Channel3 enriched {dispute_id} with product data for '{item_name}'")
+    if item_name:
+        print(f"[Watcher] Product context available for {dispute_id}; merchant verification required before submission")
 
     result = await assembler.submit(package) if package.is_sufficient() else None
 
     action = ActionRecord(
         timestamp=datetime.now(timezone.utc).isoformat(),
-        action_type="dispute_fought",
+        action_type="dispute_fought" if result else "dispute_pending",
         dispute_id=dispute_id,
         amount=dispute_amount,
-        outcome="evidence_submitted" if result else "failed",
+        outcome="evidence_submitted" if result else "insufficient_evidence",
         reasoning="Merchant approved via Slack reply",
-        requires_attention=False,
+        requires_attention=result is None,
     )
     await log_action(os.environ.get("MERCHANT_ID", "default"), action)
     print(f"[Watcher] Approved fight executed for {dispute_id}: {result}")
@@ -569,23 +616,27 @@ async def api_oracle_calculate(
         "UNAUTHORIZED": ClaimType.UNAUTHORIZED,
         "BILLING_ISSUE": ClaimType.BILLING_ISSUE,
     }
-    ct = ct_map.get(claim_type.upper(), ClaimType.ITEM_NOT_RECEIVED)
+    if claim_type.upper() not in ct_map:
+        return JSONResponse({"error": "Unsupported claim_type"}, status_code=400)
+    ct = ct_map[claim_type.upper()]
     evidence = Evidence(
         has_tracking_number=has_tracking,
         has_delivery_confirmation=has_delivery,
         has_buyer_communication=has_comm,
         has_item_description_proof=has_item_proof,
     )
-    decision = calculate(
-        dispute_amount=amount,
-        claim_type=ct,
-        evidence=evidence,
-        deadline_hours=deadline_hours,
-        seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
-        similar_dispute_win_rate=float(os.environ.get("SELLER_WIN_RATE", 0.5)),
-        high_volume_tier=high_volume,
-        dispute_fee_override=dispute_fee,
-    )
+    try:
+        decision = calculate(
+            dispute_amount=amount,
+            claim_type=ct,
+            evidence=evidence,
+            deadline_hours=deadline_hours,
+            seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
+            high_volume_tier=high_volume,
+            dispute_fee_override=dispute_fee,
+        )
+    except (ValueError, TypeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse({
         "recommendation": decision.recommendation.value,
         "ev_fight": round(decision.ev_fight, 2),
@@ -1105,7 +1156,7 @@ DEMO_SCENARIOS = {
         "deadline_hours": 72,
         "narrative": (
             "Buyer claims item wasn't received. Seller has tracking + delivery confirmation. "
-            "Anchor detects INQUIRY stage via HATEOAS, sends buyer message, then submits evidence."
+            "The simulator marks delivery proof as present; live actions require PayPal's current HATEOAS links."
         ),
     },
     "micro_accept": {
@@ -1194,7 +1245,7 @@ async def demo_simulate_dispute(request: Request):
 
     Used by the dashboard "Fire Live Dispute" panel.
     """
-    from oracle.decision import calculate, ClaimType, Evidence, Recommendation
+    from oracle.decision import calculate, score_evidence, ClaimType, Evidence, Recommendation
 
     try:
         body = await request.json()
@@ -1205,21 +1256,33 @@ async def demo_simulate_dispute(request: Request):
 
     if scenario_key == "custom":
         s = body.get("custom", {})
-        scenario = {
-            "label": "Custom Scenario",
-            "dispute_id": s.get("dispute_id", "PP-D-CUSTOM-001"),
-            "amount": float(s.get("amount", 100.0)),
-            "claim_type": s.get("claim_type", "ITEM_NOT_RECEIVED"),
-            "has_tracking": bool(s.get("has_tracking", False)),
-            "has_delivery": bool(s.get("has_delivery", False)),
-            "has_comm": bool(s.get("has_comm", False)),
-            "has_item_proof": bool(s.get("has_item_proof", False)),
-            "high_volume": bool(s.get("high_volume", False)),
-            "deadline_hours": int(s.get("deadline_hours", 72)),
-            "narrative": "Custom scenario",
-        }
+        try:
+            scenario = {
+                "label": "Custom Scenario",
+                "dispute_id": str(s.get("dispute_id", "PP-D-CUSTOM-001")),
+                "amount": float(s.get("amount", 100.0)),
+                "claim_type": str(s.get("claim_type", "ITEM_NOT_RECEIVED")),
+                "has_tracking": bool(s.get("has_tracking", False)),
+                "has_delivery": bool(s.get("has_delivery", False)),
+                "has_comm": bool(s.get("has_comm", False)),
+                "has_item_proof": bool(s.get("has_item_proof", False)),
+                "high_volume": bool(s.get("high_volume", False)),
+                "deadline_hours": int(s.get("deadline_hours", 72)),
+                "narrative": "Custom scenario",
+            }
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Custom amount and deadline_hours must be numeric"}, status_code=400)
+        if scenario["claim_type"].upper() not in {
+            "ITEM_NOT_RECEIVED", "SIGNIFICANTLY_NOT_AS_DESCRIBED", "UNAUTHORIZED", "BILLING_ISSUE"
+        }:
+            return JSONResponse({"error": "Unsupported claim_type"}, status_code=400)
     else:
-        scenario = DEMO_SCENARIOS.get(scenario_key, DEMO_SCENARIOS["inr_fight"])
+        scenario = DEMO_SCENARIOS.get(scenario_key)
+        if scenario is None:
+            return JSONResponse(
+                {"error": f"Unknown scenario '{scenario_key}'", "available": list(DEMO_SCENARIOS)},
+                status_code=400,
+            )
 
     ct_map = {
         "ITEM_NOT_RECEIVED": ClaimType.ITEM_NOT_RECEIVED,
@@ -1233,8 +1296,10 @@ async def demo_simulate_dispute(request: Request):
         has_delivery_confirmation=scenario["has_delivery"],
         has_buyer_communication=scenario["has_comm"],
         has_item_description_proof=scenario["has_item_proof"],
-        seller_account_age_days=int(os.environ.get("SELLER_ACCOUNT_AGE_DAYS", 730)),
-        seller_dispute_win_rate=float(os.environ.get("SELLER_WIN_RATE", 0.5)),
+        # Deterministic demo assumptions keep the displayed 91.8% tied to
+        # the INR base rate × delivery evidence multiplier, without merchant priors.
+        seller_account_age_days=365,
+        seller_dispute_win_rate=0.5,
     )
     oracle = calculate(
         dispute_amount=scenario["amount"],
@@ -1328,6 +1393,7 @@ async def demo_simulate_dispute(request: Request):
             "win_probability": round(oracle.win_probability, 4),
             "break_even": round(oracle.break_even_probability, 4),
             "confidence": round(oracle.confidence, 4),
+            "evidence_multiplier": round(score_evidence(evidence, ct), 4),
             "reasoning": oracle.reasoning,
         },
         "guardian": {
