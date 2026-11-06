@@ -1463,24 +1463,44 @@ function statusRenderer(p) {
 
 // ── Grid column defs ────────────────────────────────────────────────────────
 const DISPUTE_COLS = [
-  { field:'timestamp',        headerName:'Date / Time',      width:160, valueFormatter: p => fmtDate(p.value), sort:'desc' },
-  { field:'dispute_id',       headerName:'Dispute ID',       width:170, cellStyle:{ fontFamily:'monospace', fontSize:'12px' } },
-  { field:'amount',           headerName:'Amount',           width:100, valueFormatter: p => fmtAmt(p.value), type:'numericColumn' },
-  { field:'action_type',      headerName:'Action',           width:130, cellRenderer: actionRenderer },
-  { field:'win_probability',  headerName:'Win Prob',         width:100, valueFormatter: p => fmtPct(p.value), type:'numericColumn' },
-  { field:'outcome',          headerName:'Outcome',          width:160, valueFormatter: p => (p.value||'').replace(/_/g,' ') },
-  { field:'requires_attention', headerName:'⚑', width:60, cellRenderer: attentionRenderer },
-  { field:'reasoning',        headerName:'Oracle Reasoning', flex:1,    wrapText:false, tooltipField:'reasoning' },
+  {
+    headerName: 'Dispute', children: [
+      { field:'timestamp',        headerName:'Date / Time',      width:160, valueFormatter: p => fmtDate(p.value), sort:'desc', filter:'agDateColumnFilter' },
+      { field:'dispute_id',       headerName:'Dispute ID',       width:170, cellStyle:{ fontFamily:'monospace', fontSize:'12px' } },
+      { field:'amount',           headerName:'Amount',           width:100, valueFormatter: p => fmtAmt(p.value), type:'numericColumn', filter:'agNumberColumnFilter' },
+    ]
+  },
+  {
+    headerName: 'Oracle Decision', children: [
+      { field:'action_type',      headerName:'Action',           width:130, cellRenderer: actionRenderer },
+      { field:'win_probability',  headerName:'Win Prob',         width:100, valueFormatter: p => fmtPct(p.value), type:'numericColumn', filter:'agNumberColumnFilter' },
+      { field:'outcome',          headerName:'Outcome',          width:160, valueFormatter: p => (p.value||'').replace(/_/g,' ') },
+      { field:'requires_attention', headerName:'⚑ Attn', width:80, cellRenderer: attentionRenderer },
+    ]
+  },
+  {
+    headerName: 'Details', children: [
+      { field:'reasoning', headerName:'Oracle Reasoning', flex:1, wrapText:false, tooltipField:'reasoning' },
+    ]
+  },
 ];
 
 const RECOVERY_COLS = [
-  { field:'approved_at',         headerName:'Approved At',    width:160, valueFormatter: p => fmtDate(p.value), sort:'desc' },
-  { field:'order_id',            headerName:'Order ID',       width:200, cellStyle:{ fontFamily:'monospace', fontSize:'12px' } },
-  { field:'buyer_email',         headerName:'Buyer Email',    width:200 },
-  { field:'amount',              headerName:'Amount',         width:100, valueFormatter: p => fmtAmt(p.value), type:'numericColumn' },
-  { field:'currency',            headerName:'Currency',       width:90 },
-  { field:'recovery_attempts',   headerName:'Attempts',       width:100, type:'numericColumn' },
-  { field:'status',              headerName:'Status',         width:160, cellRenderer: statusRenderer },
+  {
+    headerName: 'Order', children: [
+      { field:'approved_at',       headerName:'Approved At',    width:160, valueFormatter: p => fmtDate(p.value), sort:'desc' },
+      { field:'order_id',          headerName:'Order ID',       width:200, cellStyle:{ fontFamily:'monospace', fontSize:'12px' } },
+      { field:'buyer_email',       headerName:'Buyer Email',    width:200 },
+    ]
+  },
+  {
+    headerName: 'Value', children: [
+      { field:'amount',            headerName:'Amount',         width:100, valueFormatter: p => fmtAmt(p.value), type:'numericColumn', filter:'agNumberColumnFilter' },
+      { field:'currency',          headerName:'Currency',       width:90 },
+      { field:'recovery_attempts', headerName:'Attempts',       width:100, type:'numericColumn' },
+      { field:'status',            headerName:'Status',         width:160, cellRenderer: statusRenderer },
+    ]
+  },
 ];
 
 // ── Init grids ──────────────────────────────────────────────────────────────
@@ -1490,13 +1510,24 @@ function initGrids() {
       resizable: true,
       sortable: true,
       filter: true,
+      floatingFilter: true,
       suppressMovable: false,
     },
     rowHeight: 44,
     headerHeight: 40,
+    groupHeaderHeight: 32,
+    floatingFiltersHeight: 36,
     animateRows: true,
     suppressCellFocus: true,
     tooltipShowDelay: 300,
+    statusBar: {
+      statusPanels: [
+        { statusPanel: 'agTotalAndFilteredRowCountComponent', align: 'left' },
+        { statusPanel: 'agSelectedRowCountComponent', align: 'left' },
+        { statusPanel: 'agAggregationComponent', align: 'right' },
+      ],
+    },
+    rowSelection: 'multiple',
   };
 
   disputesGrid = agGrid.createGrid(
@@ -1534,6 +1565,7 @@ async function loadAll() {
     updateStats(stats);
     disputesGrid.setGridOption('rowData', dRows);
     recoveriesGrid.setGridOption('rowData', rRows);
+    _setPinnedSummaryRows(dRows, rRows);
 
     document.getElementById('tab-disputes-count').textContent   = dRows.length;
     document.getElementById('tab-recoveries-count').textContent = rRows.length;
@@ -1549,10 +1581,26 @@ async function loadAll() {
   }
 }
 
+function _setPinnedSummaryRows(dRows, rRows) {
+  const dTotal = dRows.reduce((s, r) => s + (r.amount || 0), 0);
+  const dFought = dRows.filter(r => r.action_type === 'dispute_fought').reduce((s, r) => s + (r.amount || 0), 0);
+  disputesGrid.setGridOption('pinnedBottomRowData', [{
+    timestamp: 'TOTAL', dispute_id: `${dRows.length} disputes`, amount: dTotal,
+    action_type: 'dispute_fought', win_probability: null, outcome: `$${dFought.toFixed(2)} protected`,
+    reasoning: `${dRows.filter(r => r.action_type === 'dispute_fought').length} fought · ${dRows.filter(r => r.action_type === 'dispute_accepted').length} accepted`,
+  }]);
+  const rTotal = rRows.reduce((s, r) => s + (r.amount || 0), 0);
+  recoveriesGrid.setGridOption('pinnedBottomRowData', [{
+    approved_at: 'TOTAL', order_id: `${rRows.length} orders`, buyer_email: '',
+    amount: rTotal, currency: 'USD', recovery_attempts: '', status: `$${rTotal.toFixed(2)} pipeline`,
+  }]);
+}
+
 function loadDemo() {
   _lastDisputes = DEMO_DISPUTES;
   disputesGrid.setGridOption('rowData', DEMO_DISPUTES);
   recoveriesGrid.setGridOption('rowData', DEMO_RECOVERIES);
+  _setPinnedSummaryRows(DEMO_DISPUTES, DEMO_RECOVERIES);
 
   const fought    = DEMO_DISPUTES.filter(d => d.action_type === 'dispute_fought');
   const accepted  = DEMO_DISPUTES.filter(d => d.action_type === 'dispute_accepted');

@@ -7,6 +7,28 @@
 
 ---
 
+## For Judges — 90-second eval path
+
+**No credentials needed.** Everything below runs live on the demo.
+
+| What to try | Where |
+|---|---|
+| **Live Dispute Simulator** — pick a scenario, see Oracle + Guardian + API calls | [Dashboard → Live Dispute Simulator panel](https://anchor-paypal.onrender.com) |
+| **Settlement Oracle Calculator** — adjust amount / evidence / tier, recalculate | Same page → Settlement Oracle panel |
+| **AG Grid disputes table** — sortable, filterable, column-grouped | Same page → Disputes section |
+| **API surface** — full endpoint list with curl examples | Same page → Postman panel |
+| **Sponsor integrations** | Same page → APIMatic / Channel3 / Render / Astropods panels |
+
+**Sponsor prizes targeted:**
+- **AG Grid** ($5K) — Community 31.3.2 disputes + recovery tables with live data, column grouping, custom renderers
+- **Render** (credits) — live deployment auto-deployed from GitHub, free tier, `render.yaml` in repo
+- **Best Use of AI + PayPal** ($5K) — Settlement Oracle calculates fight-vs-accept EV using the actual PayPal fee model; Guardian Agent checks HATEOAS links before every call
+- **Best Use of Agentic Commerce** ($5K) — full autonomous loop: webhook → Oracle → Guardian → PayPal action, plus abandoned checkout recovery via PayPal Invoicing
+
+**Key innovation:** No other tool does the EV calculation. Every existing product (Chargeflow, Disputifier, Chargehound) fights every dispute automatically. Anchor is the first to calculate whether fighting is economically worth it, using PayPal's actual two-tier dispute fee model.
+
+---
+
 ## What it does
 
 PayPal merchants lose money in two silent ways:
