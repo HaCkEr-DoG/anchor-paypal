@@ -567,7 +567,7 @@
     </div>
     <div class="oracle-formula-box">
       EV(fight) = p_win × amount − cost<br>
-      Break-even: (cost + $15) / (amount + $15)
+      Break-even: (cost + fee) / (amount + fee)
     </div>
     <div style="font-size:13px;color:var(--muted);margin-top:2px;">
       Avg win rate on disputes:
@@ -740,8 +740,16 @@
         Has item description proof
       </label>
       <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;cursor:pointer;">
-        <input id="oracle-highvol" type="checkbox" style="width:14px;height:14px;" />
-        High-volume tier ($30 non-refundable fee)
+        <input id="oracle-highvol" type="checkbox" style="width:14px;height:14px;" onchange="oracleUpdateFeeHint()" />
+        High-volume seller ($30 fee, non-refundable)
+      </label>
+      <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
+        PayPal dispute fee ($)
+        <div style="display:flex;align-items:center;gap:6px;">
+          <input id="oracle-fee" type="number" value="15" step="1" min="0"
+            style="padding:7px 10px;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:90px;" />
+          <span id="oracle-fee-hint" style="font-size:11px;color:var(--muted);">standard tier</span>
+        </div>
       </label>
       <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
         Deadline (hours)
@@ -1779,6 +1787,19 @@ function switchTab(name) {
 let _lastDisputes = [];
 
 // ── Settlement Oracle ────────────────────────────────────────────────────────
+function oracleUpdateFeeHint() {
+  const highVol = document.getElementById('oracle-highvol').checked;
+  const feeEl   = document.getElementById('oracle-fee');
+  const hint    = document.getElementById('oracle-fee-hint');
+  if (highVol) {
+    feeEl.value = 30;
+    hint.textContent = 'high-volume tier';
+  } else {
+    feeEl.value = 15;
+    hint.textContent = 'standard tier';
+  }
+}
+
 async function oracleCalc() {
   const amount    = parseFloat(document.getElementById('oracle-amount').value) || 245;
   const claimType = document.getElementById('oracle-claim').value;
@@ -1788,6 +1809,8 @@ async function oracleCalc() {
   const itemProof = document.getElementById('oracle-itemproof').checked;
   const highVol   = document.getElementById('oracle-highvol').checked;
   const deadline  = parseInt(document.getElementById('oracle-deadline').value) || 72;
+  const feeVal    = parseFloat(document.getElementById('oracle-fee').value);
+  const dispute_fee = isNaN(feeVal) ? null : feeVal;
 
   const btn = document.querySelector('#oracle-panel button');
   btn.disabled = true; btn.textContent = 'Calculating…';
@@ -1798,6 +1821,7 @@ async function oracleCalc() {
       has_tracking: tracking, has_delivery: delivery,
       has_comm: comm, has_item_proof: itemProof,
       high_volume: highVol, deadline_hours: deadline,
+      ...(dispute_fee !== null && { dispute_fee }),
     });
     const r = await fetch('/api/oracle/calculate?' + params);
     const d = await r.json();

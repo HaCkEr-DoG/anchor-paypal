@@ -23,7 +23,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
-from typing import Any
+from typing import Any, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
@@ -559,6 +559,7 @@ async def api_oracle_calculate(
     has_item_proof: bool = False,
     high_volume: bool = False,
     deadline_hours: int = 72,
+    dispute_fee: Optional[float] = None,
 ):
     """Settlement Oracle — live EV calculation. No API key required."""
     from oracle.decision import calculate, ClaimType, Evidence
@@ -583,6 +584,7 @@ async def api_oracle_calculate(
         seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
         similar_dispute_win_rate=float(os.environ.get("SELLER_WIN_RATE", 0.5)),
         high_volume_tier=high_volume,
+        dispute_fee_override=dispute_fee,
     )
     return JSONResponse({
         "recommendation": decision.recommendation.value,

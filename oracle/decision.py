@@ -131,6 +131,7 @@ def calculate(
     seller_hourly_rate: float = DEFAULT_HOURLY_RATE,
     similar_dispute_win_rate: Optional[float] = None,  # from Elasticsearch history
     high_volume_tier: bool = False,  # True when dispute rate ≥1.5% AND >100 transactions
+    dispute_fee_override: Optional[float] = None,  # user-supplied actual fee
 ) -> OracleDecision:
     """
     Core Oracle calculation.
@@ -147,8 +148,11 @@ def calculate(
     """
     reasoning = []
 
-    # Fee tier
-    if high_volume_tier:
+    # Fee tier — user override takes priority
+    if dispute_fee_override is not None:
+        dispute_fee = dispute_fee_override
+        fee_note = f"${dispute_fee:.0f} (custom)"
+    elif high_volume_tier:
         dispute_fee = PAYPAL_DISPUTE_FEE_HIGH_VOLUME
         fee_note = f"${dispute_fee:.0f} non-refundable (high-volume tier)"
     else:
