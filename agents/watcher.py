@@ -1810,3 +1810,475 @@ async def api_oracle_calibration(merchant_id: str, limit: int = 500):
 async def api_oracle_calibration_default():
     """Oracle calibration for the default merchant (MERCHANT_ID env var)."""
     return await api_oracle_calibration(os.environ.get("MERCHANT_ID", "default"))
+
+
+# ── Wave 52-58 Oracle Endpoints ───────────────────────────────────────────────
+
+@app.post("/api/oracle/win-probability")
+async def api_win_probability(request: Request):
+    """
+    Calibrated win probability for a dispute with signal adjustments.
+
+    Accepts: dispute_id, reason_code, network, days_remaining_in_window,
+             response_window_days, has_tracking_with_delivery, has_3ds_authentication,
+             ce3_eligible, seller_protection_eligible, evidence_completeness_score (0-100)
+
+    Returns: final_probability, base_rate, confidence, key_drivers, CI bounds.
+    """
+    from oracle.win_probability_calibrator import calibrate_win_probability, WinProbabilityInput
+    body = await request.json()
+    inp = WinProbabilityInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        days_remaining_in_window=body.get("days_remaining_in_window", 10),
+        response_window_days=body.get("response_window_days", 20),
+        has_tracking_with_delivery=body.get("has_tracking_with_delivery", False),
+        has_3ds_authentication=body.get("has_3ds_authentication", False),
+        has_avs_match=body.get("has_avs_match", False),
+        has_buyer_communication=body.get("has_buyer_communication", False),
+        ce3_eligible=body.get("ce3_eligible", False),
+        seller_protection_eligible=body.get("seller_protection_eligible", False),
+        evidence_completeness_score=body.get("evidence_completeness_score", 50),
+    )
+    r = calibrate_win_probability(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "base_rate": r.base_rate,
+        "network_multiplied": r.network_multiplied,
+        "final_probability": r.final_probability,
+        "total_adjustment": r.total_adjustment,
+        "confidence": r.confidence.value,
+        "confidence_interval_low": r.confidence_interval_low,
+        "confidence_interval_high": r.confidence_interval_high,
+        "key_drivers": r.key_drivers,
+        "adjustments": [{"name": a.signal_name, "adjustment": a.adjustment, "description": a.description}
+                        for a in r.adjustments],
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/strategy")
+async def api_reason_code_strategy(request: Request):
+    """
+    Tailored dispute strategy for a reason code and network.
+
+    Accepts: dispute_id, reason_code, network, transaction_amount
+
+    Returns: strategy_type, headline, evidence_requirements, action_checklist,
+             sp_eligible, ce3_eligible, base_win_rate, escalation_tip.
+    """
+    from oracle.reason_code_strategy_advisor import advise_reason_code_strategy, ReasonCodeStrategyInput
+    body = await request.json()
+    inp = ReasonCodeStrategyInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        transaction_amount=body.get("transaction_amount", 0.0),
+    )
+    r = advise_reason_code_strategy(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "network": r.network,
+        "strategy_type": r.strategy_type.value,
+        "headline": r.headline,
+        "evidence_requirements": [
+            {"type": e.evidence_type, "required": e.required, "description": e.description}
+            for e in r.evidence_requirements
+        ],
+        "action_checklist": r.action_checklist,
+        "risk_factors": [rf.value for rf in r.risk_factors],
+        "sp_eligible": r.sp_eligible,
+        "ce3_eligible": r.ce3_eligible,
+        "base_win_rate": r.base_win_rate,
+        "escalation_tip": r.escalation_tip,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/appeal-windows")
+async def api_appeal_windows(request: Request):
+    """
+    Appeal deadline tracker — computes all stage windows for a dispute.
+
+    Accepts: dispute_id, network, stage (CHARGEBACK/PRE_ARB/ARBITRATION),
+             stage_started_epoch (Unix timestamp), now_epoch (optional, defaults to now)
+
+    Returns: days_to_act, overall_status, current_window, has_pre_arb, has_arb,
+             critical_actions.
+    """
+    import time as _time
+    from oracle.appeal_window_tracker import track_appeal_windows, AppealWindowInput
+    body = await request.json()
+    now_epoch = body.get("now_epoch") or int(_time.time())
+    inp = AppealWindowInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        network=body.get("network", "PAYPAL"),
+        stage=body.get("stage", "CHARGEBACK"),
+        stage_started_epoch=body.get("stage_started_epoch", now_epoch - 86400 * 5),
+        now_epoch=now_epoch,
+    )
+    r = track_appeal_windows(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "network": r.network,
+        "current_stage": r.current_stage.value,
+        "days_to_act": r.days_to_act,
+        "overall_status": r.overall_status.value,
+        "current_window": {
+            "stage": r.current_window.stage.value,
+            "total_days": r.current_window.total_days,
+            "days_elapsed": r.current_window.days_elapsed,
+            "days_remaining": r.current_window.days_remaining,
+            "pct_elapsed": r.current_window.pct_elapsed,
+            "status": r.current_window.status.value,
+            "action_required": r.current_window.action_required,
+        },
+        "has_pre_arb": r.has_pre_arb,
+        "has_arb": r.has_arb,
+        "critical_actions": r.critical_actions,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/portfolio")
+async def api_portfolio_analysis(request: Request):
+    """
+    Dispute portfolio analysis — aggregate metrics across all open disputes.
+
+    Accepts: merchant_id, disputes (list), total_transactions_90d
+
+    Returns: total_disputes, total_amount_at_risk, EV sums, by_reason_code,
+             by_urgency, top_disputes, portfolio_risk_level, hdr_impact_rate.
+    """
+    from oracle.dispute_portfolio_analyzer import analyze_dispute_portfolio, PortfolioAnalysisInput, PortfolioDispute
+    body = await request.json()
+    disputes_raw = body.get("disputes", [])
+    disputes = [
+        PortfolioDispute(
+            dispute_id=d.get("dispute_id", "?"),
+            reason_code=d.get("reason_code", "INR"),
+            network=d.get("network", "PAYPAL"),
+            amount=float(d.get("amount", 0)),
+            days_remaining=int(d.get("days_remaining", 10)),
+            win_probability=float(d.get("win_probability", 0.5)),
+            is_hdr_counting=d.get("is_hdr_counting", True),
+            is_in_sp=d.get("is_in_sp", False),
+        )
+        for d in disputes_raw
+    ]
+    inp = PortfolioAnalysisInput(
+        merchant_id=body.get("merchant_id", os.environ.get("MERCHANT_ID", "default")),
+        disputes=disputes,
+        total_transactions_90d=body.get("total_transactions_90d", 1000),
+    )
+    r = analyze_dispute_portfolio(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes": r.total_disputes,
+        "total_amount_at_risk": r.total_amount_at_risk,
+        "sp_covered_amount": r.sp_covered_amount,
+        "unprotected_amount": r.unprotected_amount,
+        "total_ev_if_all_fought": r.total_ev_if_all_fought,
+        "total_ev_if_all_accepted": r.total_ev_if_all_accepted,
+        "expected_net_recovery": r.expected_net_recovery,
+        "portfolio_avg_win_prob": r.portfolio_avg_win_prob,
+        "hdr_dispute_count": r.hdr_dispute_count,
+        "hdr_impact_rate": r.hdr_impact_rate,
+        "portfolio_risk_level": r.portfolio_risk_level.value,
+        "risk_flags": r.risk_flags,
+        "by_reason_code": [
+            {"reason_code": b.reason_code, "count": b.count, "total_amount": b.total_amount,
+             "avg_win_prob": b.avg_win_prob, "expected_recovery": b.expected_recovery}
+            for b in r.by_reason_code
+        ],
+        "by_urgency": [
+            {"bucket": b.bucket.value, "count": b.count, "total_amount": b.total_amount}
+            for b in r.by_urgency
+        ],
+        "top_disputes": [
+            {"dispute_id": d.dispute_id, "reason_code": d.reason_code,
+             "amount": d.amount, "days_remaining": d.days_remaining,
+             "win_probability": d.win_probability, "ev_fight": d.ev_fight,
+             "ev_accept": d.ev_accept, "priority_rank": d.priority_rank,
+             "priority_rationale": d.priority_rationale}
+            for d in r.top_disputes
+        ],
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/complexity")
+async def api_dispute_complexity(request: Request):
+    """
+    Dispute complexity estimator — scores handling complexity and SLA impact.
+
+    Accepts: dispute_id, reason_code, network, amount, stage,
+             has_tracking, has_3ds, days_remaining, prior_dispute_count
+
+    Returns: complexity_tier, complexity_score, estimated_staff_hours,
+             sla_days, key_drivers.
+    """
+    from oracle.dispute_complexity_estimator import estimate_dispute_complexity, DisputeComplexityInput
+    body = await request.json()
+    inp = DisputeComplexityInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        transaction_amount=float(body.get("amount", 100.0)),
+        evidence_completeness_score=int(body.get("evidence_completeness_score", 50)),
+        has_digital_goods=bool(body.get("has_digital_goods", False)),
+        has_cross_border_transaction=bool(body.get("cross_border", False)),
+    )
+    r = estimate_dispute_complexity(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "complexity_tier": r.complexity_tier.value,
+        "total_score": r.total_score,
+        "estimated_staff_hours": r.estimated_staff_hours,
+        "sla_hours": r.sla_hours,
+        "recommended_assignee": r.recommended_assignee,
+        "complexity_flags": r.complexity_flags,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/settlement")
+async def api_settlement_evaluation(request: Request):
+    """
+    Settlement offer evaluator — ACCEPT / COUNTER / REJECT / ESCALATE.
+
+    Accepts: dispute_id, dispute_amount, offer_amount, win_probability,
+             reason_code, network, chargeback_fee (optional)
+
+    Returns: recommendation, offer_quality_score, ev_fight, ev_accept,
+             ev_settle, counter_offer (if COUNTER), reasoning.
+    """
+    from oracle.settlement_offer_evaluator import evaluate_settlement_offer, SettlementOfferInput, SettlementContext
+    body = await request.json()
+    ctx_str = body.get("context", "BUYER_PROPOSED")
+    try:
+        ctx = SettlementContext(ctx_str)
+    except ValueError:
+        ctx = SettlementContext.BUYER_PROPOSED
+    inp = SettlementOfferInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        context=ctx_str,
+        original_amount=float(body.get("dispute_amount", 100.0)),
+        offer_amount=float(body.get("offer_amount", 50.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+    )
+    r = evaluate_settlement_offer(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "recommendation": r.recommendation.value,
+        "fairness_tier": r.fairness_tier.value,
+        "fairness_score": r.fairness_score,
+        "ev_fight": r.ev_fight,
+        "ev_accept_offer": r.ev_accept_offer,
+        "ev_delta": r.ev_delta,
+        "counter_offer_amount": r.counter_offer_amount,
+        "counter_offer_rationale": r.counter_offer_rationale,
+        "accept_saves": r.accept_saves,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/fraud-dna")
+async def api_fraud_dna(request: Request):
+    """
+    Buyer Fraud DNA Profiler — detect professional chargeback filers via
+    text fingerprinting, velocity analysis, and cross-merchant patterns.
+
+    Accepts: dispute_id, buyer_id, reason_code, dispute_reason_text,
+             transaction_amount, buyer_disputes_last_90d, buyer_disputes_total,
+             buyer_transactions_total, same_reason_across_merchants,
+             tracking_confirmed_delivered, dispute_filed_within_hours_of_purchase
+
+    Returns: risk_tier, fraud_score, is_suspected_professional,
+             text_similarity_score, velocity_risk, red_flags, recommended_action.
+    """
+    from oracle.buyer_fraud_dna_profiler import profile_buyer_fraud_dna, FraudDNAInput
+    body = await request.json()
+    inp = FraudDNAInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        buyer_id=body.get("buyer_id", "unknown"),
+        reason_code=body.get("reason_code", "INR"),
+        dispute_reason_text=body.get("dispute_reason_text", ""),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        dispute_amount=float(body.get("dispute_amount", body.get("transaction_amount", 100.0))),
+        buyer_disputes_last_90d=int(body.get("buyer_disputes_last_90d", 0)),
+        buyer_disputes_total=int(body.get("buyer_disputes_total", 0)),
+        buyer_transactions_total=int(body.get("buyer_transactions_total", 100)),
+        same_reason_across_merchants=int(body.get("same_reason_across_merchants", 0)),
+        tracking_confirmed_delivered=bool(body.get("tracking_confirmed_delivered", False)),
+        dispute_filed_within_hours_of_purchase=int(
+            body.get("dispute_filed_within_hours_of_purchase", 9999)
+        ),
+    )
+    r = profile_buyer_fraud_dna(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "buyer_id": r.buyer_id,
+        "risk_tier": r.risk_tier.value,
+        "fraud_score": r.fraud_score,
+        "is_suspected_professional": r.is_suspected_professional,
+        "text_similarity_score": r.text_similarity_score,
+        "velocity_risk": r.velocity_risk.value,
+        "dispute_to_transaction_ratio": r.dispute_to_transaction_ratio,
+        "cross_merchant_flag": r.cross_merchant_flag,
+        "cross_merchant_count": r.cross_merchant_count,
+        "red_flags": r.red_flags,
+        "top_pattern_match": {
+            "pattern_id": r.top_pattern_match.pattern_id,
+            "similarity_score": r.top_pattern_match.similarity_score,
+        } if r.top_pattern_match else None,
+        "recommended_action": r.recommended_action,
+        "action_detail": r.action_detail,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/transaction-risk")
+async def api_transaction_risk(request: Request):
+    """
+    Pre-dispute transaction risk scorer — predict chargeback probability
+    BEFORE a dispute is filed, using 15+ risk signals.
+
+    Accepts: transaction_id, merchant_id, amount, item_category,
+             billing_country, shipping_country, ip_country,
+             avs_result, cvv_result, card_bin_country,
+             buyer_account_age_days, buyer_prior_transactions,
+             buyer_disputes_last_90d, buyer_email_domain,
+             buyer_orders_last_24h, failed_payment_attempts,
+             has_3ds_authentication, is_express_shipping,
+             is_digital_delivery, hour_of_purchase
+
+    Returns: risk_score, risk_tier, chargeback_probability, recommended_action,
+             top_signals, mitigating_factors, score breakdown by category.
+    """
+    from oracle.transaction_risk_scorer import score_transaction_risk, TransactionRiskInput
+    body = await request.json()
+    inp = TransactionRiskInput(
+        transaction_id=body.get("transaction_id", "DEMO"),
+        merchant_id=body.get("merchant_id", os.environ.get("MERCHANT_ID", "default")),
+        amount=float(body.get("amount", 100.0)),
+        currency=body.get("currency", "USD"),
+        item_category=body.get("item_category", "UNKNOWN"),
+        billing_country=body.get("billing_country", ""),
+        shipping_country=body.get("shipping_country", ""),
+        ip_country=body.get("ip_country", ""),
+        ship_to_billing_match=bool(body.get("ship_to_billing_match", True)),
+        avs_result=body.get("avs_result", "Y"),
+        cvv_result=body.get("cvv_result", "M"),
+        card_bin_country=body.get("card_bin_country", ""),
+        failed_payment_attempts=int(body.get("failed_payment_attempts", 0)),
+        buyer_account_age_days=int(body.get("buyer_account_age_days", 365)),
+        buyer_prior_transactions=int(body.get("buyer_prior_transactions", 0)),
+        buyer_disputes_last_90d=int(body.get("buyer_disputes_last_90d", 0)),
+        buyer_email_domain=body.get("buyer_email_domain", ""),
+        buyer_orders_last_24h=int(body.get("buyer_orders_last_24h", 1)),
+        is_express_shipping=bool(body.get("is_express_shipping", False)),
+        is_digital_delivery=bool(body.get("is_digital_delivery", False)),
+        has_3ds_authentication=bool(body.get("has_3ds_authentication", False)),
+        hour_of_purchase=int(body.get("hour_of_purchase", 12)),
+        is_first_transaction_with_merchant=bool(body.get("is_first_transaction_with_merchant", True)),
+    )
+    r = score_transaction_risk(inp)
+    return JSONResponse({
+        "transaction_id": r.transaction_id,
+        "risk_score": r.risk_score,
+        "risk_tier": r.risk_tier.value,
+        "chargeback_probability": r.chargeback_probability,
+        "recommended_action": r.recommended_action.value,
+        "action_reason": r.action_reason,
+        "top_signals": [
+            {"id": s.signal_id, "name": s.signal_name, "score": s.score_contribution,
+             "description": s.description}
+            for s in r.top_signals
+        ],
+        "mitigating_factors": r.mitigating_factors,
+        "score_breakdown": {
+            "address": r.address_risk_score,
+            "card": r.card_risk_score,
+            "buyer": r.buyer_risk_score,
+            "velocity": r.velocity_risk_score,
+            "item": r.item_risk_score,
+        },
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/response-quality")
+async def api_response_quality(request: Request):
+    """
+    Response quality scorer — score an evidence package before submission.
+
+    Accepts: dispute_id, reason_code, evidence fields (has_tracking, has_description,
+             has_buyer_comms, has_policy, has_invoice, has_photos,
+             has_3ds, has_avs_cvv, word_count)
+
+    Returns: total_score, approved_to_submit, dimension_scores, missing_critical.
+    """
+    from oracle.response_quality_scorer import score_response_quality, ResponseDraftInput
+    body = await request.json()
+    inp = ResponseDraftInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        has_tracking_evidence=body.get("has_tracking", False),
+        has_auth_evidence=body.get("has_3ds", False),
+        has_policy_evidence=body.get("has_policy", False),
+        has_communication_log=body.get("has_buyer_comms", False),
+        evidence_items_attached=int(body.get("evidence_items_attached", 0)),
+        required_evidence_count=int(body.get("required_evidence_count", 3)),
+    )
+    r = score_response_quality(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "total_score": r.total_score,
+        "quality_tier": r.quality_tier.value,
+        "approved_to_submit": r.approved_to_submit,
+        "blocking_issues": r.blocking_issues,
+        "improvements": r.improvements,
+        "strengths": r.strengths,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/category")
+async def api_dispute_category(request: Request):
+    """
+    Dispute category classifier — AUTO_ACCEPT / STRONG_FIGHT / CE3_CANDIDATE etc.
+
+    Accepts: dispute_id, reason_code, network, amount, win_probability,
+             has_tracking, has_3ds, ce3_eligible, sp_eligible
+
+    Returns: category, category_description, recommended_path, confidence.
+    """
+    from oracle.dispute_category_classifier import classify_dispute, DisputeClassifierInput
+    body = await request.json()
+    inp = DisputeClassifierInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        transaction_amount=float(body.get("amount", 100.0)),
+        win_probability_estimate=float(body.get("win_probability", 0.5)),
+        has_tracking_evidence=body.get("has_tracking", False),
+        has_3ds_authentication=body.get("has_3ds", False),
+        ce3_eligible=body.get("ce3_eligible", False),
+        seller_protection_eligible=body.get("sp_eligible", False),
+    )
+    r = classify_dispute(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "primary_category": r.primary_category.value,
+        "confidence": r.confidence,
+        "first_action": r.first_action.value,
+        "seller_protection": r.seller_protection.value,
+        "ce3_eligible": r.ce3_eligible,
+        "flags": r.flags,
+        "rationale": r.rationale,
+        "summary": r.summary,
+    })

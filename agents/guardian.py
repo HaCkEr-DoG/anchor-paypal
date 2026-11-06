@@ -113,6 +113,66 @@ class Guardian:
         self._last_ev_fight = getattr(decision, "ev_fight", 0.0)
         self._last_reason_code = reason_code
 
+        # ── Oracle Enrichment Layer (Wave 52-58 modules) ─────────────────────────
+        # Win probability calibrator — refine the base Oracle probability with
+        # 14 signal adjustments (CE3.0, 3DS, SP eligibility, evidence completeness)
+        try:
+            from oracle.win_probability_calibrator import calibrate_win_probability, WinProbabilityInput
+            _cal_inp = WinProbabilityInput(
+                dispute_id=dispute_id,
+                reason_code=reason_code,
+                network="PAYPAL",
+                days_remaining_in_window=14,
+                response_window_days=20,
+            )
+            _cal = calibrate_win_probability(_cal_inp)
+            if abs(_cal.final_probability - win_probability) >= 0.05:
+                print(
+                    f"[Guardian] WinCalibrator refined {dispute_id}: "
+                    f"{win_probability:.0%} → {_cal.final_probability:.0%} "
+                    f"({_cal.confidence.value} confidence)"
+                )
+                win_probability = _cal.final_probability
+                self._last_win_prob = win_probability
+        except Exception as _exc:
+            print(f"[Guardian] WinCalibrator error (non-fatal): {_exc}")
+
+        # Reason code strategy advisor — surface evidence requirements and strategy
+        try:
+            from oracle.reason_code_strategy_advisor import advise_reason_code_strategy, ReasonCodeStrategyInput
+            _strat = advise_reason_code_strategy(ReasonCodeStrategyInput(
+                dispute_id=dispute_id,
+                reason_code=reason_code,
+                network="PAYPAL",
+                transaction_amount=dispute_amount,
+            ))
+            print(
+                f"[Guardian] Strategy {dispute_id}: {_strat.strategy_type.value} | "
+                f"sp={_strat.sp_eligible} ce3={_strat.ce3_eligible} | "
+                f"base_win={_strat.base_win_rate:.0%}"
+            )
+        except Exception as _exc:
+            print(f"[Guardian] StrategyAdvisor error (non-fatal): {_exc}")
+
+        # Buyer Fraud DNA — detect professional chargeback filers before acting
+        try:
+            from oracle.buyer_fraud_dna_profiler import profile_buyer_fraud_dna, FraudDNAInput, FraudRiskTier
+            _dna = profile_buyer_fraud_dna(FraudDNAInput(
+                dispute_id=dispute_id,
+                buyer_id="unknown",
+                reason_code=reason_code,
+                dispute_reason_text="",
+                transaction_amount=dispute_amount,
+                dispute_amount=dispute_amount,
+            ))
+            if _dna.risk_tier in (FraudRiskTier.HIGH, FraudRiskTier.CRITICAL):
+                print(
+                    f"[Guardian] FraudDNA alert {dispute_id}: "
+                    f"tier={_dna.risk_tier.value} score={_dna.fraud_score:.0f}/100"
+                )
+        except Exception as _exc:
+            print(f"[Guardian] FraudDNA error (non-fatal): {_exc}")
+
         # ── Dispute Rate Protection (account survival) ───────────────────────────
         # This is the most important guardrail: even if Oracle says FIGHT (EV > 0),
         # crossing PayPal's 1% threshold triggers account limitations that cost more
