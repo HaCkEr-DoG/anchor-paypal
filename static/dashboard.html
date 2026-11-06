@@ -1586,6 +1586,14 @@ const RECOVERY_COLS = [
   },
 ];
 
+// Only call sizeColumnsToFit when the grid container has non-zero width.
+function _fitGridIfVisible() {
+  const dEl = document.getElementById('disputes-grid');
+  const rEl = document.getElementById('recoveries-grid');
+  if (disputesGrid   && dEl && dEl.offsetWidth > 0) disputesGrid.sizeColumnsToFit();
+  if (recoveriesGrid && rEl && rEl.offsetWidth > 0) recoveriesGrid.sizeColumnsToFit();
+}
+
 // ── Init grids ──────────────────────────────────────────────────────────────
 function initGrids() {
   const baseOptions = {
@@ -1603,13 +1611,6 @@ function initGrids() {
     animateRows: true,
     suppressCellFocus: true,
     tooltipShowDelay: 300,
-    statusBar: {
-      statusPanels: [
-        { statusPanel: 'agTotalAndFilteredRowCountComponent', align: 'left' },
-        { statusPanel: 'agSelectedRowCountComponent', align: 'left' },
-        { statusPanel: 'agAggregationComponent', align: 'right' },
-      ],
-    },
     rowSelection: 'multiple',
     getRowStyle: params => {
       if (params.data?.requires_attention) return { background: 'rgba(239,68,68,0.06)' };
@@ -1620,12 +1621,12 @@ function initGrids() {
 
   disputesGrid = agGrid.createGrid(
     document.getElementById('disputes-grid'),
-    { ...baseOptions, columnDefs: DISPUTE_COLS, rowData: [], onRowClicked: e => showDisputeDetail(e.data), onFirstDataRendered: e => e.api.sizeColumnsToFit() }
+    { ...baseOptions, columnDefs: DISPUTE_COLS, rowData: [], onRowClicked: e => showDisputeDetail(e.data), onFirstDataRendered: () => _fitGridIfVisible() }
   );
 
   recoveriesGrid = agGrid.createGrid(
     document.getElementById('recoveries-grid'),
-    { ...baseOptions, columnDefs: RECOVERY_COLS, rowData: [], onFirstDataRendered: e => e.api.sizeColumnsToFit() }
+    { ...baseOptions, columnDefs: RECOVERY_COLS, rowData: [], onFirstDataRendered: () => _fitGridIfVisible() }
   );
 }
 
@@ -1686,8 +1687,7 @@ async function loadAll() {
     updateStats(stats);
     disputesGrid.setGridOption('rowData', dRows);
     recoveriesGrid.setGridOption('rowData', rRows);
-    disputesGrid.sizeColumnsToFit();
-    recoveriesGrid.sizeColumnsToFit();
+    _fitGridIfVisible();
     _setPinnedSummaryRows(dRows, rRows);
 
     document.getElementById('tab-disputes-count').textContent   = dRows.length;
@@ -1723,8 +1723,7 @@ function loadDemo() {
   _lastDisputes = DEMO_DISPUTES;
   disputesGrid.setGridOption('rowData', DEMO_DISPUTES);
   recoveriesGrid.setGridOption('rowData', DEMO_RECOVERIES);
-  disputesGrid.sizeColumnsToFit();
-  recoveriesGrid.sizeColumnsToFit();
+  _fitGridIfVisible();
   _setPinnedSummaryRows(DEMO_DISPUTES, DEMO_RECOVERIES);
 
   const fought    = DEMO_DISPUTES.filter(d => d.action_type === 'dispute_fought');
@@ -2036,9 +2035,8 @@ function switchTab(name) {
   document.querySelector(`.tab[onclick="switchTab('${name}')"]`).classList.add('active');
   document.getElementById(`panel-${name}`).classList.add('active');
 
-  // Resize grid after reveal
-  if (name === 'disputes' && disputesGrid)   disputesGrid.sizeColumnsToFit();
-  if (name === 'recoveries' && recoveriesGrid) recoveriesGrid.sizeColumnsToFit();
+  // Resize grid after reveal (grid is now visible so width > 0)
+  _fitGridIfVisible();
   if (name === 'timeline') loadTimeline(_lastDisputes);
 }
 
