@@ -1,24 +1,12 @@
 """
-Dispute Batch Prioritizer — rank a batch of open disputes by urgency.
+Dispute Batch Prioritizer — rank a batch of open disputes by urgency and
+expected value impact, so the merchant handles the most important ones first.
 
-When a merchant has many open disputes, working them in the wrong order
-leads to missed deadlines and suboptimal outcomes. This module scores and
-sorts a batch of disputes into a prioritized work queue.
+Priority scoring:
+  P = deadline_urgency + amount_weight + win_probability_bonus + hdr_impact
 
-Scoring factors (each contributes points):
-  1. Deadline urgency   — disputes due soonest score highest
-  2. Amount             — higher-value disputes score higher
-  3. Win probability    — disputes with high p_win prioritized (ROI-positive)
-  4. HDR contribution   — disputes contributing to HDR rate score higher
-  5. SP eligibility     — disputes with Seller Protection score higher
-  6. Claim type         — INR before SNAD (easier to win)
-  7. Anomaly flag       — disputes with lifecycle anomalies score highest
-
-Priority tiers:
-  CRITICAL  — Act within 2 hours (deadline ≤ 2 days or severe anomaly)
-  HIGH      — Act within 1 business day
-  MEDIUM    — Act within 3 business days
-  LOW       — Act within 1 week
+This module ensures merchants never miss high-value disputes with imminent
+deadlines, and focuses effort where EV is highest.
 
 This is a pure oracle module — no I/O, no persistence.
 """
@@ -30,35 +18,25 @@ from enum import Enum
 from typing import Optional
 
 
-class PriorityTier(str, Enum):
-    CRITICAL = "CRITICAL"   # Act within 2h
-    HIGH     = "HIGH"       # Act within 1 business day
-    MEDIUM   = "MEDIUM"     # Act within 3 business days
-    LOW      = "LOW"        # Act within 1 week
-
-
-class DisputeStatus(str, Enum):
-    NEEDS_RESPONSE  = "NEEDS_RESPONSE"
-    IN_PROGRESS     = "IN_PROGRESS"
-    AWAITING_REVIEW = "AWAITING_REVIEW"
-    APPEALING       = "APPEALING"
-    NEW             = "NEW"
+class PriorityBand(str, Enum):
+    P1_CRITICAL = "P1_CRITICAL"   # Act today
+    P2_HIGH     = "P2_HIGH"       # Act within 48h
+    P3_MEDIUM   = "P3_MEDIUM"     # Act this week
+    P4_LOW      = "P4_LOW"        # Monitor
 
 
 @dataclass
-class BatchDisputeItem:
-    """One dispute in the batch for prioritization."""
+class DisputeForPriority:
+    """One dispute to be prioritized."""
     dispute_id: str
-    claim_type: str              # INR / SNAD / UNAUTHORIZED / SUBSCRIPTION / DUPLICATE
-    dispute_amount: float
-    days_until_deadline: int     # Days remaining to respond (negative = overdue)
-    status: DisputeStatus
-    p_win: float                 # Estimated win probability 0.0–1.0
-    is_hdr_contributing: bool = True
+    claim_type: str
+    amount: float
+    days_until_deadline: int
+    p_win: float              # Calibrated win probability
     sp_eligible: bool = False
-    has_lifecycle_anomaly: bool = False
-    evidence_ready: bool = False   # Has evidence been collected yet?
-    is_high_value: bool = False    # Amount >= $750 (triggers signature requirement)
+    is_hdr_active: bool = False   # True if merchant is in PENALIZED tier
+    ce30_applicable: bool = False
+    has_all_evidence: bool = False
 
 
 @dataclass
@@ -66,239 +44,165 @@ class PrioritizedDispute:
     """One dispute with its computed priority."""
     dispute_id: str
     claim_type: str
-    dispute_amount: float
+    amount: float
     days_until_deadline: int
-    priority_tier: PriorityTier
-    priority_score: float          # Higher = more urgent
-    rank: int                      # 1 = most urgent
-    action_required: str
-    work_estimate_minutes: int     # Estimated work time
-    scoring_breakdown: dict        # Component scores
+    priority_score: float
+    priority_band: PriorityBand
+    ev_estimate: float          # Expected value if fought
+    action_summary: str
 
 
 @dataclass
-class BatchPriorityReport:
-    """
-    Prioritized work queue for a batch of disputes.
-    """
+class BatchPrioritizerInput:
+    """Input: a list of open disputes to rank."""
+    merchant_id: str
+    disputes: list[DisputeForPriority]
+    fight_cost_per_dispute: float = 10.0
+    chargeback_fee: float = 20.0
+
+
+def _priority_score(d: DisputeForPriority, fight_cost: float, cb_fee: float) -> float:
+    """Compute a priority score 0–100."""
+
+    # 1. Deadline urgency (0–40 pts)
+    if d.days_until_deadline <= 0:
+        urgency = 40.0
+    elif d.days_until_deadline <= 1:
+        urgency = 38.0
+    elif d.days_until_deadline <= 2:
+        urgency = 32.0
+    elif d.days_until_deadline <= 3:
+        urgency = 25.0
+    elif d.days_until_deadline <= 7:
+        urgency = 15.0
+    else:
+        urgency = max(0, 10 - d.days_until_deadline / 3)
+
+    # 2. Amount weight (0–30 pts, logarithmic)
+    import math
+    amount_pts = min(30.0, math.log10(max(1, d.amount)) / math.log10(1000) * 30)
+
+    # 3. Win probability bonus (0–20 pts)
+    win_pts = d.p_win * 20
+
+    # 4. HDR impact (0–10 pts)
+    hdr_pts = 10.0 if d.is_hdr_active else 0.0
+
+    # 5. SP bonus (0–5 pts)
+    sp_pts = 5.0 if d.sp_eligible else 0.0
+
+    # 6. CE3.0 bonus (0–5 pts)
+    ce30_pts = 5.0 if d.ce30_applicable else 0.0
+
+    # 7. Evidence ready bonus (0–5 pts)
+    evidence_pts = 5.0 if d.has_all_evidence else 0.0
+
+    return round(urgency + amount_pts + win_pts + hdr_pts + sp_pts + ce30_pts + evidence_pts, 2)
+
+
+def _ev_estimate(d: DisputeForPriority, fight_cost: float, cb_fee: float) -> float:
+    """EV of fighting this dispute."""
+    return round(d.p_win * d.amount - fight_cost - (1 - d.p_win) * cb_fee, 2)
+
+
+def _band(score: float) -> PriorityBand:
+    if score >= 60:
+        return PriorityBand.P1_CRITICAL
+    if score >= 40:
+        return PriorityBand.P2_HIGH
+    if score >= 20:
+        return PriorityBand.P3_MEDIUM
+    return PriorityBand.P4_LOW
+
+
+def _action_summary(d: DisputeForPriority, ev: float, band: PriorityBand) -> str:
+    deadline_str = "OVERDUE" if d.days_until_deadline <= 0 else f"{d.days_until_deadline}d"
+    ev_str = f"+${ev:.2f}" if ev >= 0 else f"-${abs(ev):.2f}"
+    return (
+        f"{band.value}: ${d.amount:.0f} {d.claim_type} | "
+        f"deadline={deadline_str} | p_win={d.p_win:.0%} | EV={ev_str}"
+    )
+
+
+@dataclass
+class BatchPrioritizerReport:
+    """Ranked dispute batch."""
+    merchant_id: str
     total_disputes: int
-    critical_count: int
-    high_count: int
-    medium_count: int
-    low_count: int
 
-    # Ordered work queue
-    queue: list[PrioritizedDispute]
+    prioritized: list[PrioritizedDispute]  # Sorted highest priority first
 
-    # Aggregate metrics
+    # Band counts
+    p1_count: int
+    p2_count: int
+    p3_count: int
+    p4_count: int
+
+    # Financial summary
     total_amount_at_risk: float
-    total_hdr_contributing: int
-    estimated_total_work_hours: float
+    total_positive_ev_disputes: int
+    total_ev_if_all_fought: float
 
-    # Headline recommendations
-    immediate_actions: list[str]   # What to do RIGHT NOW
+    # Guidance
+    top_actions: list[str]
     summary: str
 
 
-# ─────────────────────────────────────────────────────────────
-# Scoring
-# ─────────────────────────────────────────────────────────────
-
-def _score_deadline(days: int) -> float:
-    """Score deadline urgency. Overdue gets maximum score."""
-    if days <= 0:
-        return 100.0   # Overdue — maximum urgency
-    if days == 1:
-        return 85.0
-    if days == 2:
-        return 70.0
-    if days <= 4:
-        return 55.0
-    if days <= 7:
-        return 35.0
-    if days <= 14:
-        return 15.0
-    return 5.0
-
-
-def _score_amount(amount: float) -> float:
-    """Score by dispute amount (diminishing returns above $1000)."""
-    if amount >= 1000:
-        return 25.0
-    if amount >= 500:
-        return 20.0
-    if amount >= 200:
-        return 15.0
-    if amount >= 100:
-        return 10.0
-    if amount >= 50:
-        return 7.0
-    return 3.0
-
-
-def _score_win_probability(p_win: float) -> float:
-    """Higher win prob = higher score (ROI-positive first)."""
-    if p_win >= 0.75:
-        return 20.0
-    if p_win >= 0.60:
-        return 15.0
-    if p_win >= 0.45:
-        return 10.0
-    if p_win >= 0.30:
-        return 5.0
-    return 2.0   # Low win prob still needs attention; don't skip
-
-
-def _score_claim_type(claim_type: str) -> float:
-    """INR before SNAD; UNAUTHORIZED next (SP might apply)."""
-    return {
-        "INR":          15.0,
-        "UNAUTHORIZED": 12.0,
-        "DUPLICATE":    10.0,
-        "SUBSCRIPTION": 8.0,
-        "SNAD":         6.0,
-        "OTHER":        4.0,
-    }.get(claim_type.upper(), 4.0)
-
-
-def _score_dispute(item: BatchDisputeItem) -> tuple[float, dict]:
-    s_deadline = _score_deadline(item.days_until_deadline)
-    s_amount   = _score_amount(item.dispute_amount)
-    s_p_win    = _score_win_probability(item.p_win)
-    s_claim    = _score_claim_type(item.claim_type)
-    s_hdr      = 8.0 if item.is_hdr_contributing else 0.0
-    s_sp       = 5.0 if item.sp_eligible else 0.0
-    s_anomaly  = 20.0 if item.has_lifecycle_anomaly else 0.0
-    s_evidence = -5.0 if not item.evidence_ready else 0.0  # Penalize if no evidence
-
-    total = (s_deadline + s_amount + s_p_win + s_claim +
-             s_hdr + s_sp + s_anomaly + s_evidence)
-
-    breakdown = {
-        "deadline":    s_deadline,
-        "amount":      s_amount,
-        "p_win":       s_p_win,
-        "claim_type":  s_claim,
-        "hdr":         s_hdr,
-        "sp":          s_sp,
-        "anomaly":     s_anomaly,
-        "evidence":    s_evidence,
-    }
-    return round(total, 2), breakdown
-
-
-def _tier(score: float, item: BatchDisputeItem) -> PriorityTier:
-    if item.days_until_deadline <= 2 or item.has_lifecycle_anomaly:
-        return PriorityTier.CRITICAL
-    if score >= 80:
-        return PriorityTier.CRITICAL
-    if score >= 55:
-        return PriorityTier.HIGH
-    if score >= 30:
-        return PriorityTier.MEDIUM
-    return PriorityTier.LOW
-
-
-def _action_required(item: BatchDisputeItem, tier: PriorityTier) -> str:
-    if item.days_until_deadline <= 0:
-        return f"OVERDUE by {abs(item.days_until_deadline)}d — submit response immediately"
-    if tier == PriorityTier.CRITICAL:
-        return f"Submit response within {item.days_until_deadline}d — CRITICAL deadline"
-    if not item.evidence_ready:
-        return "Collect evidence package; response pending"
-    if item.status == DisputeStatus.NEW:
-        return "Review and begin evidence collection"
-    if item.status == DisputeStatus.AWAITING_REVIEW:
-        return "Monitor for PayPal decision"
-    if item.status == DisputeStatus.APPEALING:
-        return "Track appeal progress"
-    return "Complete evidence submission"
-
-
-def _work_minutes(item: BatchDisputeItem) -> int:
-    """Rough estimate of work time in minutes."""
-    base = 30 if item.evidence_ready else 60
-    if item.claim_type.upper() == "SNAD":
-        base += 30   # SNAD needs more documentation
-    if item.dispute_amount >= 500:
-        base += 15
-    if item.has_lifecycle_anomaly:
-        base += 15
-    return base
-
-
-# ─────────────────────────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────────────────────────
-
-def prioritize_disputes(disputes: list[BatchDisputeItem]) -> BatchPriorityReport:
+def prioritize_disputes(inp: BatchPrioritizerInput) -> BatchPrioritizerReport:
     """
-    Score and rank a batch of disputes into a prioritized work queue.
+    Rank a batch of disputes by urgency and EV impact.
     """
-    scored: list[tuple[float, dict, BatchDisputeItem]] = []
-    for d in disputes:
-        score, breakdown = _score_dispute(d)
-        scored.append((score, breakdown, d))
+    prioritized: list[PrioritizedDispute] = []
 
-    # Sort descending by score
-    scored.sort(key=lambda x: x[0], reverse=True)
+    for d in inp.disputes:
+        score = _priority_score(d, inp.fight_cost_per_dispute, inp.chargeback_fee)
+        ev = _ev_estimate(d, inp.fight_cost_per_dispute, inp.chargeback_fee)
+        band = _band(score)
+        action = _action_summary(d, ev, band)
 
-    queue: list[PrioritizedDispute] = []
-    for rank, (score, breakdown, item) in enumerate(scored, start=1):
-        tier = _tier(score, item)
-        queue.append(PrioritizedDispute(
-            dispute_id=item.dispute_id,
-            claim_type=item.claim_type,
-            dispute_amount=item.dispute_amount,
-            days_until_deadline=item.days_until_deadline,
-            priority_tier=tier,
+        prioritized.append(PrioritizedDispute(
+            dispute_id=d.dispute_id,
+            claim_type=d.claim_type,
+            amount=d.amount,
+            days_until_deadline=d.days_until_deadline,
             priority_score=score,
-            rank=rank,
-            action_required=_action_required(item, tier),
-            work_estimate_minutes=_work_minutes(item),
-            scoring_breakdown=breakdown,
+            priority_band=band,
+            ev_estimate=ev,
+            action_summary=action,
         ))
 
-    critical = [q for q in queue if q.priority_tier == PriorityTier.CRITICAL]
-    high     = [q for q in queue if q.priority_tier == PriorityTier.HIGH]
-    medium   = [q for q in queue if q.priority_tier == PriorityTier.MEDIUM]
-    low      = [q for q in queue if q.priority_tier == PriorityTier.LOW]
+    prioritized.sort(key=lambda x: x.priority_score, reverse=True)
 
-    total_at_risk   = round(sum(d.dispute_amount for d in disputes), 2)
-    hdr_count       = sum(1 for d in disputes if d.is_hdr_contributing)
-    total_work_hrs  = round(sum(q.work_estimate_minutes for q in queue) / 60, 1)
+    p1 = sum(1 for p in prioritized if p.priority_band == PriorityBand.P1_CRITICAL)
+    p2 = sum(1 for p in prioritized if p.priority_band == PriorityBand.P2_HIGH)
+    p3 = sum(1 for p in prioritized if p.priority_band == PriorityBand.P3_MEDIUM)
+    p4 = sum(1 for p in prioritized if p.priority_band == PriorityBand.P4_LOW)
 
-    # Immediate actions
-    immediate: list[str] = []
-    overdue = [q for q in queue if q.days_until_deadline <= 0]
-    if overdue:
-        immediate.append(
-            f"{len(overdue)} overdue dispute(s): {', '.join(q.dispute_id for q in overdue[:3])}"
-            f"{'...' if len(overdue) > 3 else ''} — respond NOW"
-        )
-    if critical:
-        ids = ", ".join(q.dispute_id for q in critical[:3])
-        immediate.append(f"{len(critical)} CRITICAL dispute(s) — handle within 2h: {ids}")
-    if hdr_count > 0:
-        immediate.append(f"{hdr_count} disputes contribute to HDR rate — resolve quickly to protect standing")
+    total_amount = sum(p.amount for p in prioritized)
+    positive_ev = sum(1 for p in prioritized if p.ev_estimate >= 0)
+    total_ev = sum(p.ev_estimate for p in prioritized)
+
+    # Top actions (first 5 disputes)
+    top_actions = [p.action_summary for p in prioritized[:5]]
 
     summary = (
-        f"Batch of {len(disputes)} disputes | "
-        f"CRITICAL={len(critical)} HIGH={len(high)} MED={len(medium)} LOW={len(low)} | "
-        f"at_risk=${total_at_risk:.0f} | hdr_contributing={hdr_count} | "
-        f"est_work={total_work_hrs}h"
+        f"Batch {inp.merchant_id}: "
+        f"{len(prioritized)} disputes | "
+        f"P1={p1} P2={p2} P3={p3} P4={p4} | "
+        f"total=${total_amount:.2f} | total_ev=${total_ev:.2f}"
     )
 
-    return BatchPriorityReport(
-        total_disputes=len(disputes),
-        critical_count=len(critical),
-        high_count=len(high),
-        medium_count=len(medium),
-        low_count=len(low),
-        queue=queue,
-        total_amount_at_risk=total_at_risk,
-        total_hdr_contributing=hdr_count,
-        estimated_total_work_hours=total_work_hrs,
-        immediate_actions=immediate,
+    return BatchPrioritizerReport(
+        merchant_id=inp.merchant_id,
+        total_disputes=len(prioritized),
+        prioritized=prioritized,
+        p1_count=p1,
+        p2_count=p2,
+        p3_count=p3,
+        p4_count=p4,
+        total_amount_at_risk=round(total_amount, 2),
+        total_positive_ev_disputes=positive_ev,
+        total_ev_if_all_fought=round(total_ev, 2),
+        top_actions=top_actions,
         summary=summary,
     )
