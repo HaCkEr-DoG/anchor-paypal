@@ -57,9 +57,9 @@ _DASHBOARD_HTML = (
     pathlib.Path(__file__).parent.parent / "static" / "dashboard.html"
 ).read_text()
 
-PAYPAL_WEBHOOK_ID = os.environ["PAYPAL_WEBHOOK_ID"]
-PAYPAL_CLIENT_ID = os.environ["PAYPAL_CLIENT_ID"]
-PAYPAL_CLIENT_SECRET = os.environ["PAYPAL_CLIENT_SECRET"]
+PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "")
+PAYPAL_CLIENT_SECRET = os.environ.get("PAYPAL_CLIENT_SECRET", "")
 
 # Secret for signing approval tokens — set via APPROVAL_TOKEN_SECRET env var.
 # Render auto-generates this; for local dev set it in .env.
@@ -1085,3 +1085,273 @@ async def kernel_screenshot(request: Request):
         })
     except Exception as e:
         return JSONResponse({"enabled": True, "error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Live Dispute Simulation — judges can fire a dispute and see Anchor decide
+# ---------------------------------------------------------------------------
+
+DEMO_SCENARIOS = {
+    "inr_fight": {
+        "label": "Item Not Received — AUTO FIGHT",
+        "dispute_id": "PP-D-DEMO-001",
+        "amount": 245.0,
+        "claim_type": "ITEM_NOT_RECEIVED",
+        "has_tracking": True,
+        "has_delivery": True,
+        "has_comm": False,
+        "has_item_proof": False,
+        "high_volume": False,
+        "deadline_hours": 72,
+        "narrative": (
+            "Buyer claims item wasn't received. Seller has tracking + delivery confirmation. "
+            "Anchor detects INQUIRY stage via HATEOAS, sends buyer message, then submits evidence."
+        ),
+    },
+    "micro_accept": {
+        "label": "Micro Dispute — AUTO ACCEPT ($18.50)",
+        "dispute_id": "PP-D-DEMO-002",
+        "amount": 18.50,
+        "claim_type": "ITEM_NOT_RECEIVED",
+        "has_tracking": False,
+        "has_delivery": False,
+        "has_comm": False,
+        "has_item_proof": False,
+        "high_volume": False,
+        "deadline_hours": 72,
+        "narrative": (
+            "Amount is $18.50 — below the $60 auto-accept threshold. "
+            "EV(fight) is negative: costs more to fight than to lose. Anchor auto-accepts immediately."
+        ),
+    },
+    "unauthorized_accept": {
+        "label": "Unauthorized Claim — ACCEPT (10% base rate)",
+        "dispute_id": "PP-D-DEMO-003",
+        "amount": 180.0,
+        "claim_type": "UNAUTHORIZED",
+        "has_tracking": False,
+        "has_delivery": False,
+        "has_comm": False,
+        "has_item_proof": False,
+        "high_volume": False,
+        "deadline_hours": 48,
+        "narrative": (
+            "Unauthorized claims have only a 10% base win rate. Without buyer communication "
+            "evidence, EV(fight) = -$155. Anchor accepts; competitors would fight and lose."
+        ),
+    },
+    "high_volume_accept": {
+        "label": "High-Volume Tier — $30 Fee Changes the Math",
+        "dispute_id": "PP-D-DEMO-004",
+        "amount": 95.0,
+        "claim_type": "ITEM_NOT_RECEIVED",
+        "has_tracking": True,
+        "has_delivery": False,
+        "has_comm": False,
+        "has_item_proof": False,
+        "high_volume": True,
+        "deadline_hours": 72,
+        "narrative": (
+            "High-volume tier: $30 non-refundable fee changes break-even. "
+            "With $15 fee this would FIGHT; with $30 non-refundable it's negative EV. "
+            "Anchor knows your tier — competitors don't."
+        ),
+    },
+    "snad_fight": {
+        "label": "Significantly Not As Described — FIGHT (with proof)",
+        "dispute_id": "PP-D-DEMO-005",
+        "amount": 320.0,
+        "claim_type": "SIGNIFICANTLY_NOT_AS_DESCRIBED",
+        "has_tracking": False,
+        "has_delivery": False,
+        "has_comm": True,
+        "has_item_proof": True,
+        "high_volume": False,
+        "deadline_hours": 36,
+        "narrative": (
+            "Buyer claims item not as described. Seller has item listing proof + "
+            "buyer communication confirming receipt. Strong evidence → FIGHT. "
+            "⚠️ Urgent: 36h deadline."
+        ),
+    },
+}
+
+
+@app.post("/api/demo/simulate-dispute")
+async def demo_simulate_dispute(request: Request):
+    """
+    Live dispute simulation — no PayPal credentials required.
+
+    POST /api/demo/simulate-dispute
+    Body: {"scenario": "inr_fight"} or {"custom": {...dispute fields...}}
+
+    Returns the full Guardian + Oracle decision pipeline output:
+    - Oracle EV calculation with reasoning
+    - Guardian pre-auth threshold check
+    - Recommended autonomous action
+    - Simulated PayPal API calls that would be made
+    - Morning brief entry that would be logged
+
+    Used by the dashboard "Fire Live Dispute" panel.
+    """
+    from oracle.decision import calculate, ClaimType, Evidence, Recommendation
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    scenario_key = body.get("scenario", "inr_fight")
+
+    if scenario_key == "custom":
+        s = body.get("custom", {})
+        scenario = {
+            "label": "Custom Scenario",
+            "dispute_id": s.get("dispute_id", "PP-D-CUSTOM-001"),
+            "amount": float(s.get("amount", 100.0)),
+            "claim_type": s.get("claim_type", "ITEM_NOT_RECEIVED"),
+            "has_tracking": bool(s.get("has_tracking", False)),
+            "has_delivery": bool(s.get("has_delivery", False)),
+            "has_comm": bool(s.get("has_comm", False)),
+            "has_item_proof": bool(s.get("has_item_proof", False)),
+            "high_volume": bool(s.get("high_volume", False)),
+            "deadline_hours": int(s.get("deadline_hours", 72)),
+            "narrative": "Custom scenario",
+        }
+    else:
+        scenario = DEMO_SCENARIOS.get(scenario_key, DEMO_SCENARIOS["inr_fight"])
+
+    ct_map = {
+        "ITEM_NOT_RECEIVED": ClaimType.ITEM_NOT_RECEIVED,
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": ClaimType.SIGNIFICANTLY_NOT_AS_DESCRIBED,
+        "UNAUTHORIZED": ClaimType.UNAUTHORIZED,
+        "BILLING_ISSUE": ClaimType.BILLING_ISSUE,
+    }
+    ct = ct_map.get(scenario["claim_type"].upper(), ClaimType.ITEM_NOT_RECEIVED)
+    evidence = Evidence(
+        has_tracking_number=scenario["has_tracking"],
+        has_delivery_confirmation=scenario["has_delivery"],
+        has_buyer_communication=scenario["has_comm"],
+        has_item_description_proof=scenario["has_item_proof"],
+        seller_account_age_days=int(os.environ.get("SELLER_ACCOUNT_AGE_DAYS", 730)),
+        seller_dispute_win_rate=float(os.environ.get("SELLER_WIN_RATE", 0.5)),
+    )
+    oracle = calculate(
+        dispute_amount=scenario["amount"],
+        claim_type=ct,
+        evidence=evidence,
+        deadline_hours=scenario["deadline_hours"],
+        seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
+        high_volume_tier=scenario["high_volume"],
+    )
+
+    # Guardian pre-auth threshold simulation
+    auto_accept_below = float(os.environ.get("AUTO_ACCEPT_BELOW", 60))
+    auto_fight_above  = float(os.environ.get("AUTO_FIGHT_ABOVE", 200))
+    auto_fight_min_p  = float(os.environ.get("AUTO_FIGHT_MIN_PROB", 0.60))
+
+    if scenario["amount"] <= auto_accept_below:
+        guardian_action = "AUTO_ACCEPT"
+        guardian_reason = f"Amount ${scenario['amount']:.2f} ≤ auto-accept threshold ${auto_accept_below:.2f}"
+    elif (scenario["amount"] >= auto_fight_above and
+          oracle.win_probability >= auto_fight_min_p and
+          oracle.recommendation == Recommendation.FIGHT):
+        guardian_action = "AUTO_FIGHT"
+        guardian_reason = (
+            f"Amount ${scenario['amount']:.2f} ≥ ${auto_fight_above:.2f} AND "
+            f"win probability {oracle.win_probability:.0%} ≥ {auto_fight_min_p:.0%} minimum"
+        )
+    elif oracle.recommendation == Recommendation.FIGHT:
+        guardian_action = "REQUEST_APPROVAL"
+        guardian_reason = "Oracle says FIGHT but amount is in the ask-me zone — sending merchant a one-tap approval link"
+    elif oracle.recommendation.value == "GATHER_EVIDENCE_FIRST":
+        guardian_action = "GATHER_EVIDENCE"
+        guardian_reason = "Oracle says gather evidence first — sending merchant a checklist"
+    else:
+        guardian_action = "AUTO_ACCEPT"
+        guardian_reason = "Oracle EV(fight) ≤ 0 — auto-accepting claim"
+
+    # Simulated PayPal API calls
+    simulated_calls = []
+    if guardian_action == "AUTO_ACCEPT":
+        simulated_calls = [
+            {"method": "GET",  "path": f"/v1/customer/disputes/{scenario['dispute_id']}", "purpose": "Fetch HATEOAS links to verify accept-claim is permitted"},
+            {"method": "POST", "path": f"/v1/customer/disputes/{scenario['dispute_id']}/accept-claim", "purpose": "Accept the claim — Oracle confirmed negative EV to fight"},
+        ]
+    elif guardian_action == "AUTO_FIGHT":
+        simulated_calls = [
+            {"method": "GET",  "path": f"/v1/customer/disputes/{scenario['dispute_id']}", "purpose": "Fetch HATEOAS links to verify provide-evidence is permitted"},
+            {"method": "POST", "path": f"/v1/customer/disputes/{scenario['dispute_id']}/provide-evidence", "purpose": "Submit tracking + delivery evidence"},
+        ]
+    elif guardian_action == "REQUEST_APPROVAL":
+        simulated_calls = [
+            {"method": "GET",  "path": f"/v1/customer/disputes/{scenario['dispute_id']}", "purpose": "Fetch HATEOAS links"},
+            {"method": "POST", "path": "/slack-webhook", "purpose": "Send merchant a one-tap approve/reject link (48h HMAC token, dispute-bound)"},
+        ]
+
+    # What would appear in the morning brief
+    brief_entry = {
+        "action": guardian_action,
+        "dispute_id": scenario["dispute_id"],
+        "amount": f"${scenario['amount']:.2f}",
+        "claim_type": scenario["claim_type"],
+        "win_probability": f"{oracle.win_probability:.0%}",
+        "ev_fight": f"${oracle.ev_fight:.2f}",
+        "brief_line": (
+            f"{'⚔️ Fought' if guardian_action == 'AUTO_FIGHT' else '✅ Accepted' if guardian_action == 'AUTO_ACCEPT' else '🔔 Pending'} "
+            f"{scenario['dispute_id']} ${scenario['amount']:.2f} "
+            f"({oracle.win_probability:.0%} win probability, EV={oracle.ev_fight:+.2f})"
+        ),
+    }
+
+    return JSONResponse({
+        "scenario": {
+            "key": scenario_key,
+            "label": scenario["label"],
+            "dispute_id": scenario["dispute_id"],
+            "amount": scenario["amount"],
+            "claim_type": scenario["claim_type"],
+            "narrative": scenario.get("narrative", ""),
+            "inputs": {
+                "has_tracking": scenario["has_tracking"],
+                "has_delivery": scenario["has_delivery"],
+                "has_buyer_comm": scenario["has_comm"],
+                "has_item_proof": scenario["has_item_proof"],
+                "high_volume_tier": scenario["high_volume"],
+                "deadline_hours": scenario["deadline_hours"],
+            },
+        },
+        "oracle": {
+            "recommendation": oracle.recommendation.value,
+            "ev_fight": round(oracle.ev_fight, 2),
+            "ev_accept": round(oracle.ev_accept, 2),
+            "win_probability": round(oracle.win_probability, 4),
+            "break_even": round(oracle.break_even_probability, 4),
+            "confidence": round(oracle.confidence, 4),
+            "reasoning": oracle.reasoning,
+        },
+        "guardian": {
+            "action": guardian_action,
+            "reason": guardian_reason,
+            "thresholds": {
+                "auto_accept_below": auto_accept_below,
+                "auto_fight_above": auto_fight_above,
+                "auto_fight_min_prob": auto_fight_min_p,
+            },
+        },
+        "simulated_paypal_calls": simulated_calls,
+        "morning_brief_entry": brief_entry,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+@app.get("/api/demo/scenarios")
+async def demo_scenarios():
+    """List of available demo scenarios for the dashboard simulator."""
+    return JSONResponse({
+        "scenarios": [
+            {"key": k, "label": v["label"], "amount": v["amount"],
+             "claim_type": v["claim_type"], "narrative": v.get("narrative", "")}
+            for k, v in DEMO_SCENARIOS.items()
+        ]
+    })

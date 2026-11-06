@@ -696,6 +696,89 @@
 <!-- Tooltip (shared) -->
 <div class="tl-tooltip" id="tl-tooltip"></div>
 
+<!-- Live Dispute Simulator Panel -->
+<div class="card" id="demo-panel" style="border-top:3px solid #6d28d9;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:15px;font-weight:600;">Live Dispute Simulator</div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(109,40,217,.12);color:#6d28d9;border:1px solid rgba(109,40,217,.3);">try it now</span>
+    <span style="font-size:12px;color:var(--muted);">— fire a PayPal dispute, watch Anchor decide in real time</span>
+  </div>
+
+  <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;">
+    Choose a scenario below. Anchor runs the full pipeline: Settlement Oracle calculates EV(fight) vs EV(accept),
+    Guardian checks pre-auth thresholds, and decides whether to auto-fight, auto-accept, or ask for your approval.
+    No PayPal credentials required.
+  </p>
+
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;" id="scenario-buttons">
+    <button onclick="runScenario('inr_fight')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">⚔️ INR — Auto Fight</button>
+    <button onclick="runScenario('micro_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">✅ Micro Dispute — Auto Accept</button>
+    <button onclick="runScenario('unauthorized_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">🚫 Unauthorized — Accept (10% base)</button>
+    <button onclick="runScenario('high_volume_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">💰 High-Volume $30 Fee</button>
+    <button onclick="runScenario('snad_fight')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">📦 SNAD — Fight with Proof</button>
+  </div>
+
+  <div id="sim-result" style="display:none;">
+    <div id="sim-loading" style="text-align:center;padding:20px;color:var(--muted);font-size:13px;">Running simulation…</div>
+    <div id="sim-content" style="display:none;">
+      <!-- Scenario label + narrative -->
+      <div id="sim-label" style="font-size:14px;font-weight:600;margin-bottom:4px;"></div>
+      <div id="sim-narrative" style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5;"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;" id="sim-cols">
+        <!-- Oracle column -->
+        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">SETTLEMENT ORACLE</div>
+          <div id="sim-rec" style="font-size:20px;font-weight:700;margin-bottom:8px;"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <div>
+              <div style="font-size:10px;color:var(--muted);">EV(fight)</div>
+              <div id="sim-ev-fight" style="font-size:14px;font-weight:600;"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);">EV(accept)</div>
+              <div id="sim-ev-accept" style="font-size:14px;font-weight:600;color:var(--red);"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);">Win prob</div>
+              <div id="sim-win-prob" style="font-size:14px;font-weight:600;"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);">Break-even</div>
+              <div id="sim-break-even" style="font-size:14px;font-weight:600;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Guardian column -->
+        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">GUARDIAN AGENT</div>
+          <div id="sim-action" style="font-size:17px;font-weight:700;margin-bottom:8px;"></div>
+          <div id="sim-guardian-reason" style="font-size:11px;color:var(--muted);line-height:1.5;"></div>
+        </div>
+
+        <!-- PayPal API calls column -->
+        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">PAYPAL API CALLS</div>
+          <div id="sim-calls" style="font-size:11px;font-family:monospace;color:var(--text);line-height:1.8;"></div>
+        </div>
+      </div>
+
+      <!-- Oracle reasoning -->
+      <details style="margin-bottom:12px;">
+        <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);padding:4px 0;">Oracle reasoning steps</summary>
+        <div id="sim-reasoning" style="font-size:11px;color:var(--muted);padding:10px 0;line-height:1.8;border-top:1px solid var(--border);margin-top:8px;"></div>
+      </details>
+
+      <!-- Morning brief -->
+      <div style="background:rgba(0,0,0,.03);border-radius:8px;padding:12px 16px;border:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:6px;">MORNING BRIEF ENTRY</div>
+        <div id="sim-brief" style="font-size:12px;color:var(--text);font-family:monospace;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Settlement Oracle Panel -->
 <div class="card" id="oracle-panel" style="border-top:3px solid #f59e0b;">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
@@ -1884,6 +1967,86 @@ function _applyOracleResult(d) {
     </details>
   `;
   el.style.display = 'block';
+}
+
+// ── Live Dispute Simulator ───────────────────────────────────────────────────
+async function runScenario(key) {
+  const result = document.getElementById('sim-result');
+  const loading = document.getElementById('sim-loading');
+  const content = document.getElementById('sim-content');
+  result.style.display = 'block';
+  loading.style.display = 'block';
+  content.style.display = 'none';
+
+  // Highlight selected button
+  document.querySelectorAll('#scenario-buttons button').forEach(b => {
+    b.style.background = 'var(--surface)';
+    b.style.borderColor = 'var(--border)';
+    b.style.color = 'var(--text)';
+  });
+  const clicked = [...document.querySelectorAll('#scenario-buttons button')]
+    .find(b => b.getAttribute('onclick') && b.getAttribute('onclick').includes(key));
+  if (clicked) {
+    clicked.style.background = 'rgba(109,40,217,.08)';
+    clicked.style.borderColor = '#6d28d9';
+    clicked.style.color = '#6d28d9';
+  }
+
+  try {
+    const r = await fetch('/api/demo/simulate-dispute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario: key }),
+    });
+    const d = await r.json();
+
+    document.getElementById('sim-label').textContent = d.scenario.label;
+    document.getElementById('sim-narrative').textContent = d.scenario.narrative;
+
+    // Oracle
+    const rec = d.oracle.recommendation;
+    const recEl = document.getElementById('sim-rec');
+    recEl.textContent = rec === 'FIGHT' ? '⚔️ FIGHT' : rec === 'ACCEPT' ? '✅ ACCEPT' : '🔍 GATHER EVIDENCE';
+    recEl.style.color = rec === 'FIGHT' ? 'var(--green)' : rec === 'ACCEPT' ? 'var(--amber)' : 'var(--accent)';
+
+    const evFight = d.oracle.ev_fight;
+    const evEl = document.getElementById('sim-ev-fight');
+    evEl.textContent = `$${evFight.toFixed(2)}`;
+    evEl.style.color = evFight >= 0 ? 'var(--green)' : 'var(--red)';
+
+    document.getElementById('sim-ev-accept').textContent = `$${d.oracle.ev_accept.toFixed(2)}`;
+    document.getElementById('sim-win-prob').textContent = `${(d.oracle.win_probability * 100).toFixed(1)}%`;
+    document.getElementById('sim-break-even').textContent = `${(d.oracle.break_even * 100).toFixed(1)}%`;
+
+    // Guardian
+    const action = d.guardian.action;
+    const actionEl = document.getElementById('sim-action');
+    const actionMap = { AUTO_FIGHT: '⚔️ AUTO FIGHT', AUTO_ACCEPT: '✅ AUTO ACCEPT', REQUEST_APPROVAL: '🔔 ASK MERCHANT', GATHER_EVIDENCE: '🔍 GATHER EVIDENCE' };
+    const actionColors = { AUTO_FIGHT: 'var(--green)', AUTO_ACCEPT: 'var(--amber)', REQUEST_APPROVAL: 'var(--accent)', GATHER_EVIDENCE: 'var(--purple)' };
+    actionEl.textContent = actionMap[action] || action;
+    actionEl.style.color = actionColors[action] || 'var(--text)';
+    document.getElementById('sim-guardian-reason').textContent = d.guardian.reason;
+
+    // PayPal API calls
+    const callsHtml = (d.simulated_paypal_calls || []).map(c =>
+      `<div><span style="color:${c.method==='POST'?'var(--green)':'var(--accent)'}">${c.method}</span> ${c.path}</div>`
+    ).join('');
+    document.getElementById('sim-calls').innerHTML = callsHtml || '<span style="color:var(--muted)">No API calls</span>';
+
+    // Reasoning
+    const reasoningHtml = (d.oracle.reasoning || []).map((r,i) =>
+      `<div style="padding:2px 0;border-bottom:1px solid var(--border)">${i+1}. ${r}</div>`
+    ).join('');
+    document.getElementById('sim-reasoning').innerHTML = reasoningHtml;
+
+    // Brief
+    document.getElementById('sim-brief').textContent = d.morning_brief_entry?.brief_line || '';
+
+    loading.style.display = 'none';
+    content.style.display = 'block';
+  } catch (e) {
+    loading.textContent = 'Simulation failed: ' + e.message;
+  }
 }
 
 // ── APIMatic integration panel ───────────────────────────────────────────────
