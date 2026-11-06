@@ -1,0 +1,413 @@
+{
+  "info": {
+    "name": "Anchor \u2014 PayPal Dispute & Recovery Agent",
+    "description": "Anchor autonomously handles PayPal disputes (Guardian Agent) and recovers abandoned checkouts (Recovery Agent). PayPal AI Hackathon 2026.\n\nSet the `base_url` variable to your Render deployment URL.\nLive demo: https://anchor-paypal.onrender.com",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "anchor-paypal-hackathon-2026"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "https://anchor-paypal.onrender.com",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Returns {\"status\":\"ok\"} when the server is up."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\"status\":\"ok\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Open dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/dashboard",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "dashboard"
+              ]
+            },
+            "description": "Full AG Grid + Bryntum Scheduler dashboard. Open in browser."
+          }
+        },
+        {
+          "name": "Stats \u2014 header cards",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/stats",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "stats"
+              ]
+            },
+            "description": "Aggregate dispute/recovery stats from Elasticsearch. Returns {demo:true} when ES not configured."
+          }
+        },
+        {
+          "name": "Disputes \u2014 AG Grid rows",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/disputes",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "disputes"
+              ]
+            },
+            "description": "Returns up to 200 recent dispute actions. Each row drives the AG Grid disputes table and Bryntum timeline."
+          }
+        },
+        {
+          "name": "Recoveries \u2014 AG Grid rows",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/recoveries",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "recoveries"
+              ]
+            },
+            "description": "Returns up to 200 abandoned checkout recovery records."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dispute Approval",
+      "item": [
+        {
+          "name": "Approve dispute fight",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{approval_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/approve/:dispute_id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "approve",
+                ":dispute_id"
+              ],
+              "variable": [
+                {
+                  "key": "dispute_id",
+                  "value": "PP-D-00112233"
+                }
+              ]
+            },
+            "description": "Merchant approves a pending dispute fight. Token is HMAC-SHA256 signed, dispute-bound, expires in 48h. Guardian sends this link in Slack when manual approval is needed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Scheduler",
+      "item": [
+        {
+          "name": "Trigger recovery check",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/recovery-check",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "recovery-check"
+              ]
+            },
+            "description": "Manually trigger the recovery cron (runs automatically every 15 min via APScheduler)."
+          }
+        },
+        {
+          "name": "Trigger morning brief",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/morning-brief",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "morning-brief"
+              ]
+            },
+            "description": "Manually trigger the morning brief (runs automatically at 08:00 UTC)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "APIMatic Context Plugin",
+      "item": [
+        {
+          "name": "Get PayPal API context",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/apimatic/context",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "apimatic",
+                "context"
+              ]
+            },
+            "description": "Returns the APIMatic-generated PayPal Disputes API context document loaded by the Guardian agent before every API call."
+          }
+        },
+        {
+          "name": "Lookup endpoint \u2014 accept",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/apimatic/lookup/accept",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "apimatic",
+                "lookup",
+                "accept"
+              ]
+            },
+            "description": "Resolves the correct PayPal endpoint, method, and required fields for the accept-claim action."
+          }
+        },
+        {
+          "name": "Lookup endpoint \u2014 provide_evidence",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/apimatic/lookup/provide_evidence",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "apimatic",
+                "lookup",
+                "provide_evidence"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Lookup endpoint \u2014 send_message",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/apimatic/lookup/send_message",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "apimatic",
+                "lookup",
+                "send_message"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Channel3 Enrichment",
+      "item": [
+        {
+          "name": "Enrich dispute with product data",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/channel3/enrich",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "channel3",
+                "enrich"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"item_description\": \"Nike Air Max 90\",\n  \"amount\": 89.99,\n  \"dispute_id\": \"PP-D-00112233\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Looks up the disputed product in Channel3's 100M+ product graph. Returns canonical title, brand, price, and formatted ITEM_DESCRIPTION evidence text for PayPal submission."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Postman Collection",
+      "item": [
+        {
+          "name": "Download collection JSON",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/postman/collection",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "postman",
+                "collection"
+              ]
+            },
+            "description": "Downloads this collection as Postman Collection v2.1 JSON."
+          }
+        }
+      ]
+    },
+    {
+      "name": "PayPal Webhooks (inbound)",
+      "item": [
+        {
+          "name": "Webhook receiver",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "PayPal-Transmission-Id",
+                "value": "{{transmission_id}}"
+              },
+              {
+                "key": "PayPal-Transmission-Time",
+                "value": "{{transmission_time}}"
+              },
+              {
+                "key": "PayPal-Cert-Url",
+                "value": "{{cert_url}}"
+              },
+              {
+                "key": "PayPal-Transmission-Sig",
+                "value": "{{transmission_sig}}"
+              },
+              {
+                "key": "PayPal-Auth-Algo",
+                "value": "SHA256withRSA"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/webhooks/paypal",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "webhooks",
+                "paypal"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"WH-XXXX\",\n  \"event_type\": \"CUSTOMER.DISPUTE.CREATED\",\n  \"create_time\": \"2026-11-05T08:00:00Z\",\n  \"resource\": {\n    \"dispute_id\": \"PP-D-00112233\",\n    \"reason\": \"ITEM_NOT_RECEIVED\",\n    \"dispute_amount\": {\n      \"value\": \"245.00\",\n      \"currency_code\": \"USD\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "PayPal sends signed events here. Signature verification runs synchronously; processing runs in background. \u26a0\ufe0f Real PayPal signatures required \u2014 use PayPal Developer Dashboard to send test events."
+          }
+        }
+      ]
+    }
+  ]
+}

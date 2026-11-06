@@ -3,7 +3,7 @@
 > **PayPal AI Hackathon 2026**
 > While you sleep, Anchor handles your PayPal disputes and recovers your abandoned sales.
 
-**[Live demo →](https://anchor-paypal.onrender.com)**
+**[Live dashboard →](https://anchor-paypal.onrender.com/dashboard)** · [API health](https://anchor-paypal.onrender.com/health)
 
 ---
 
@@ -13,10 +13,11 @@
 
 | What to try | Where |
 |---|---|
-| **Live Dispute Simulator** — pick a scenario, see Oracle + Guardian + API calls | [Dashboard → Live Dispute Simulator panel](https://anchor-paypal.onrender.com) |
+| **Live Dispute Simulator** — pick a scenario, see Oracle + Guardian + simulated API calls | [Dashboard → Live Dispute Simulator panel](https://anchor-paypal.onrender.com/dashboard) |
 | **Settlement Oracle Calculator** — adjust amount / evidence / tier, recalculate | Same page → Settlement Oracle panel |
-| **AG Grid disputes table** — sortable, filterable, column-grouped | Same page → Disputes section |
-| **API surface** — full endpoint list with curl examples | Same page → Postman panel |
+| **AG Grid disputes table** — grouped columns, floating filters, global search, CSV, row detail | Same page → Disputes tab |
+| **Merchant ROI Calculator** — edit assumptions and see annual value estimate | Same page → Merchant ROI Calculator |
+| **API collection** — import the committed Postman v2.1 collection | [Postman collection JSON](postman_collection.json) |
 | **Sponsor integrations** | Same page → APIMatic / Channel3 / Render / Astropods panels |
 
 **Sponsor prizes targeted:**
@@ -25,7 +26,9 @@
 - **Best Use of AI + PayPal** ($5K) — Settlement Oracle calculates fight-vs-accept EV using the actual PayPal fee model; Guardian Agent checks HATEOAS links before every call
 - **Best Use of Agentic Commerce** ($5K) — full autonomous loop: webhook → Oracle → Guardian → PayPal action, plus abandoned checkout recovery via PayPal Invoicing
 
-**Key innovation:** No other tool does the EV calculation. Every existing product (Chargeflow, Disputifier, Chargehound) fights every dispute automatically. Anchor is the first to calculate whether fighting is economically worth it, using PayPal's actual two-tier dispute fee model.
+**Submission screenshots to capture:** (1) dashboard simulator showing an evaluated scenario and the “no PayPal action was executed” audit entry; (2) Oracle calculator with its assumptions visible; (3) AG Grid dispute table with filters and row details; (4) ROI calculator with editable assumptions; (5) live `/health` response. The public dashboard is a demo surface; screenshots should not imply that simulated events are production merchant activity.
+
+**Key innovation:** Anchor makes the fight-or-accept decision visible and cost-aware, using a merchant-configurable handling cost and the standard/high-volume fee assumptions shown in the calculator. Those fee assumptions and win probabilities are estimates that merchants should validate against their own PayPal account and outcomes.
 
 ---
 
@@ -36,13 +39,13 @@ PayPal merchants lose money in two silent ways:
 1. **Disputes they should have won** — manually fighting every chargeback is expensive and inconsistent. Most merchants accept everything or fight everything. Neither is right.
 2. **Abandoned checkouts** — buyers approve the PayPal payment but the merchant's page errors before capture. The sale disappears.
 
-Anchor solves both using two AI agents powered by PayPal's APIs:
+Anchor pairs two event-driven agents with PayPal APIs. The Settlement Oracle is a deterministic rules-and-probability model; optional integrations can enrich evidence, but this repository does not currently call Claude or another LLM for the core decision.
 
 ### Guardian Agent — dispute economics
 - Receives `CUSTOMER.DISPUTE.CREATED` webhooks instantly
 - Runs the **Settlement Oracle**: calculates EV(fight) vs EV(accept) using PayPal's two-tier dispute fee model ($15 refundable vs $30 non-refundable at high-volume)
-- Checks PayPal's **HATEOAS links** before every action — knows whether the dispute is in INQUIRY or CLAIM stage and acts accordingly
-- During INQUIRY: sends a buyer message via `send-message` to resolve before escalation (fee-free window)
+- Checks PayPal's live **HATEOAS action links** before choosing an action; it does not assume a stage from a local timer
+- Uses the dispute's current HATEOAS links to choose among actions PayPal exposes; a buyer message is sent only when `send-message` is permitted
 - Autonomously fights high-EV disputes, accepts low-EV ones, asks the merchant for decisions in between
 - Approval links are **HMAC-SHA256 signed**, bound to the specific dispute, expire in 48h
 
@@ -53,8 +56,10 @@ Anchor solves both using two AI agents powered by PayPal's APIs:
 - Creates a **PayPal invoice** via `POST /v2/invoicing/invoices` and sends it directly to the buyer
 - Buyer gets a PayPal-branded email with one-click payment — familiar and trusted
 
+**Demo boundary:** the dashboard simulator computes a local sample decision and displays the API calls that a live agent would consider. It does not call PayPal or submit evidence. Live webhook actions require configured sandbox credentials and a registered webhook.
+
 ### Morning Brief
-- Every morning at 8 AM: "2 disputes fought ($445 protected), 3 abandoned orders recovered ($312)"
+- The app's APScheduler can prepare a morning brief at 08:00 UTC while the web process is running
 - No dashboard to open. No login required. It reports to you.
 
 ---
@@ -65,14 +70,14 @@ Anchor solves both using two AI agents powered by PayPal's APIs:
 |---|---|
 | **PayPal API** | Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2 — the entire runtime |
 | **Settlement Oracle** | Closed-form EV engine: `P(win) × amount − effective_cost` with evidence scoring |
-| **AG Grid** | Community 31.3.2 — disputes and recovery tables with live row data |
-| **Bryntum Scheduler** | Timeline view of disputes and recoveries with CrudManager format |
-| **APIMatic** | Context Plugin — deterministic PayPal endpoint routing, eliminates hallucinated paths |
-| **Channel3** | 100M+ product graph — enriches dispute evidence with canonical product data |
-| **Postman** | Collection v2.1 (7 groups, 20+ requests) — one-click import for judges |
-| **Render** | Web service with auto-deploy on push; deploy trigger + status panel on dashboard |
-| **Astropods** | AI governance gateway — routes Guardian LLM calls for auditing and spend control |
-| **Kernel** | Bot-resistant cloud browser — carrier tracking screenshots for dispute evidence |
+| **AG Grid Community 31.3.2** | Disputes and recoveries tables: grouped columns, filters, status bar, export |
+| **Bryntum Scheduler 6.0.7** | Timeline view using CrudManager data format |
+| **APIMatic** | PayPal endpoint context and parameter guidance |
+| **Channel3** | Optional product context; it is not submitted as evidence without merchant verification |
+| **Postman Collection v2.1** | Importable API examples in [`postman_collection.json`](postman_collection.json) |
+| **Render** | FastAPI demo deployment; deploy status requires Render API credentials |
+| **Astropods** | Optional AI governance gateway; Guardian's decision path is deterministic today |
+| **Kernel** | Optional browser-based carrier tracking capture |
 
 ---
 
@@ -80,8 +85,7 @@ Anchor solves both using two AI agents powered by PayPal's APIs:
 
 - **PayPal APIs** — Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2
 - **Settlement Oracle** — closed-form expected-value engine with evidence scoring and historical win-rate blending
-- **Claude** (Anthropic) — classification, evidence reasoning, buyer message generation
-- **FastAPI** + **APScheduler** — webhook server, cron scheduling (recovery every 15 min, brief at 08:00 UTC)
+- **FastAPI** + **APScheduler** — webhook server, in-process recovery scan and morning brief
 - **AG Grid Community 31.3.2** — disputes and recoveries data grid
 - **Bryntum Scheduler 6.0.7** — timeline / Gantt view
 - **APIMatic** — deterministic API context plugin for grounded LLM calls
@@ -105,7 +109,7 @@ pip install -r requirements.txt
 python scripts/demo.py
 ```
 
-Expected output: four dispute scenarios, HATEOAS lifecycle demo, Recovery agent flow, and a sample morning brief.
+Expected output: five dispute scenarios, a HATEOAS walkthrough, Recovery agent flow, and a sample morning brief.
 
 ---
 
@@ -140,18 +144,18 @@ INVOICING.INVOICE.UPDATED
 uvicorn agents.watcher:app --reload
 ```
 
-### 4. Deploy to Render (free, no card)
+### 4. Deploy to Render
 
 **Live demo:** `https://anchor-paypal.onrender.com`
 
 1. Render → New → Web Service → GitHub → `HaCkEr-DoG/anchor-paypal`
 2. Build command: `pip install -r requirements.txt`
 3. Start command: `uvicorn agents.watcher:app --host 0.0.0.0 --port $PORT`
-4. Plan: **Free** ($0/month)
+4. Plan: **Free** for the hackathon demo
 5. Add env vars from `.env.example`
 6. Register webhook: `https://anchor-paypal.onrender.com/webhooks/paypal`
 
-The app runs recovery (every 15 min) and morning brief (8 AM UTC) internally via APScheduler. No separate cron service needed.
+The web process schedules recovery checks every 15 minutes and the morning brief at 08:00 UTC. Render's Free web services sleep after inactivity, so in-process schedules do not provide guaranteed 24/7 processing while the instance is asleep. For continuous webhook and schedule handling, use an always-on paid web service or move scheduled work to a durable external queue/worker. The dashboard remains suitable for demos on the Free plan, but the service should not be described as continuously autonomous there. [Render documents this Free instance limitation](https://render.com/docs/free).
 
 ---
 
@@ -161,23 +165,73 @@ For every dispute, Anchor calculates:
 
 ```
 EV(fight)  = P(win) × amount − effective_cost
-EV(accept) = −amount
+EV(accept) = $0 incremental recovery (accepting produces no recovery)
 
 Standard tier ($15 refundable on win):
   effective_cost = time_cost + (1 − p_win) × 15
   break_even     = (time_cost + 15) / (amount + 15)
 
-High-volume tier ($30 non-refundable, triggered at ≥1.5% dispute rate):
+US high-volume tier ($30 non-refundable; eligible merchants have a dispute ratio of at least 1.5% and more than 100 sales transactions in the previous three full calendar months):
   effective_cost = time_cost + 30
   break_even     = (time_cost + 30) / amount
 ```
 
-A $245 INR dispute with delivery confirmation: **FIGHT** (92% win probability, EV = +$148).
-An $18.50 INR dispute without tracking: **ACCEPT** (EV = −$78 to fight).
+A $245 INR dispute with delivery confirmation and neutral seller-history assumptions: **FIGHT** (91.8% model estimate, EV = +$148.68).
+An $18.50 INR dispute without tracking: **ACCEPT** (EV(fight) = −$77.47, EV(accept) = $0 incremental recovery).
+
+PayPal's current US criteria use the previous three complete months, and the dispute ratio is amount-based for eligible claim types; unauthorized disputes and billing errors are treated differently. Anchor's fee-tier estimate uses recorded events and may be incomplete for an existing merchant. Confirm the actual fee in the PayPal account before relying on a live decision. [PayPal dispute-rate criteria](https://www.paypal.com/us/cshelp/article/when-is-the-dispute-rate-applied-and-how-is-it-calculated-help350).
 
 **Try it live** on the dashboard at [anchor-paypal.onrender.com](https://anchor-paypal.onrender.com) — the Settlement Oracle panel lets you adjust any input and recalculates in real time.
 
-No other PayPal dispute tool does this calculation.
+The model is illustrative. Its base rates and evidence multipliers are assumptions, not a validated prediction model; production use needs merchant-specific calibration and outcome tracking.
+
+### Evidence integrity and merchant controls
+
+Anchor may submit only evidence actually present in merchant records or verified carrier/PayPal data. Catalog descriptions, generated text, or a browser screenshot are not proof of delivery or buyer communications. The agent checks PayPal's current permitted actions and keeps cases pending when required evidence is missing. Merchants remain responsible for reviewing submissions, maintaining accurate records, and following PayPal's Acceptable Use Policy and dispute deadlines. [PayPal Acceptable Use Policy](https://pep.paypal.com/us/legalhub/paypal/acceptableuse-full?country.x=US&locale.x=en_US).
+
+## Illustrative merchant impact
+
+The dashboard's editable ROI calculator makes each assumption visible. With the defaults below, it estimates **about $12,048/year**, not a measured result:
+
+| Input / output | Estimate |
+|---|---:|
+| Annual GMV / average order value | $500,000 / $80 |
+| Approximate annual orders | 6,250 |
+| Dispute rate / estimated dispute count | 0.5% / 31.25 |
+| Average dispute / amount at risk | $80 / $2,500 |
+| Modeled win-rate difference (45% − 8.1%) | $922.50 protected |
+| Abandoned checkout rate / recovery rate | 2% / 20% |
+| Modeled recovered revenue | $2,000 |
+| Review time saved (0.5 h/day × 365 × $50/h) | $9,125 |
+| **Illustrative total annual value** | **$12,047.50** |
+
+The number of disputes is calculated as orders × dispute rate. Multiplying GMV by 0.5% gives dollars, not a count of 2,500 disputes. Actual results depend on merchant data, PayPal eligibility, evidence quality, win-rate calibration, and recovery conversion.
+
+## Competitive positioning
+
+Anchor focuses on merchant-configurable economics and PayPal lifecycle actions. Competitors cover overlapping ground: Chargeflow advertises 25% of recovered chargebacks and PayPal inquiry automation; Disputifier advertises 20% of won chargebacks; Chargehound says it supports PayPal among other processors. Avoid assuming these products always fight, lack PayPal support, or lack their own decision logic.
+
+| Dimension | Anchor | Publicly stated alternatives |
+|---|---|---|
+| Pricing model | Proposed pricing below; not yet commercial | Chargeflow: 25% per recovered chargeback; Disputifier: 20% per won chargeback |
+| PayPal scope | PayPal Disputes, Orders, Invoicing, and Webhooks APIs in this prototype | Chargeflow advertises PayPal inquiry automation; Chargehound lists PayPal support |
+| Decision economics | Explicit EV calculator with editable fees and cost assumptions | Verify each vendor's current contract and workflow before comparing decisions |
+| Evidence | PayPal dispute data plus optional Channel3 / carrier evidence paths | Vendor-specific integrations and evidence pipelines vary |
+| Best fit | Teams that want to inspect and tune their PayPal decision policy | Merchants seeking an established managed service and broader integrations |
+
+Illustrative micro-dispute example: on an $18.50 recovery, a hypothetical 25% success fee is $4.63. Adding a $15 dispute fee yields $19.63 of fees against $18.50 recovered, a net loss of $1.13 before operating costs. This is a scenario calculation, not a claim that any provider's fees or PayPal fee treatment applies to every case. [Chargeflow pricing](https://www.chargeflow.io/pricing) · [Disputifier pricing](https://www.disputifier.com/pricing) · [Chargehound supported processors](https://www.chargehound.com/support).
+
+## Pricing hypothesis
+
+For a commercial product, start with a low base subscription plus a capped success fee on verified incremental recovery. A pure percentage of EV is difficult to audit because EV is modeled rather than realized; a flat $99 / $499 tier is easier to explain but may not fit merchants with very different dispute volumes. Validate willingness to pay with merchants before setting prices. An enterprise API for PSPs is a later channel, not a current capability.
+
+## Architecture and scale
+
+Today, FastAPI handles webhooks and dashboard APIs; the process-local scheduler runs recovery and briefing jobs; Elasticsearch stores action history and configuration; PayPal remains the source of truth for dispute and order state. In-memory webhook deduplication is suitable only for a single instance. At higher volume, move deduplication and scheduled work to durable shared storage and a queue, make workers idempotent, partition merchant data, and add per-merchant PayPal rate limiting. Fee-tier inference and win-rate blending require complete, labeled history before they should influence automated actions.
+
+## Roadmap
+
+Next: add durable queues and complete merchant outcome logging; then deliver morning briefs by Slack/email and show calibrated historical win rates. After that, add a second processor integration and a multi-merchant API for PSPs. Use accumulated, permissioned outcomes to validate or replace the hand-set win-rate priors only after enough representative data is available.
 
 ---
 
@@ -218,15 +272,12 @@ render.yaml          # Render deployment config
 
 ---
 
-## Why Anchor is different from Chargeflow / Disputifier / Chargehound
+## Evidence and API references
 
-| | Anchor | Competitors |
-|---|---|---|
-| EV calculation (fight vs accept) | ✅ Closed-form math, two-tier fees | ❌ Always fight |
-| HATEOAS lifecycle awareness | ✅ Checks PayPal's live links | ❌ Static assumptions |
-| INQUIRY stage handling | ✅ Sends buyer message before chargeback | ❌ Skip entirely |
-| High-volume tier ($30 fee) | ✅ Separate break-even formula | ❌ Flat fee assumption |
-| Abandoned checkout recovery | ✅ PayPal invoice on approved+uncaptured | ❌ Not in scope |
-| PayPal-native (no card network) | ✅ Disputes v1 + Orders v2 + Invoicing v2 | ❌ Card-network chargebacks |
-| Product evidence enrichment | ✅ Channel3 100M+ product graph | ❌ Manual only |
-| API grounding | ✅ APIMatic context plugin | ❌ Prompt engineering |
+- [PayPal Disputes API guide](https://developer.paypal.com/api/disputes/) — lifecycle, HATEOAS links, messages, evidence
+- [PayPal current dispute-rate criteria](https://www.paypal.com/us/cshelp/article/when-is-the-dispute-rate-applied-and-how-is-it-calculated-help350)
+- [PayPal Acceptable Use Policy](https://pep.paypal.com/us/legalhub/paypal/acceptableuse-full?country.x=US&locale.x=en_US)
+- [Render Free service limits](https://render.com/docs/free)
+- [Chargeflow pricing](https://www.chargeflow.io/pricing)
+- [Disputifier pricing](https://www.disputifier.com/pricing)
+- [Chargehound supported processors](https://www.chargehound.com/support)
