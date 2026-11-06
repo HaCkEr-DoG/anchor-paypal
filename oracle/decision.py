@@ -133,6 +133,7 @@ def calculate(
     high_volume_tier: bool = False,  # Confirmed/estimated PayPal fee tier; see README caveat
     dispute_fee_override: Optional[float] = None,  # user-supplied actual fee
     currency_code: str = "USD",  # ISO 4217 — Oracle fees are USD; non-USD produces a warning
+    buyer_risk_boost: float = 0.0,  # additive boost from fraud_detector.win_probability_boost
 ) -> OracleDecision:
     """
     Core Oracle calculation.
@@ -188,6 +189,11 @@ def calculate(
     # Evidence-adjusted probability
     evidence_multiplier = score_evidence(evidence, claim_type)
     p_win = min(p_base * evidence_multiplier, 0.95)  # Never claim 100%
+
+    # Buyer risk boost from fraud detector (applied before historical blend)
+    if buyer_risk_boost > 0:
+        p_win = min(p_win + buyer_risk_boost, 0.95)
+        reasoning.append(f"Buyer risk boost applied: +{buyer_risk_boost:.0%} → {p_win:.0%}")
 
     # If we have historical data from Elasticsearch, blend it in (40% weight)
     if similar_dispute_win_rate is not None:
