@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     _scheduler.add_job(_run_recovery_check, "cron", minute="*/15", id="recovery")
+    _scheduler.add_job(_run_deadline_check, "cron", minute="*/30", id="deadlines")
     _scheduler.add_job(
         _send_morning_brief, "cron",
         hour=_brief_hour, minute=0,
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
         timezone=ZoneInfo(_brief_tz),
     )
     _scheduler.start()
-    print(f"[Watcher] Scheduler started — recovery every 15 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
+    print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
     yield
     _scheduler.shutdown()
 
@@ -328,6 +329,24 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
 
     print(f"[Watcher] New dispute {dispute_id}: ${dispute_amount} ({reason})")
 
+    # Deadline tracking: store dispute so we never miss the response window
+    try:
+        from agents.deadline_tracker import store_open_dispute, OpenDispute, compute_deadline
+        _deadline = compute_deadline(
+            event.get("create_time", datetime.now(timezone.utc).isoformat()),
+            reason,
+        )
+        await store_open_dispute(OpenDispute(
+            dispute_id=dispute_id,
+            merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"),
+            amount=dispute_amount,
+            reason_code=reason,
+            opened_at=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+            response_deadline=_deadline,
+        ))
+    except Exception as _dt_exc:
+        print(f"[Watcher] Deadline tracker store failed (non-fatal): {_dt_exc}")
+
     # Route through Guardian — applies pre-auth thresholds before acting
     guardian = Guardian(
         merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"),
@@ -361,6 +380,42 @@ async def _handle_dispute_updated(event: dict, merchant_id: str = ""):
             merchant_id=merchant_id,
         )
     print(f"[Watcher] Dispute {dispute_id} updated → {status}")
+
+    # When a dispute resolves, record the outcome for Oracle calibration and
+    # remove it from the deadline-tracking index.
+    if status in ("RESOLVED", "CLOSED"):
+        try:
+            from agents.deadline_tracker import mark_dispute_resolved
+            await mark_dispute_resolved(dispute_id)
+        except Exception as _exc:
+            print(f"[Watcher] Deadline mark_resolved failed (non-fatal): {_exc}")
+
+        try:
+            from oracle.feedback import record_outcome, OutcomeRecord
+            _outcome_map = {
+                "WON_IN_FAVOR_OF_SELLER": "WON",
+                "RESOLVED_SELLER": "WON",
+                "WON_IN_FAVOR_OF_BUYER": "LOST",
+                "RESOLVED_BUYER": "LOST",
+            }
+            _seller_response = resource.get("seller_response_due_date", "")
+            _adjudication = resource.get("adjudications", [{}])[0] if resource.get("adjudications") else {}
+            _outcome_str = _adjudication.get("adjudication_type", status)
+            _actual_outcome = _outcome_map.get(_outcome_str.upper(), "LOST")
+            await record_outcome(OutcomeRecord(
+                dispute_id=dispute_id,
+                merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"),
+                claim_type=resource.get("reason", "UNKNOWN"),
+                oracle_prediction=0.0,  # actual prediction stored when fight was initiated
+                oracle_ev=0.0,
+                oracle_action="FIGHT",
+                actual_action="FIGHT",
+                actual_outcome=_actual_outcome,
+                dispute_amount=float(resource.get("dispute_amount", {}).get("value", 0)),
+            ))
+        except Exception as _exc:
+            print(f"[Watcher] Oracle outcome record failed (non-fatal): {_exc}")
+
     # Update Bryntum board state, notify if resolved in seller's favor
 
 
@@ -590,6 +645,26 @@ async def _run_recovery_check():
     recovery = RecoveryAgent()
     result = await recovery.scan_and_recover(merchant_id)
     print(f"[Watcher] Recovery check complete: {result}")
+
+
+async def _run_deadline_check():
+    """APScheduler job: sweep open disputes every 30 min, auto-accept before deadline."""
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    try:
+        from agents.deadline_tracker import check_deadlines
+
+        async def _notify(msg: str):
+            guardian = Guardian()
+            await guardian._notify(msg)
+
+        async def _auto_accept(dispute_id: str, amount: float, reason: str):
+            guardian = Guardian(merchant_id=merchant_id, approval_secret=APPROVAL_TOKEN_SECRET)
+            await guardian._accept_dispute(dispute_id, amount, reason=reason)
+
+        result = await check_deadlines(merchant_id, _notify, _auto_accept)
+        print(f"[Watcher] Deadline check complete: {result}")
+    except Exception as exc:
+        print(f"[Watcher] Deadline check failed (non-fatal): {exc}")
 
 
 @app.post("/morning-brief")
@@ -1664,3 +1739,74 @@ async def api_tracking_verify(tracking_number: str):
         "latest_status": result.latest_status,
         "carrier_url": result.carrier_url,
     })
+
+
+# ── Deadline Guardian ──────────────────────────────────────────────────────────
+
+@app.get("/api/deadlines/{merchant_id}")
+async def api_deadlines(merchant_id: str):
+    """
+    Open disputes with their response deadlines and alert levels.
+
+    Returns all non-resolved disputes tracked by the Deadline Guardian,
+    sorted by urgency (soonest deadline first).
+    """
+    from agents.deadline_tracker import get_open_disputes, hours_until_deadline
+    disputes = await get_open_disputes(merchant_id)
+    rows = [
+        {
+            "dispute_id": d.dispute_id,
+            "merchant_id": d.merchant_id,
+            "amount": d.amount,
+            "reason_code": d.reason_code,
+            "opened_at": d.opened_at,
+            "response_deadline": d.response_deadline,
+            "hours_remaining": round(hours_until_deadline(d.response_deadline), 1),
+            "last_alert_level": d.last_alert_level,
+            "auto_acted": d.auto_acted,
+            "win_probability": d.win_probability,
+        }
+        for d in disputes
+    ]
+    rows.sort(key=lambda r: r["hours_remaining"])
+    return JSONResponse({"disputes": rows, "count": len(rows)})
+
+
+@app.get("/api/deadlines")
+async def api_deadlines_default():
+    """Open deadlines for the default merchant (MERCHANT_ID env var)."""
+    return await api_deadlines(os.environ.get("MERCHANT_ID", "default"))
+
+
+# ── Oracle Calibration ────────────────────────────────────────────────────────
+
+@app.get("/api/oracle/calibration/{merchant_id}")
+async def api_oracle_calibration(merchant_id: str, limit: int = 500):
+    """
+    Oracle calibration statistics — how accurate are the win probability estimates?
+
+    Returns Brier score, actual vs predicted win rates by claim type, and
+    a recommendation quality classification. Use this to audit and tune Oracle.
+
+    Brier score guide: 0.25 = random, 0.0 = perfect, 0.10 = excellent.
+    """
+    from oracle.feedback import get_calibration_stats
+    stats = await get_calibration_stats(merchant_id, limit=limit)
+    return JSONResponse({
+        "merchant_id": stats.merchant_id,
+        "total_records": stats.total_records,
+        "brier_score": stats.brier_score,
+        "mean_prediction": stats.mean_prediction,
+        "actual_win_rate": stats.actual_win_rate,
+        "calibration_error": stats.calibration_error,
+        "oracle_accuracy": stats.oracle_accuracy,
+        "recommendation_quality": stats.recommendation_quality,
+        "win_rate_by_claim_type": stats.win_rate_by_claim_type,
+        "computed_at": stats.computed_at,
+    })
+
+
+@app.get("/api/oracle/calibration")
+async def api_oracle_calibration_default():
+    """Oracle calibration for the default merchant (MERCHANT_ID env var)."""
+    return await api_oracle_calibration(os.environ.get("MERCHANT_ID", "default"))

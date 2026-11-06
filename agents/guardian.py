@@ -108,6 +108,11 @@ class Guardian:
                 return
             win_probability = decision.win_probability
 
+        # Stash on instance so outcome recording in _accept_dispute/_fight_dispute can use them
+        self._last_win_prob = win_probability or 0.0
+        self._last_ev_fight = getattr(decision, "ev_fight", 0.0)
+        self._last_reason_code = reason_code
+
         # ── Dispute Rate Protection (account survival) ───────────────────────────
         # This is the most important guardrail: even if Oracle says FIGHT (EV > 0),
         # crossing PayPal's 1% threshold triggers account limitations that cost more
@@ -229,6 +234,52 @@ class Guardian:
                     )
                     await self._request_approval(dispute_id, dispute_amount, win_probability, decision)
                 return
+
+            # ── Settlement Negotiation Engine (make-offer third path) ────────────
+            # Before fighting, check if a partial settlement offer would have higher
+            # EV than fighting. Only valid when PayPal's HATEOAS links include make-offer.
+            if "make-offer" in permitted:
+                try:
+                    from agents.negotiator import evaluate_negotiation, submit_offer
+                    from oracle.decision import ClaimType
+                    _ct_map = {
+                        "ITEM_NOT_RECEIVED": ClaimType.ITEM_NOT_RECEIVED,
+                        "SIGNIFICANTLY_NOT_AS_DESCRIBED": ClaimType.SIGNIFICANTLY_NOT_AS_DESCRIBED,
+                        "UNAUTHORIZED": ClaimType.UNAUTHORIZED,
+                        "BILLING_ISSUES": ClaimType.BILLING_ISSUE,
+                        "BILLING_ISSUE": ClaimType.BILLING_ISSUE,
+                    }
+                    _claim_type = _ct_map.get(reason_code.upper(), ClaimType.ITEM_NOT_RECEIVED)
+                    negot = evaluate_negotiation(
+                        dispute_amount=dispute_amount,
+                        win_probability=win_probability or 0.0,
+                        claim_type=_claim_type,
+                        ev_fight=decision.ev_fight,
+                        high_volume_tier=(self.config.high_volume_fee_tier if self.config else False),
+                    )
+                    if negot.should_negotiate:
+                        print(
+                            f"[Guardian] Negotiation: offering ${negot.offer_amount:.2f} "
+                            f"({negot.offer_fraction:.0%}) for {dispute_id}. "
+                            f"EV(negotiate)=${negot.ev_negotiate:.2f} > EV(fight)=${negot.ev_fight:.2f}"
+                        )
+                        _negot_token = await self._get_token()
+                        success = await submit_offer(
+                            dispute_id=dispute_id,
+                            offer_amount=negot.offer_amount,
+                            paypal_base=self.paypal_base,
+                            token=_negot_token,
+                        )
+                        if success:
+                            await self._notify(
+                                f"🤝 Settlement offer: `{dispute_id}` — offered ${negot.offer_amount:.2f} "
+                                f"({negot.offer_fraction:.0%} of ${dispute_amount:.2f}).\n"
+                                f"{negot.reasoning}"
+                            )
+                            return
+                except Exception as exc:
+                    print(f"[Guardian] Negotiation error (non-fatal): {exc}")
+
             await self._fight_dispute(dispute_id, dispute_amount, win_probability, decision)
 
         else:
@@ -265,6 +316,30 @@ class Guardian:
             await self._notify(
                 f"✅ Auto-accepted ${amount:.2f} dispute `{dispute_id}` ({reason})"
             )
+
+        # Oracle calibration: record accepted outcome
+        try:
+            from oracle.feedback import record_outcome, OutcomeRecord
+            await record_outcome(OutcomeRecord(
+                dispute_id=dispute_id,
+                merchant_id=self.merchant_id or MERCHANT_ID,
+                claim_type=getattr(self, "_last_reason_code", "UNKNOWN"),
+                oracle_prediction=getattr(self, "_last_win_prob", 0.0),
+                oracle_ev=getattr(self, "_last_ev_fight", 0.0),
+                oracle_action="ACCEPT",
+                actual_action="ACCEPT",
+                actual_outcome="ACCEPTED",
+                dispute_amount=amount,
+            ))
+        except Exception:
+            pass
+
+        # Deadline tracking: dispute is resolved — remove from deadline index
+        try:
+            from agents.deadline_tracker import mark_dispute_resolved
+            await mark_dispute_resolved(dispute_id)
+        except Exception:
+            pass
 
     async def _send_inquiry_message(self, dispute_id: str, amount: float, decision):
         """
