@@ -28,8 +28,8 @@ class GuardianConfig:
     dispute_rate_alert: float = 0.020     # Alert when dispute rate crosses 2%
     dispute_rate_critical: float = 0.035  # Defer autonomous actions when rate approaches this level
     auto_protect_account: bool = True     # Defer to manual review when rate approaches critical
-    # High-volume fee tier: ≥1.5% dispute rate AND >100 transactions triggers $30 non-refundable fee.
-    # Guardian sets this dynamically; stored here so Oracle can use it in EV math.
+    # US PayPal high-volume eligibility: amount-based ratio ≥1.5% AND >100 sales
+    # transactions in the previous three full calendar months. Confirm against PayPal.
     high_volume_fee_tier: bool = False
 
     # Invoice

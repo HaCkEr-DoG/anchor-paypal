@@ -123,7 +123,7 @@ class DisputeClassifier:
 
         # Gather tracking evidence via KERNEL if available
         tracking = transaction.get("items", [{}])[0].get("tracking_info", {})
-        if tracking.get("tracking_number"):
+        if tracking.get("tracking_number") and str(tracking.get("status", "")).upper() == "DELIVERED":
             evidence_file = await assembler.gather_tracking_evidence(
                 tracking_number=tracking["tracking_number"],
                 carrier=tracking.get("carrier_name", "USPS"),

@@ -68,6 +68,10 @@ class Guardian:
         to decide whether to act autonomously or send a decision request.
         """
         await self._ensure_config()
+        cfg = self.config
+        # Refresh the fee-tier estimate before the first Oracle pass so the
+        # decision uses the current tier, not a stale default from app startup.
+        current_rate = await self._get_dispute_rate()
 
         # If win_probability not yet calculated, run Oracle now
         if win_probability is None or decision is None:
@@ -75,22 +79,27 @@ class Guardian:
             classifier = DisputeClassifier()
             decision = await classifier._run_oracle(
                 dispute_id, dispute_amount, reason_code, transaction_id, event_time,
-                high_volume_tier=self.config.high_volume_fee_tier if self.config else False,
+                high_volume_tier=(
+                    self.config.high_volume_fee_tier
+                    and reason_code.upper() not in {"UNAUTHORIZED", "UNAUTHORISED", "BILLING_ISSUES", "BILLING_ISSUE"}
+                    if self.config else False
+                ),
             )
             if decision is None:
                 # Fallback: let classifier handle it normally
                 await classifier.process(
                     dispute_id, dispute_amount, reason_code, transaction_id, event_time,
-                    high_volume_tier=self.config.high_volume_fee_tier if self.config else False,
+                    high_volume_tier=(
+                        self.config.high_volume_fee_tier
+                        and reason_code.upper() not in {"UNAUTHORIZED", "UNAUTHORISED", "BILLING_ISSUES", "BILLING_ISSUE"}
+                        if self.config else False
+                    ),
                 )
                 return
             win_probability = decision.win_probability
 
-        cfg = self.config
-
         # Account health guardrail
         if cfg.auto_protect_account:
-            current_rate = await self._get_dispute_rate()
             if current_rate >= cfg.dispute_rate_critical:
                 print(
                     f"[Guardian] Dispute rate {current_rate:.1%} ≥ critical "
@@ -135,7 +144,11 @@ class Guardian:
         permitted = await self._fetch_permitted_actions(dispute_id, token)
 
         # Pre-authorization routing
-        if cfg.auto_accept(dispute_amount):
+        if (
+            cfg.auto_accept(dispute_amount)
+            and decision.recommendation == Recommendation.ACCEPT
+            and decision.ev_fight <= 0
+        ):
             if "accept-claim" not in permitted:
                 print(
                     f"[Guardian] {dispute_id}: accept-claim not available "
@@ -145,11 +158,15 @@ class Guardian:
                 return
             await self._accept_dispute(dispute_id, dispute_amount, reason="below_threshold")
 
-        elif cfg.auto_fight(dispute_amount, win_probability):
+        elif (
+            cfg.auto_fight(dispute_amount, win_probability)
+            and decision.recommendation == Recommendation.FIGHT
+            and decision.ev_fight > 0
+        ):
             if "provide-evidence" not in permitted:
-                # During INQUIRY stage PayPal exposes send-message instead of provide-evidence.
-                # Posting tracking/delivery details directly to the buyer often closes the
-                # inquiry before it escalates to a chargeback — better EV than deferring.
+                # HATEOAS links, rather than our guessed lifecycle stage, govern actions.
+                # PayPal supports evidence submission in some INQUIRY cases; when it is not
+                # available, send a neutral message only if the live link permits it.
                 if "send-message" in permitted:
                     print(
                         f"[Guardian] {dispute_id}: INQUIRY stage detected — "
@@ -208,17 +225,10 @@ class Guardian:
         """
         token = await self._get_token()
         # Build a concise message from available evidence reasoning
-        evidence_summary = "; ".join(
-            r for r in (decision.reasoning if decision else [])
-            if any(kw in r.lower() for kw in ["tracking", "delivery", "evidence", "win"])
-        ) or "tracking and delivery records available on request"
-
         message = (
-            f"Hi — I see you've opened an inquiry on your recent ${amount:.2f} order. "
-            f"I'd like to resolve this quickly. Here's what I have on file: "
-            f"{evidence_summary}. "
-            f"Please let me know if this resolves your concern, or what additional "
-            f"information would help."
+            "Hello, we received your PayPal inquiry and would like to help resolve it. "
+            "Please reply with any details that would help us understand the issue. "
+            "We will review the order records and follow up through PayPal."
         )
 
         url = f"{self.paypal_base}/v1/customer/disputes/{dispute_id}/send-message"
@@ -236,6 +246,7 @@ class Guardian:
                     headers={"Authorization": f"Bearer {token}"},
                     data={"message": message},
                 )
+            r.raise_for_status()
             success = r.status_code in (200, 204)
 
         action = ActionRecord(
@@ -280,7 +291,7 @@ class Guardian:
         transaction = dispute_detail.get("disputed_transactions", [{}])[0]
 
         tracking = transaction.get("items", [{}])[0].get("tracking_info", {}) if transaction.get("items") else {}
-        if tracking.get("tracking_number"):
+        if tracking.get("tracking_number") and str(tracking.get("status", "")).upper() == "DELIVERED":
             f = await assembler.gather_tracking_evidence(
                 tracking_number=tracking["tracking_number"],
                 carrier=tracking.get("carrier_name", "USPS"),
@@ -300,12 +311,12 @@ class Guardian:
 
         action = ActionRecord(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            action_type="dispute_fought",
+            action_type="dispute_fought" if result else "dispute_pending",
             dispute_id=dispute_id,
             amount=amount,
             win_probability=win_prob,
             outcome="evidence_submitted" if result else "insufficient_evidence",
-            reasoning=f"Auto-fought: {win_prob:.0%} win probability",
+            reasoning=(f"Evidence submitted after approval; model win estimate {win_prob:.0%}" if result else f"Evidence unavailable or insufficient; review needed ({win_prob:.0%} model win estimate)"),
             requires_attention=result is None,
         )
         await log_action(MERCHANT_ID, action)
@@ -414,36 +425,45 @@ class Guardian:
                 # Normalize rel strings: PayPal sandbox sometimes serializes
                 # "send_message" (underscore) while docs show "send-message" (hyphen).
                 # Also accept href-path matching as a fallback.
-                return {
-                    link["rel"].replace("_", "-").lower()
-                    for link in links if "rel" in link
-                }
+                rels = set()
+                for link in links:
+                    rel = link.get("rel")
+                    if rel:
+                        rels.add(rel.replace("_", "-").lower())
+                return rels
         except Exception as e:
             print(f"[Guardian] Could not fetch permitted actions for {dispute_id}: {e}")
             return set()
 
     async def _get_dispute_rate(self) -> float:
         """
-        Query Elasticsearch for dispute rate over the last 30 days.
-        Dispute rate = disputes / total transactions.
+        Approximate the PayPal tier using the previous three complete calendar months.
+        PayPal's published US rule is amount-based for eligible INR/SNAD claims;
+        this uses only recorded events and must remain a fallback when data is incomplete.
         Also updates high_volume_fee_tier on config:
           True when rate ≥ 1.5% AND transaction count > 100.
         """
         es_url = os.environ.get("ELASTICSEARCH_URL")
         es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+        confirmed_tier = os.environ.get("PAYPAL_HIGH_VOLUME_FEE_TIER")
+        if self.config is not None and confirmed_tier is not None:
+            self.config.high_volume_fee_tier = confirmed_tier.strip().lower() in {"1", "true", "yes", "high"}
         if not es_url or not es_key:
             return 0.0
 
-        since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        now = datetime.now(timezone.utc)
+        month_index = now.year * 12 + now.month - 1
+        first_this_month = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        start_index = month_index - 3
+        since = datetime(start_index // 12, start_index % 12 + 1, 1, tzinfo=timezone.utc).isoformat()
         query = {
-            "query": {
-                "range": {
-                    "timestamp": {"gte": since}
-                }
-            },
+            "query": {"bool": {"filter": [
+                {"term": {"merchant_id": self.config.merchant_id}},
+                {"range": {"timestamp": {"gte": since, "lt": first_this_month.isoformat()}}},
+            ]}},
             "aggs": {
-                "dispute_count": {"filter": {"term": {"event_type": "dispute"}}},
-                "transaction_count": {"filter": {"term": {"event_type": "capture"}}},
+                "eligible_disputes": {"filter": {"term": {"event_type": "eligible_dispute"}}, "aggs": {"amount": {"sum": {"field": "amount"}}}},
+                "sales": {"filter": {"term": {"event_type": "capture"}}, "aggs": {"amount": {"sum": {"field": "amount"}}, "count": {"value_count": {"field": "event_id"}}}},
             },
             "size": 0,
         }
@@ -459,13 +479,17 @@ class Guardian:
                     timeout=3.0,
                 )
                 aggs = r.json().get("aggregations", {})
-                disputes = aggs.get("dispute_count", {}).get("doc_count", 0)
-                transactions = aggs.get("transaction_count", {}).get("doc_count", 1)
-                rate = disputes / max(transactions, 1)
+                disputes_amount = aggs.get("eligible_disputes", {}).get("amount", {}).get("value", 0) or 0
+                sales = aggs.get("sales", {})
+                sales_amount = sales.get("amount", {}).get("value", 0) or 0
+                transactions = sales.get("doc_count", 0) or 0
+                rate = disputes_amount / sales_amount if sales_amount > 0 else 0.0
                 if self.config is not None:
-                    self.config.high_volume_fee_tier = (
-                        rate >= 0.015 and transactions > 100
-                    )
+                    confirmed_tier = os.environ.get("PAYPAL_HIGH_VOLUME_FEE_TIER")
+                    if confirmed_tier is not None:
+                        self.config.high_volume_fee_tier = confirmed_tier.strip().lower() in {"1", "true", "yes", "high"}
+                    elif transactions > 100 and sales_amount > 0:
+                        self.config.high_volume_fee_tier = rate >= 0.015
                 return rate
         except Exception:
             return 0.0

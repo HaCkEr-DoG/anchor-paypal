@@ -43,7 +43,7 @@ class Evidence:
 class OracleDecision:
     recommendation: Recommendation
     ev_fight: float           # expected value of fighting (can be negative)
-    ev_accept: float          # always negative: -dispute_amount
+    ev_accept: float          # incremental recovery value of accepting: $0 baseline
     win_probability: float
     confidence: float         # 0-1, how confident the Oracle is
     break_even_probability: float  # minimum p(win) needed to make fighting worth it
@@ -63,7 +63,7 @@ BASE_WIN_RATES = {
 
 # PayPal charges two fee tiers:
 #   Standard:    $15, REFUNDABLE on win
-#   High-volume: $30, NON-REFUNDABLE (triggered at ≥1.5% dispute rate AND >100 transactions)
+#   US high-volume: $30, NON-REFUNDABLE (eligible ratio ≥1.5% AND >100 sales in previous 3 full months)
 PAYPAL_DISPUTE_FEE_STANDARD = 15.00
 PAYPAL_DISPUTE_FEE_HIGH_VOLUME = 30.00
 # time_cost = HOURS_TO_FIGHT × hourly_rate represents the merchant's operational cost.
@@ -130,14 +130,14 @@ def calculate(
     deadline_hours: int = 72,
     seller_hourly_rate: float = DEFAULT_HOURLY_RATE,
     similar_dispute_win_rate: Optional[float] = None,  # from Elasticsearch history
-    high_volume_tier: bool = False,  # True when dispute rate ≥1.5% AND >100 transactions
+    high_volume_tier: bool = False,  # Confirmed/estimated PayPal fee tier; see README caveat
     dispute_fee_override: Optional[float] = None,  # user-supplied actual fee
 ) -> OracleDecision:
     """
     Core Oracle calculation.
 
     EV(fight)  = P(win) × amount − effective_cost
-    EV(accept) = −amount  (you lose the sale)
+    EV(accept) = 0 (incremental recovery baseline; the disputed funds are already at risk)
 
     Standard tier:    effective_cost = time_cost + (1−p_win) × $15
     High-volume tier: effective_cost = time_cost + $30
@@ -146,6 +146,15 @@ def calculate(
       Standard:    p_break = (time_cost + 15) / (amount + 15)
       High-volume: p_break = (time_cost + 30) / amount
     """
+    if not math.isfinite(dispute_amount) or dispute_amount < 0:
+        raise ValueError("dispute_amount must be a finite, non-negative number")
+    if not math.isfinite(seller_hourly_rate) or seller_hourly_rate < 0:
+        raise ValueError("seller_hourly_rate must be a finite, non-negative number")
+    if dispute_fee_override is not None and (
+        not math.isfinite(dispute_fee_override) or dispute_fee_override < 0
+    ):
+        raise ValueError("dispute_fee_override must be a finite, non-negative number")
+
     reasoning = []
 
     # Fee tier — user override takes priority
@@ -170,9 +179,11 @@ def calculate(
 
     # If we have historical data from Elasticsearch, blend it in (40% weight)
     if similar_dispute_win_rate is not None:
-        p_win = min((p_win * 0.6) + (similar_dispute_win_rate * 0.4), 0.95)
+        # Treat history as a probability input, not an unconstrained multiplier.
+        historical_rate = min(max(float(similar_dispute_win_rate), 0.0), 1.0)
+        p_win = min(max((p_win * 0.6) + (historical_rate * 0.4), 0.0), 0.95)
         reasoning.append(
-            f"Blended with {similar_dispute_win_rate:.0%} historical win rate "
+            f"Blended with {historical_rate:.0%} historical win rate "
             f"from similar past disputes → adjusted to {p_win:.0%}"
         )
     else:
@@ -183,7 +194,7 @@ def calculate(
     # Break-even: solve EV(fight) = 0 for p analytically.
     # Standard tier: p*(A+15) = time+15  →  p = (time+15)/(A+15)
     # High-volume:   p*A      = time+30  →  p = (time+30)/A
-    if dispute_amount <= 0:
+    if dispute_amount == 0:
         break_even = 1.0
     elif high_volume_tier:
         break_even = (time_cost + dispute_fee) / dispute_amount
@@ -203,16 +214,19 @@ def calculate(
     else:
         effective_cost = time_cost + (1 - p_win) * dispute_fee
     ev_fight = (p_win * dispute_amount) - effective_cost
-    ev_accept = -dispute_amount  # Worst case: you just lose it
+    # Both actions use the same incremental-recovery baseline. Accepting the
+    # dispute recovers none of the disputed amount; fighting earns expected
+    # recovery minus its handling and fee costs.
+    ev_accept = 0.0
 
     reasoning.append(
         f"EV(fight) = {p_win:.0%} × ${dispute_amount:.2f} - ${effective_cost:.0f} effective cost = ${ev_fight:.2f}"
     )
-    reasoning.append(f"EV(accept) = -${dispute_amount:.2f}")
+    reasoning.append("EV(accept) = $0.00 incremental recovery (accepting yields no recovery)")
 
     # Decision
-    ev_delta = ev_fight - ev_accept  # How much better fighting is vs accepting
-    if ev_fight > 0:
+    ev_delta = ev_fight - ev_accept
+    if ev_fight > ev_accept:
         recommendation = Recommendation.FIGHT
         reasoning.append(f"→ FIGHT: expected gain ${ev_fight:.2f}")
     elif p_win > break_even * 0.85 and _has_critical_evidence_gap(evidence, claim_type):
@@ -264,8 +278,9 @@ if __name__ == "__main__":
         evidence=Evidence(
             has_tracking_number=True,
             has_delivery_confirmation=True,
-            seller_account_age_days=730,
-            seller_dispute_win_rate=0.65,
+            # Neutral account history keeps this example focused on delivery proof.
+            seller_account_age_days=365,
+            seller_dispute_win_rate=0.5,
         ),
     )
     print(f"\nScenario 1: $45 INR with tracking")
