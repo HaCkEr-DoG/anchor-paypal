@@ -1,50 +1,17 @@
 """
-Win Probability Calibrator — combine all available signals into a final
-calibrated P(win) for a dispute, incorporating fraud signals, evidence quality,
-CE3.0 eligibility, and claim-type base rates.
+Win Probability Calibrator — produce a calibrated win probability
+estimate for a dispute by combining base rates with signal adjustments.
 
-This module serves as the central aggregator that takes outputs from multiple
-other oracle modules and produces a single, well-calibrated win probability
-for use in the EV model.
+Starts from base rates by reason code, then applies modifiers for:
+  - Evidence quality and completeness
+  - CE3.0 eligibility (Visa unauthorized only)
+  - Buyer risk profile
+  - Network-specific tendencies
+  - Deadline pressure (last-minute responses win less)
+  - Seller protection eligibility
+  - Prior dispute outcomes with this buyer
 
-Base win rates (empirical PayPal merchant averages):
-  INR + SP eligible     → 0.72
-  INR + no SP           → 0.55
-  SNAD                  → 0.42
-  UNAUTHORIZED + CE3.0  → 0.76 (CE3.0 adds ~18pp)
-  UNAUTHORIZED          → 0.58
-  DUPLICATE             → 0.78
-  SUBSCRIPTION          → 0.60
-
-Adjustment factors (additive):
-  Evidence quality score:
-    STRONG   (≥80) → +0.12
-    ADEQUATE (≥60) → +0.05
-    WEAK     (≥40) → 0.00
-    POOR     (<40) → −0.10
-
-  Fraud risk level:
-    HIGH_RISK   → +0.15
-    MEDIUM_RISK → +0.07
-    LOW_RISK    → 0.00
-
-  Seller Protection status:
-    FULLY_ELIGIBLE       → +0.08
-    CONDITIONALLY_ELIGIBLE → +0.03
-    INELIGIBLE           → −0.05  (absence hurts for INR)
-
-  Response speed:
-    Responded ≤ 2 days   → +0.04
-    Responded 3–7 days   → 0.00
-    No response yet      → −0.08
-
-  Deadline proximity:
-    > 7 days remaining   → 0.00
-    4–7 days             → −0.02
-    1–3 days             → −0.06
-    Overdue              → −0.15
-
-Final probability is clamped to [0.02, 0.97].
+Final probability clamped to [0.02, 0.97].
 
 This is a pure oracle module — no I/O, no persistence.
 """
@@ -56,244 +23,236 @@ from enum import Enum
 from typing import Optional
 
 
-class ClaimTypeBase(str, Enum):
-    INR_WITH_SP    = "INR_WITH_SP"
-    INR_NO_SP      = "INR_NO_SP"
-    SNAD           = "SNAD"
-    UNAUTHORIZED_CE30 = "UNAUTHORIZED_CE30"
-    UNAUTHORIZED   = "UNAUTHORIZED"
-    DUPLICATE      = "DUPLICATE"
-    SUBSCRIPTION   = "SUBSCRIPTION"
-    OTHER          = "OTHER"
+# Base win rates by reason code (empirical medians from PayPal/network data)
+_BASE_WIN_RATES: dict[str, float] = {
+    "INR":           0.52,
+    "ITEM_NOT_RECEIVED": 0.52,
+    "SNAD":          0.38,
+    "SIGNIFICANTLY_NOT_AS_DESCRIBED": 0.38,
+    "UNAUTHORIZED":  0.45,
+    "10.4":          0.40,
+    "4807":          0.70,
+    "SUBSCRIPTION":  0.55,
+    "12.6":          0.65,
+    "13.1":          0.50,
+    "13.3":          0.35,
+    "4853":          0.38,
+    "DEFAULT":       0.45,
+}
+
+# Network multipliers (some networks favor merchants/buyers more)
+_NETWORK_MULTIPLIERS: dict[str, float] = {
+    "PAYPAL":   1.00,
+    "VISA":     1.05,   # Visa process slightly favors merchants with strong evidence
+    "MC":       1.00,
+    "AMEX":     0.92,   # Amex historically more buyer-friendly
+    "DISCOVER": 1.03,
+}
 
 
-@dataclass
-class CalibrationFactor:
-    """One adjustment factor in the calibration."""
-    name: str
-    base_value: float    # Starting or current value this factor acts on
-    adjustment: float    # Delta to win probability (signed)
-    description: str
+class CalibrationConfidence(str, Enum):
+    HIGH   = "HIGH"    # Many signals → tight confidence interval
+    MEDIUM = "MEDIUM"  # Some signals → moderate confidence
+    LOW    = "LOW"     # Few signals → wide confidence interval
 
 
 @dataclass
 class WinProbabilityInput:
-    """Input for win probability calibration."""
+    """All signals used to calibrate win probability."""
     dispute_id: str
-    claim_type: str               # INR / SNAD / UNAUTHORIZED / DUPLICATE / SUBSCRIPTION
+    reason_code: str
+    network: str
 
-    # SP status (from seller_protection_checker)
-    sp_eligible: bool = False
-    sp_conditionally_eligible: bool = False
+    # Evidence quality
+    evidence_completeness_score: int = 50     # 0–100
+    has_tracking_with_delivery: bool = False
+    has_signature_confirmation: bool = False
+    has_3ds_authentication: bool = False
+    has_avs_match: bool = False
+    has_buyer_communication: bool = False
 
-    # CE3.0 status (from CE3.0 checker, Visa + UNAUTHORIZED only)
-    ce30_eligible: bool = False
+    # CE3.0
+    ce3_eligible: bool = False                # +18pp if eligible (Visa unauthorized)
 
-    # Evidence quality (from evidence_quality_scorer — 0–100 or category string)
-    evidence_score: float = 60.0   # 0–100
-    evidence_category: str = "ADEQUATE"  # STRONG / ADEQUATE / WEAK / POOR
+    # Buyer profile
+    buyer_risk_class: str = "NORMAL"          # TRUSTED → boosts; FRAUDSTER → boosts fight too
+    buyer_dispute_count: int = 0
 
-    # Fraud signals (from buyer_fraud_detector)
-    fraud_risk_level: str = "LOW_RISK"  # HIGH_RISK / MEDIUM_RISK / LOW_RISK
+    # Timeline
+    days_remaining_in_window: int = 10
+    response_window_days: int = 20
 
-    # Response timing
-    merchant_responded: bool = True
-    days_until_response: int = 1       # Days from dispute open to merchant response
+    # SP
+    seller_protection_eligible: bool = False
 
-    # Deadline proximity
-    days_remaining_to_respond: int = 10  # Days left before deadline
-
-    # Custom base override (optional — skips claim-type lookup)
-    custom_base_p_win: Optional[float] = None
-
-
-_BASE_RATES: dict[str, float] = {
-    "INR_WITH_SP":    0.72,
-    "INR_NO_SP":      0.55,
-    "INR":            0.55,  # Fallback when SP status unknown
-    "SNAD":           0.42,
-    "UNAUTHORIZED_CE30": 0.76,
-    "UNAUTHORIZED":   0.58,
-    "DUPLICATE":      0.78,
-    "SUBSCRIPTION":   0.60,
-    "OTHER":          0.50,
-}
-
-
-def _base_rate(inp: WinProbabilityInput) -> tuple[float, str]:
-    """Return (base_p_win, key_used)."""
-    if inp.custom_base_p_win is not None:
-        return inp.custom_base_p_win, "CUSTOM"
-
-    ct = inp.claim_type.upper()
-    if ct == "INR":
-        if inp.sp_eligible:
-            return _BASE_RATES["INR_WITH_SP"], "INR_WITH_SP"
-        return _BASE_RATES["INR_NO_SP"], "INR_NO_SP"
-    if ct == "UNAUTHORIZED":
-        if inp.ce30_eligible:
-            return _BASE_RATES["UNAUTHORIZED_CE30"], "UNAUTHORIZED_CE30"
-        return _BASE_RATES["UNAUTHORIZED"], "UNAUTHORIZED"
-
-    return _BASE_RATES.get(ct, _BASE_RATES["OTHER"]), ct
-
-
-def _evidence_adjustment(inp: WinProbabilityInput) -> CalibrationFactor:
-    cat = inp.evidence_category.upper()
-    if cat == "STRONG" or inp.evidence_score >= 80:
-        adj = 0.12
-        desc = f"Strong evidence quality (score={inp.evidence_score:.0f}) → +12pp"
-    elif cat == "ADEQUATE" or inp.evidence_score >= 60:
-        adj = 0.05
-        desc = f"Adequate evidence quality (score={inp.evidence_score:.0f}) → +5pp"
-    elif cat == "WEAK" or inp.evidence_score >= 40:
-        adj = 0.00
-        desc = f"Weak evidence quality (score={inp.evidence_score:.0f}) → 0pp"
-    else:
-        adj = -0.10
-        desc = f"Poor evidence quality (score={inp.evidence_score:.0f}) → −10pp"
-    return CalibrationFactor("evidence_quality", inp.evidence_score, adj, desc)
-
-
-def _fraud_adjustment(inp: WinProbabilityInput) -> CalibrationFactor:
-    fl = inp.fraud_risk_level.upper()
-    if fl == "HIGH_RISK":
-        adj = 0.15
-        desc = "High fraud risk detected → +15pp (buyer likely fabricating)"
-    elif fl == "MEDIUM_RISK":
-        adj = 0.07
-        desc = "Medium fraud risk detected → +7pp (mixed signals)"
-    else:
-        adj = 0.00
-        desc = "Low fraud risk → no adjustment"
-    return CalibrationFactor("fraud_risk", 0.0, adj, desc)
-
-
-def _sp_adjustment(inp: WinProbabilityInput) -> CalibrationFactor:
-    ct = inp.claim_type.upper()
-    if ct == "SNAD":
-        return CalibrationFactor("seller_protection", 0.0, 0.0,
-                                 "SP does not apply to SNAD — no adjustment")
-    if inp.sp_eligible:
-        adj = 0.08
-        desc = "SP fully eligible → +8pp (chargeback fee waived + stronger case)"
-    elif inp.sp_conditionally_eligible:
-        adj = 0.03
-        desc = "SP conditionally eligible → +3pp (pending gap resolution)"
-    else:
-        adj = -0.05
-        desc = "SP ineligible → −5pp (no fee protection, weaker position)"
-    return CalibrationFactor("seller_protection", 0.0, adj, desc)
-
-
-def _response_adjustment(inp: WinProbabilityInput) -> CalibrationFactor:
-    if not inp.merchant_responded:
-        adj = -0.08
-        desc = "No merchant response yet → −8pp (weakens case)"
-    elif inp.days_until_response <= 2:
-        adj = 0.04
-        desc = f"Quick response ({inp.days_until_response}d) → +4pp"
-    else:
-        adj = 0.00
-        desc = f"Response in {inp.days_until_response} days → 0pp"
-    return CalibrationFactor("response_speed", 0.0, adj, desc)
-
-
-def _deadline_adjustment(inp: WinProbabilityInput) -> CalibrationFactor:
-    d = inp.days_remaining_to_respond
-    if d < 0:
-        adj = -0.15
-        desc = "Deadline overdue → −15pp (critical evidence submission risk)"
-    elif d <= 3:
-        adj = -0.06
-        desc = f"{d}d remaining → −6pp (deadline pressure)"
-    elif d <= 7:
-        adj = -0.02
-        desc = f"{d}d remaining → −2pp (mild deadline pressure)"
-    else:
-        adj = 0.00
-        desc = f"{d}d remaining → 0pp (comfortable timeline)"
-    return CalibrationFactor("deadline_proximity", d, adj, desc)
+    # Historical performance
+    merchant_win_rate_90d: Optional[float] = None   # Merchant's actual 90d win rate
+    prior_wins_this_reason: int = 0
+    prior_disputes_this_reason: int = 0
 
 
 @dataclass
-class CalibratedWinProbability:
-    """Fully calibrated win probability report."""
+class ProbabilityAdjustment:
+    """One signal's contribution to the final probability."""
+    signal: str
+    adjustment: float    # Positive = boosts win prob; negative = reduces
+    rationale: str
+
+
+@dataclass
+class WinProbabilityReport:
+    """Calibrated win probability with breakdown."""
     dispute_id: str
+    reason_code: str
+    network: str
 
-    base_p_win: float              # Starting value from base rates
-    base_rate_key: str             # Which base rate was used
+    base_rate: float
+    network_multiplied: float
+    final_probability: float
 
-    factors: list[CalibrationFactor]
-    total_adjustment: float        # Sum of all factor adjustments
+    adjustments: list[ProbabilityAdjustment]
+    total_adjustment: float
 
-    final_p_win: float             # Clamped final probability
-    confidence_band_low: float     # 90% confidence interval low
-    confidence_band_high: float    # 90% confidence interval high
+    confidence: CalibrationConfidence
+    confidence_interval_low: float    # 95% CI lower
+    confidence_interval_high: float   # 95% CI upper
 
-    # Key drivers
-    strongest_positive_factor: str
-    strongest_negative_factor: str
-
-    # Guidance
-    fight_recommended: bool        # True if P(win) makes fighting economical
-    fight_threshold: float         # Breakeven P(win) for context
-
+    key_drivers: list[str]            # Top positive and negative factors
     summary: str
 
 
-def calibrate_win_probability(
-        inp: WinProbabilityInput,
-        fight_threshold: float = 0.45) -> CalibratedWinProbability:
-    """
-    Produce a calibrated win probability by combining all available signals.
-    """
-    base_p, base_key = _base_rate(inp)
+def calibrate_win_probability(inp: WinProbabilityInput) -> WinProbabilityReport:
+    """Calibrate a dispute's win probability from all available signals."""
+    code = inp.reason_code.upper()
+    net  = inp.network.upper()
 
-    factors = [
-        _evidence_adjustment(inp),
-        _fraud_adjustment(inp),
-        _sp_adjustment(inp),
-        _response_adjustment(inp),
-        _deadline_adjustment(inp),
-    ]
+    base = _BASE_WIN_RATES.get(code, _BASE_WIN_RATES["DEFAULT"])
+    net_mult = _NETWORK_MULTIPLIERS.get(net, 1.0)
+    after_network = round(base * net_mult, 4)
 
-    total_adj = sum(f.adjustment for f in factors)
-    raw_final = base_p + total_adj
-    final_p   = round(max(0.02, min(0.97, raw_final)), 4)
+    adjustments: list[ProbabilityAdjustment] = []
 
-    # Confidence band: ±10pp typical calibration uncertainty
-    uncertainty = 0.10
-    band_low  = round(max(0.0, final_p - uncertainty), 4)
-    band_high = round(min(1.0, final_p + uncertainty), 4)
+    # ── Evidence adjustments ──────────────────────────────────────────────────
+    if inp.evidence_completeness_score >= 80:
+        adj = +0.08
+        adjustments.append(ProbabilityAdjustment("evidence_completeness", adj, f"Strong evidence ({inp.evidence_completeness_score}/100)"))
+    elif inp.evidence_completeness_score >= 60:
+        adj = +0.03
+        adjustments.append(ProbabilityAdjustment("evidence_completeness", adj, f"Adequate evidence ({inp.evidence_completeness_score}/100)"))
+    elif inp.evidence_completeness_score < 40:
+        adj = -0.10
+        adjustments.append(ProbabilityAdjustment("evidence_completeness", adj, f"Weak evidence ({inp.evidence_completeness_score}/100)"))
 
-    # Strongest drivers
-    positive_factors = [(f.name, f.adjustment) for f in factors if f.adjustment > 0]
-    negative_factors = [(f.name, f.adjustment) for f in factors if f.adjustment < 0]
-    strongest_pos = max(positive_factors, key=lambda x: x[1])[0] if positive_factors else "none"
-    strongest_neg = min(negative_factors, key=lambda x: x[1])[0] if negative_factors else "none"
+    if inp.has_tracking_with_delivery:
+        adjustments.append(ProbabilityAdjustment("tracking_delivery", +0.08, "Delivery confirmation available"))
 
-    fight_rec = final_p >= fight_threshold
+    if inp.has_signature_confirmation:
+        adjustments.append(ProbabilityAdjustment("signature", +0.06, "Signature confirmation available"))
+
+    if inp.has_3ds_authentication:
+        adjustments.append(ProbabilityAdjustment("3ds_auth", +0.10, "3DS authentication passed"))
+    elif code in ("UNAUTHORIZED", "10.4", "4807") and not inp.has_3ds_authentication:
+        adjustments.append(ProbabilityAdjustment("no_3ds_unauth", -0.08, "No 3DS for unauthorized dispute"))
+
+    if inp.has_avs_match:
+        adjustments.append(ProbabilityAdjustment("avs_match", +0.04, "AVS match confirms cardholder address"))
+
+    if inp.has_buyer_communication:
+        adjustments.append(ProbabilityAdjustment("buyer_comms", +0.05, "Communication log documents buyer interaction"))
+
+    # ── CE3.0 boost ───────────────────────────────────────────────────────────
+    if inp.ce3_eligible:
+        adjustments.append(ProbabilityAdjustment("ce3_eligible", +0.18, "CE3.0 package available — +18pp win rate boost"))
+
+    # ── Seller protection ─────────────────────────────────────────────────────
+    if inp.seller_protection_eligible:
+        adjustments.append(ProbabilityAdjustment("seller_protection", +0.12, "Seller Protection eligible — network backs merchant"))
+
+    # ── Buyer risk ────────────────────────────────────────────────────────────
+    risk_adj = {
+        "TRUSTED":   +0.05,
+        "NORMAL":     0.00,
+        "ELEVATED":  -0.05,
+        "HIGH_RISK": +0.08,    # Networks favor merchants fighting serial abusers
+        "FRAUDSTER": +0.10,
+    }
+    buyer_adj = risk_adj.get(inp.buyer_risk_class.upper(), 0.0)
+    if buyer_adj != 0:
+        adjustments.append(ProbabilityAdjustment(
+            "buyer_risk", buyer_adj,
+            f"Buyer risk class {inp.buyer_risk_class}: {'serial abuser → fight bonus' if buyer_adj > 0 and inp.buyer_risk_class not in ('TRUSTED',) else 'trusted buyer' if buyer_adj > 0 else 'elevated risk buyer'}",
+        ))
+
+    # ── Deadline pressure ─────────────────────────────────────────────────────
+    if inp.days_remaining_in_window <= 2:
+        adjustments.append(ProbabilityAdjustment("deadline_pressure", -0.07, "Response filed at last minute — less persuasive"))
+    elif inp.days_remaining_in_window >= inp.response_window_days * 0.8:
+        adjustments.append(ProbabilityAdjustment("early_response", +0.03, "Filed early in window — thoroughness signal"))
+
+    # ── Historical merchant win rate ──────────────────────────────────────────
+    if inp.merchant_win_rate_90d is not None:
+        diff = inp.merchant_win_rate_90d - base
+        if abs(diff) > 0.05:
+            clamped = max(-0.10, min(0.10, diff * 0.5))
+            adjustments.append(ProbabilityAdjustment(
+                "merchant_history", round(clamped, 4),
+                f"Merchant 90d win rate {inp.merchant_win_rate_90d:.0%} vs base {base:.0%}",
+            ))
+
+    # ── Prior outcomes with same reason code ─────────────────────────────────
+    if inp.prior_disputes_this_reason >= 3:
+        local_win_rate = inp.prior_wins_this_reason / inp.prior_disputes_this_reason
+        diff = local_win_rate - base
+        if abs(diff) > 0.05:
+            clamped = max(-0.08, min(0.08, diff * 0.4))
+            adjustments.append(ProbabilityAdjustment(
+                "local_history", round(clamped, 4),
+                f"Prior {inp.reason_code} win rate: {local_win_rate:.0%} ({inp.prior_wins_this_reason}/{inp.prior_disputes_this_reason})",
+            ))
+
+    # ── Final probability ─────────────────────────────────────────────────────
+    total_adj = round(sum(a.adjustment for a in adjustments), 4)
+    final = after_network + total_adj
+    final = max(0.02, min(0.97, round(final, 4)))
+
+    # ── Confidence ────────────────────────────────────────────────────────────
+    signal_count = len(adjustments)
+    if signal_count >= 6:
+        conf = CalibrationConfidence.HIGH
+        ci_half = 0.08
+    elif signal_count >= 3:
+        conf = CalibrationConfidence.MEDIUM
+        ci_half = 0.13
+    else:
+        conf = CalibrationConfidence.LOW
+        ci_half = 0.18
+
+    ci_low  = max(0.01, round(final - ci_half, 2))
+    ci_high = min(0.99, round(final + ci_half, 2))
+
+    # ── Key drivers ───────────────────────────────────────────────────────────
+    sorted_adjs = sorted(adjustments, key=lambda a: abs(a.adjustment), reverse=True)
+    key_drivers = [f"{'+' if a.adjustment >= 0 else ''}{a.adjustment:+.0%} {a.signal}: {a.rationale}"
+                   for a in sorted_adjs[:4]]
 
     summary = (
-        f"WinProb {inp.dispute_id}: "
-        f"base={base_p:.0%} ({base_key}) | adj={total_adj:+.0%} | "
-        f"final={final_p:.0%} [{band_low:.0%}–{band_high:.0%}] | "
-        f"fight={'YES' if fight_rec else 'NO'}"
+        f"WinProb {inp.dispute_id} [{net}|{inp.reason_code}]: "
+        f"base={base:.0%} → final={final:.0%} (adj={total_adj:+.0%}) | "
+        f"CI=[{ci_low:.0%},{ci_high:.0%}] conf={conf.value}"
     )
 
-    return CalibratedWinProbability(
+    return WinProbabilityReport(
         dispute_id=inp.dispute_id,
-        base_p_win=base_p,
-        base_rate_key=base_key,
-        factors=factors,
-        total_adjustment=round(total_adj, 4),
-        final_p_win=final_p,
-        confidence_band_low=band_low,
-        confidence_band_high=band_high,
-        strongest_positive_factor=strongest_pos,
-        strongest_negative_factor=strongest_neg,
-        fight_recommended=fight_rec,
-        fight_threshold=fight_threshold,
+        reason_code=inp.reason_code,
+        network=net,
+        base_rate=base,
+        network_multiplied=after_network,
+        final_probability=final,
+        adjustments=adjustments,
+        total_adjustment=total_adj,
+        confidence=conf,
+        confidence_interval_low=ci_low,
+        confidence_interval_high=ci_high,
+        key_drivers=key_drivers,
         summary=summary,
     )
