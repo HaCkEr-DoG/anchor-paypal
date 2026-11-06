@@ -89,6 +89,9 @@ class AccountHealth:
     # Raw context
     open_disputes: int             # count of unresolved disputes right now
     checked_at: str
+    # Trajectory forecasting (new)
+    rate_velocity_per_day: float = 0.0        # positive = rising, negative = falling
+    days_until_next_threshold: Optional[int] = None  # None if rate stable/falling
 
 
 def classify_rate(rate: float) -> tuple[str, str]:
@@ -151,6 +154,10 @@ async def get_account_health(merchant_id: str, open_disputes: int = 0) -> Accoun
     # Fight posture
     posture, posture_reason = _calculate_posture(status, safe_quota_count, open_disputes)
 
+    # Trajectory: compare 7-day rate to 30-day rate to get velocity
+    w7 = await _query_window(merchant_id, 7, es_url, es_key)
+    velocity, days_to_breach = _compute_trajectory(rate_30d, w7.rate_by_amount, next_t)
+
     return AccountHealth(
         merchant_id=merchant_id,
         window_30d=w30,
@@ -167,6 +174,8 @@ async def get_account_health(merchant_id: str, open_disputes: int = 0) -> Accoun
         posture_reason=posture_reason,
         open_disputes=open_disputes,
         checked_at=datetime.now(timezone.utc).isoformat(),
+        rate_velocity_per_day=round(velocity, 6),
+        days_until_next_threshold=days_to_breach,
     )
 
 
@@ -229,6 +238,28 @@ async def should_protect_rate(
 
     # fight_freely — no override
     return False, "", health
+
+
+def _compute_trajectory(
+    rate_30d: float,
+    rate_7d: float,
+    next_threshold: float,
+) -> tuple[float, Optional[int]]:
+    """
+    Estimate rate velocity (per day) and days until next threshold breach.
+
+    Uses 7-day rate as the recent trend vs 30-day baseline.
+    If rate is falling (velocity ≤ 0), days_until = None.
+    """
+    # Daily velocity: difference between recent 7d rate and 30d average, divided by 7
+    velocity = (rate_7d - rate_30d) / 7.0
+
+    if velocity <= 0 or rate_30d >= next_threshold:
+        return velocity, None
+
+    gap = next_threshold - rate_30d
+    days = int(gap / velocity) if velocity > 1e-9 else None
+    return velocity, days
 
 
 async def _query_window(

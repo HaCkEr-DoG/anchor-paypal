@@ -260,3 +260,128 @@ def _empty_stats(merchant_id: str) -> CalibrationStats:
         recommendation_quality="needs_improvement",
         computed_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+def recalibration_signal(stats: CalibrationStats) -> dict:
+    """
+    Compute recommended base win rate adjustments when Oracle predictions drift
+    significantly from actual outcomes.
+
+    Returns a dict of {claim_type: suggested_base_rate_adjustment} when calibration
+    error exceeds the warning threshold (±0.10 per claim type). These can be fed
+    back into oracle/decision.py BASE_WIN_RATES as runtime overrides.
+
+    A positive adjustment means Oracle is underconfident (actual > predicted).
+    A negative adjustment means Oracle is overconfident (actual < predicted).
+
+    Example output:
+      {
+        "ITEM_NOT_RECEIVED": {
+          "current_predicted": 0.65,
+          "actual_win_rate":   0.78,
+          "suggested_adjustment": +0.13,
+          "confidence": "high"   # based on sample size
+        }
+      }
+    """
+    DRIFT_THRESHOLD = 0.10   # only flag when off by >10%
+    MIN_SAMPLE_SIZE = 20     # need at least 20 binary outcomes per claim type for signal
+
+    adjustments = {}
+    for claim_type, ct_stats in stats.win_rate_by_claim_type.items():
+        total = ct_stats.get("total", 0)
+        if total < MIN_SAMPLE_SIZE:
+            continue
+        cal_err = ct_stats.get("calibration_error", 0.0)
+        if abs(cal_err) < DRIFT_THRESHOLD:
+            continue
+        confidence = "high" if total >= 50 else "medium"
+        adjustments[claim_type] = {
+            "current_avg_prediction": ct_stats.get("avg_prediction", 0.0),
+            "actual_win_rate": ct_stats.get("actual_win_rate", 0.0),
+            "calibration_error": round(cal_err, 3),
+            "suggested_adjustment": round(-cal_err, 3),  # negate: overcautious → increase
+            "sample_size": total,
+            "confidence": confidence,
+            "action": (
+                "INCREASE base win rate — Oracle is too conservative"
+                if cal_err < 0 else
+                "DECREASE base win rate — Oracle is overconfident"
+            ),
+        }
+    return {
+        "adjustments_needed": len(adjustments) > 0,
+        "overall_brier": stats.brier_score,
+        "overall_quality": stats.recommendation_quality,
+        "per_claim_type": adjustments,
+        "computed_at": stats.computed_at,
+    }
+
+
+def evidence_attribution(records: list[OutcomeRecord]) -> dict:
+    """
+    Identify which evidence combinations actually win disputes.
+
+    Groups binary outcomes by evidence profile and reports win rate per profile.
+    This reveals the real-world value of each evidence type (e.g. tracking alone
+    vs tracking + delivery confirmation vs delivery + signature).
+
+    Returns dict mapping evidence_key → {wins, total, win_rate, sample_size}.
+    Only profiles with ≥5 outcomes are included to filter noise.
+    """
+    MIN_SAMPLE = 5
+    profiles: dict = {}
+
+    for r in records:
+        if r.as_binary_win() is None:
+            continue
+        flags = r.evidence_flags or {}
+        # Build a canonical key from evidence flags
+        has_track = bool(flags.get("has_tracking") or flags.get("has_tracking_number"))
+        has_deliv = bool(flags.get("has_delivery_confirm") or flags.get("has_delivery_confirmation"))
+        has_sig = bool(flags.get("has_signature") or flags.get("signature_obtained"))
+        has_comm = bool(flags.get("has_communication") or flags.get("has_buyer_communication"))
+
+        parts = []
+        if has_track:
+            parts.append("tracking")
+        if has_deliv:
+            parts.append("delivery_confirmed")
+        if has_sig:
+            parts.append("signature")
+        if has_comm:
+            parts.append("buyer_comm")
+        key = "+".join(parts) if parts else "no_evidence"
+
+        if key not in profiles:
+            profiles[key] = {"wins": 0, "total": 0, "claim_types": {}}
+        profiles[key]["total"] += 1
+        profiles[key]["wins"] += r.as_binary_win()
+
+        ct = r.claim_type
+        if ct not in profiles[key]["claim_types"]:
+            profiles[key]["claim_types"][ct] = {"wins": 0, "total": 0}
+        profiles[key]["claim_types"][ct]["total"] += 1
+        profiles[key]["claim_types"][ct]["wins"] += r.as_binary_win()
+
+    result = {}
+    for key, data in profiles.items():
+        total = data["total"]
+        if total < MIN_SAMPLE:
+            continue
+        wins = data["wins"]
+        result[key] = {
+            "win_rate": round(wins / total, 3),
+            "wins": wins,
+            "total": total,
+            "claim_types": {
+                ct: {
+                    "win_rate": round(cv["wins"] / cv["total"], 3) if cv["total"] > 0 else 0.0,
+                    "total": cv["total"],
+                }
+                for ct, cv in data["claim_types"].items()
+            },
+        }
+
+    # Sort by total sample size descending
+    return dict(sorted(result.items(), key=lambda x: -x[1]["total"]))

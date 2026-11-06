@@ -247,13 +247,31 @@ async def check_deadlines(
         hours_left = hours_until_deadline(dispute.response_deadline)
 
         if hours_left < 0:
-            # Already past deadline — log but nothing we can do
+            # Past deadline — attempt late response (PayPal sometimes accepts within
+            # a short grace window; never hurts to try)
             past_deadline += 1
+            overdue_h = abs(hours_left)
             print(
                 f"[DeadlineTracker] PAST DEADLINE: {dispute.dispute_id} "
-                f"({abs(hours_left):.1f}h overdue)"
+                f"({overdue_h:.1f}h overdue)"
             )
-            await update_alert_level(dispute.dispute_id, "past_deadline", auto_acted=True)
+            if dispute.last_alert_level != "past_deadline":
+                # First time we've seen this past-deadline — notify and attempt late accept
+                recovery_msg = (
+                    f"🚨 PAST DEADLINE: `{dispute.dispute_id}` is {overdue_h:.1f}h overdue.\n"
+                    f"Attempting late acceptance (PayPal grace window).\n"
+                    f"Amount: ${dispute.amount:.2f} | Reason: {dispute.reason_code}"
+                )
+                await notify_fn(recovery_msg)
+                try:
+                    await auto_accept_fn(
+                        dispute.dispute_id,
+                        dispute.amount,
+                        reason=f"deadline_recovery:{overdue_h:.1f}h_overdue",
+                    )
+                except Exception as exc:
+                    print(f"[DeadlineTracker] Recovery accept failed for {dispute.dispute_id}: {exc}")
+                await update_alert_level(dispute.dispute_id, "past_deadline", auto_acted=True)
             continue
 
         if hours_left <= AUTO_ACTION_HOURS and not dispute.auto_acted:
@@ -313,3 +331,84 @@ def _is_higher_urgency(new_level: str, current_level: str) -> bool:
     new_idx = _ALERT_ORDER.index(new_level) if new_level in _ALERT_ORDER else 0
     cur_idx = _ALERT_ORDER.index(current_level) if current_level in _ALERT_ORDER else 0
     return new_idx > cur_idx
+
+
+def generate_response_template(
+    dispute: "OpenDispute",
+    tracking_number: str = "",
+    delivered: bool = False,
+    delivery_date: str = "",
+    delivery_location: str = "",
+) -> str:
+    """
+    Generate a pre-filled PayPal dispute response ready to paste.
+
+    Called automatically when a dispute hits the 24h alert threshold.
+    If carrier data is available, includes confirmed delivery details.
+    Returns a plain-text template the merchant can submit as-is or edit.
+    """
+    lines = [
+        f"RE: Dispute {dispute.dispute_id}",
+        f"Claim type: {dispute.reason_code}",
+        f"Order amount: ${dispute.amount:.2f}",
+        "",
+    ]
+
+    reason = dispute.reason_code.upper()
+
+    if reason in {"ITEM_NOT_RECEIVED", "INR"} and tracking_number:
+        if delivered and delivery_date:
+            lines += [
+                "Dear PayPal Review Team,",
+                "",
+                f"This order was shipped and confirmed delivered by the carrier.",
+                f"Tracking number: {tracking_number}",
+                f"Delivery confirmed: {delivery_date}",
+            ]
+            if delivery_location:
+                lines.append(f"Delivery location: {delivery_location}")
+            lines += [
+                "",
+                "The carrier's tracking record confirms the item was delivered "
+                "to the buyer's address. I am attaching the carrier confirmation "
+                "as evidence. Please close this dispute in the seller's favor.",
+            ]
+        else:
+            lines += [
+                "Dear PayPal Review Team,",
+                "",
+                f"The order has been shipped with tracking number: {tracking_number}",
+                "The package is in transit. Please allow additional delivery time.",
+                "I am happy to provide any additional information needed.",
+            ]
+    elif reason in {"SIGNIFICANTLY_NOT_AS_DESCRIBED", "SNAD"}:
+        lines += [
+            "Dear PayPal Review Team,",
+            "",
+            "The item was accurately described in our listing. I am providing:",
+            "1. Original product listing with photos and description",
+            "2. Order confirmation showing buyer accepted item description",
+            "3. Any buyer communications prior to dispute",
+            "",
+            "The item delivered matches the listing in all material respects.",
+        ]
+    elif reason == "UNAUTHORIZED":
+        lines += [
+            "Dear PayPal Review Team,",
+            "",
+            "This transaction was authorized by the account holder. Evidence:",
+            "1. Order placed from buyer's verified PayPal account",
+            "2. Shipping address matches buyer's confirmed address on file",
+            "3. No prior contact from buyer claiming account compromise",
+        ]
+    else:
+        lines += [
+            "Dear PayPal Review Team,",
+            "",
+            "I am responding to dispute " + dispute.dispute_id + ".",
+            "Please find attached relevant documentation for this transaction.",
+            "I am committed to resolving this matter fairly.",
+        ]
+
+    lines += ["", "Thank you for your review."]
+    return "\n".join(lines)

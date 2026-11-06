@@ -29,6 +29,7 @@ Carrier priority:
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -55,6 +56,9 @@ FEDEX_TRACKING_PATTERN = re.compile(
 UPS_TRACKING_PATTERN = re.compile(
     r"^1Z[A-Z0-9]{16}$"
 )
+DHL_TRACKING_PATTERN = re.compile(
+    r"^([0-9]{10,11}|[A-Z]{2}[0-9]{9}[A-Z]{2}|[0-9]{20}|JD[0-9]{18})$"
+)
 
 
 def detect_carrier(tracking_number: str) -> Optional[str]:
@@ -63,9 +67,69 @@ def detect_carrier(tracking_number: str) -> Optional[str]:
         return "ups"
     if USPS_TRACKING_PATTERN.match(t):
         return "usps"
+    if t.startswith("JD") or (len(t) >= 10 and DHL_TRACKING_PATTERN.match(t) and not FEDEX_TRACKING_PATTERN.match(t)):
+        return "dhl"
     if FEDEX_TRACKING_PATTERN.match(t):
         return "fedex"
     return None
+
+
+def delivery_timing_risk(result: TrackingResult, dispute_filed_at_iso: str) -> str:
+    """
+    Detect suspiciously timed disputes relative to delivery confirmation.
+
+    A buyer who files a dispute within hours of confirmed delivery is almost
+    certainly committing friendly fraud — the item arrived but they want a free
+    refund. This signal is admissible PayPal evidence ("dispute filed X hours
+    after carrier-confirmed delivery").
+
+    Returns a risk signal string; empty string if no anomaly detected.
+    """
+    if not result.delivered or not result.delivery_date or not dispute_filed_at_iso:
+        return ""
+
+    try:
+        def _parse(s: str):
+            s = s.strip()
+            # Handle various ISO formats and naive datetimes
+            for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+                try:
+                    dt = datetime.strptime(s.replace("Z", "").split("+")[0], fmt)
+                    return dt.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+            # fromisoformat fallback
+            from datetime import datetime as _dt
+            dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        delivery_dt = _parse(result.delivery_date)
+        filed_dt = _parse(dispute_filed_at_iso)
+        hours_after = (filed_dt - delivery_dt).total_seconds() / 3600
+
+        if hours_after < 0:
+            return ""  # filed before delivery — genuine INR
+        if hours_after < 2:
+            return (
+                f"⚠️ SUSPICIOUS: dispute filed {hours_after:.1f}h AFTER carrier-confirmed delivery "
+                f"({result.carrier} shows delivered {result.delivery_date}). "
+                "High probability of friendly fraud — submit delivery timestamp as primary evidence."
+            )
+        if hours_after < 24:
+            return (
+                f"Dispute filed {hours_after:.1f}h after confirmed delivery. "
+                "Include delivery timestamp in evidence response."
+            )
+        if hours_after < 72:
+            return (
+                f"Dispute filed {hours_after/24:.1f} days after confirmed delivery. "
+                "Carrier confirmation available as evidence."
+            )
+    except Exception:
+        pass
+    return ""
 
 
 async def verify_delivery(tracking_number: str) -> Optional[TrackingResult]:
@@ -82,6 +146,7 @@ async def verify_delivery(tracking_number: str) -> Optional[TrackingResult]:
         "usps": _verify_usps,
         "fedex": _verify_fedex,
         "ups": _verify_ups,
+        "dhl": _verify_dhl,
     }
 
     if carrier and carrier in handlers:
@@ -263,6 +328,64 @@ async def _verify_ups(tracking_number: str) -> Optional[TrackingResult]:
         )
     except Exception as exc:
         print(f"[Carrier] UPS verify failed: {exc}")
+        return None
+
+
+async def _verify_dhl(tracking_number: str) -> Optional[TrackingResult]:
+    api_key = os.environ.get("DHL_API_KEY", "")
+    if not api_key:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(
+                f"https://api-eu.dhl.com/track/shipments",
+                headers={"DHL-API-Key": api_key},
+                params={"trackingNumber": tracking_number},
+            )
+        if r.status_code != 200:
+            return None
+
+        data = r.json()
+        shipments = data.get("shipments", [])
+        if not shipments:
+            return None
+
+        shipment = shipments[0]
+        status = shipment.get("status", {})
+        status_code = status.get("statusCode", "")
+        status_desc = status.get("description", "Unknown")
+        delivered = status_code == "delivered"
+
+        events = shipment.get("events", [])
+        delivery_event = next(
+            (e for e in events if e.get("description", "").lower().startswith("delivered")),
+            None
+        )
+        delivery_date = delivery_event.get("timestamp") if delivery_event else None
+
+        location_data = (delivery_event or {}).get("location", {}).get("address", {})
+        city = location_data.get("addressLocality", "")
+        country = location_data.get("countryCode", "")
+        delivery_location = f"{city}, {country}" if city else None
+
+        sig = any(
+            "signature" in e.get("description", "").lower()
+            for e in events
+        )
+
+        return TrackingResult(
+            tracking_number=tracking_number,
+            carrier="DHL",
+            delivered=delivered,
+            delivery_date=delivery_date,
+            delivery_location=delivery_location,
+            signature_obtained=sig,
+            latest_status=status_desc,
+            carrier_url=f"https://www.dhl.com/en/express/tracking.html?AWB={tracking_number}",
+        )
+    except Exception as exc:
+        print(f"[Carrier] DHL verify failed: {exc}")
         return None
 
 

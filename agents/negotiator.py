@@ -39,6 +39,10 @@ import httpx
 
 from oracle.decision import ClaimType, PAYPAL_DISPUTE_FEE_STANDARD, PAYPAL_DISPUTE_FEE_HIGH_VOLUME
 
+# Below this dollar amount negotiation overhead isn't worth it
+# ($30 minimum offer to clear the dispute fee and leave meaningful savings)
+MINIMUM_NEGOTIATION_AMOUNT = 30.0
+
 
 @dataclass
 class NegotiationResult:
@@ -53,12 +57,33 @@ class NegotiationResult:
     make_offer_available: bool     # whether HATEOAS link is present
 
 
+def _age_adjusted_fraction(base_fraction: float, dispute_age_days: int) -> float:
+    """
+    Older disputes need a slightly higher offer — the buyer is more frustrated
+    and PayPal scrutinises delayed responses more heavily.
+
+    Age adjustments (additive, capped to keep offers below 1.0):
+      < 3 days  : no change
+      3–7 days  : +3%
+      8–14 days : +6%
+      > 14 days : +10%
+    """
+    if dispute_age_days < 3:
+        return base_fraction
+    if dispute_age_days < 8:
+        return min(base_fraction + 0.03, 0.90)
+    if dispute_age_days < 15:
+        return min(base_fraction + 0.06, 0.90)
+    return min(base_fraction + 0.10, 0.90)
+
+
 def evaluate_negotiation(
     dispute_amount: float,
     win_probability: float,
     claim_type: ClaimType,
     ev_fight: float,
     high_volume_tier: bool = False,
+    dispute_age_days: int = 0,
     *,
     merchant_time_value_per_hour: float = 50.0,
     hours_to_fight: float = 1.5,
@@ -81,8 +106,22 @@ def evaluate_negotiation(
 
     ev_accept = -dispute_amount
 
-    # Determine offer fraction
-    offer_fraction = _offer_fraction(win_probability, claim_type)
+    # Hard floor: tiny disputes don't benefit from negotiation overhead
+    if dispute_amount < MINIMUM_NEGOTIATION_AMOUNT:
+        return NegotiationResult(
+            should_negotiate=False,
+            offer_fraction=0.0,
+            offer_amount=0.0,
+            ev_negotiate=ev_accept,
+            ev_fight=ev_fight,
+            ev_accept=ev_accept,
+            reasoning=f"Dispute amount ${dispute_amount:.2f} < ${MINIMUM_NEGOTIATION_AMOUNT:.0f} minimum — accept directly.",
+            make_offer_available=False,
+        )
+
+    # Determine base offer fraction then age-adjust
+    base_fraction = _offer_fraction(win_probability, claim_type)
+    offer_fraction = _age_adjusted_fraction(base_fraction, dispute_age_days) if base_fraction > 0 else 0.0
 
     if offer_fraction <= 0.0:
         # No offer — either fight (high win prob) or accept (very low win prob)
