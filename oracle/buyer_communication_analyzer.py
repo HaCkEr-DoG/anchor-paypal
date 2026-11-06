@@ -1,18 +1,15 @@
 """
-Buyer Communication Analyzer — analyze buyer messages in a dispute thread
-to detect fraud signals, assess hostility, and recommend response tone.
+Buyer Communication Analyzer — analyze buyer-to-merchant message history
+to surface fraud signals, escalation risk, and negotiation leverage.
 
-Signal categories:
-  1. Urgency / threat signals (refund threats, BBB/bank threats, social media)
-  2. Inconsistency signals (story changes, contradictions)
-  3. Sophistication signals (knows dispute process well — possible serial disputer)
-  4. Cooperation signals (willing to resolve, acknowledges receipt)
+Signals extracted:
+  - Contradiction detection (claimed non-receipt vs. prior acknowledgment)
+  - Threat patterns (legal threats, social media threats, refund escalation)
+  - Communication velocity (sudden burst of messages)
+  - Tone classification (hostile / demanding / reasonable / cooperative)
+  - Fraud signal markers (too-common dispute phrases, copy-paste patterns)
 
-Output:
-  - FraudSignalLevel: how strongly the messages suggest friendly fraud
-  - HostilityLevel: threat level and recommended tone
-  - RecommendedTone: FORMAL / FIRM / COOPERATIVE / DE_ESCALATE
-  - Key phrases extracted, inconsistency flags, action recommendation
+Output feeds into win_rate_estimator and dispute_outcome_predictor.
 
 This is a pure oracle module — no I/O, no persistence.
 """
@@ -24,246 +21,317 @@ from enum import Enum
 from typing import Optional
 
 
+class MessageSender(str, Enum):
+    BUYER    = "BUYER"
+    MERCHANT = "MERCHANT"
+    SYSTEM   = "SYSTEM"
+
+
+class BuyerTone(str, Enum):
+    HOSTILE      = "HOSTILE"       # Threatening, aggressive
+    DEMANDING    = "DEMANDING"     # Firm, entitled
+    NEUTRAL      = "NEUTRAL"
+    COOPERATIVE  = "COOPERATIVE"   # Willing to resolve
+    APOLOGETIC   = "APOLOGETIC"    # Possibly legitimate mistake
+
+
 class FraudSignalLevel(str, Enum):
-    VERY_HIGH = "VERY_HIGH"   # Multiple strong fraud signals
-    HIGH      = "HIGH"        # Clear fraud indicators
-    MODERATE  = "MODERATE"    # Mixed — some fraud signals
-    LOW       = "LOW"         # Mostly legitimate-sounding
-    MINIMAL   = "MINIMAL"     # No fraud signals detected
+    VERY_HIGH = "VERY_HIGH"   # Multiple strong fraud markers
+    HIGH      = "HIGH"
+    MODERATE  = "MODERATE"
+    LOW       = "LOW"
+    MINIMAL   = "MINIMAL"     # No fraud indicators
 
 
-class HostilityLevel(str, Enum):
-    EXTREME      = "EXTREME"     # Explicit threats, abusive language
-    HIGH         = "HIGH"        # Demands, ultimatums
-    MODERATE     = "MODERATE"    # Frustrated but civil
-    LOW          = "LOW"         # Mildly dissatisfied
-    COOPERATIVE  = "COOPERATIVE" # Polite, willing to resolve
-
-
-class RecommendedTone(str, Enum):
-    FORMAL       = "FORMAL"       # Neutral, professional distance
-    FIRM         = "FIRM"         # Assert position clearly, no apology
-    COOPERATIVE  = "COOPERATIVE"  # Meet halfway, offer solutions
-    DE_ESCALATE  = "DE_ESCALATE"  # Calm extreme hostility first
-    LEGAL        = "LEGAL"        # Threats warrant formal legal tone
-
-
-# Keyword lists for signal detection (lowercase, partial match)
-_URGENCY_KEYWORDS = [
-    "immediately", "right now", "within 24 hours", "today",
-    "or else", "last chance", "final warning",
-]
-
-_THREAT_KEYWORDS = [
-    "lawyer", "attorney", "legal action", "sue", "lawsuit",
-    "bbb", "better business bureau", "consumer protection",
-    "social media", "twitter", "facebook", "post everywhere",
-    "bank dispute", "credit card company", "police",
-    "fraud report", "ftc", "chargebacks forever",
-]
-
-_INCONSISTENCY_SIGNALS = [
-    # Phrases that contradict "never received"
-    ("never received", "returned it"),
-    ("never received", "want to return"),
-    ("item broken", "never arrived"),
-    ("wrong item", "never received"),
-    ("cancelled", "never placed"),
-]
-
-_SOPHISTICATION_KEYWORDS = [
-    "chargeback", "dispute process", "regulation e", "reg e",
-    "provisional credit", "arbitration", "compelling evidence",
-    "visa rules", "mastercard rules", "nacha",
-    "i know my rights", "i've done this before",
-]
-
-_COOPERATION_KEYWORDS = [
-    "i understand", "willing to", "can we", "would you",
-    "please help", "i appreciate", "i'd like to resolve",
-    "open to", "let me know", "happy to provide",
-]
-
-_RECEIPT_ACKNOWLEDGEMENT = [
-    "i received", "i got the", "it arrived", "it was delivered",
-    "i have the item", "i opened it", "i used it",
-]
-
-
-def _count_keywords(text: str, keywords: list[str]) -> int:
-    lower = text.lower()
-    return sum(1 for kw in keywords if kw in lower)
-
-
-def _detect_inconsistencies(messages: list[str]) -> list[str]:
-    combined = " ".join(m.lower() for m in messages)
-    found = []
-    for a, b in _INCONSISTENCY_SIGNALS:
-        if a in combined and b in combined:
-            found.append(f"Contradicting claims: '{a}' vs '{b}'")
-    return found
-
-
-def _score_fraud(
-        threat_count: int,
-        sophistication_count: int,
-        inconsistencies: list[str],
-        receipt_ack: bool,
-        is_repeat_disputer: bool) -> FraudSignalLevel:
-    score = 0
-    score += min(threat_count * 5, 25)
-    score += min(sophistication_count * 10, 30)
-    score += len(inconsistencies) * 15
-    if receipt_ack:
-        score += 25
-    if is_repeat_disputer:
-        score += 20
-
-    if score >= 55:
-        return FraudSignalLevel.VERY_HIGH
-    if score >= 35:
-        return FraudSignalLevel.HIGH
-    if score >= 15:
-        return FraudSignalLevel.MODERATE
-    if score >= 5:
-        return FraudSignalLevel.LOW
-    return FraudSignalLevel.MINIMAL
-
-
-def _score_hostility(
-        threat_count: int,
-        urgency_count: int,
-        cooperation_count: int) -> HostilityLevel:
-    if threat_count >= 3:
-        return HostilityLevel.EXTREME
-    if threat_count >= 1 or urgency_count >= 3:
-        return HostilityLevel.HIGH
-    if urgency_count >= 1:
-        return HostilityLevel.MODERATE
-    if cooperation_count >= 2:
-        return HostilityLevel.COOPERATIVE
-    return HostilityLevel.LOW
-
-
-def _recommend_tone(
-        hostility: HostilityLevel,
-        fraud: FraudSignalLevel) -> RecommendedTone:
-    if hostility == HostilityLevel.EXTREME:
-        return RecommendedTone.LEGAL
-    if hostility == HostilityLevel.HIGH and fraud in (
-            FraudSignalLevel.VERY_HIGH, FraudSignalLevel.HIGH):
-        return RecommendedTone.FIRM
-    if hostility == HostilityLevel.HIGH:
-        return RecommendedTone.DE_ESCALATE
-    if hostility == HostilityLevel.MODERATE:
-        return RecommendedTone.FORMAL
-    if hostility == HostilityLevel.COOPERATIVE:
-        return RecommendedTone.COOPERATIVE
-    # LOW hostility
-    if fraud in (FraudSignalLevel.VERY_HIGH, FraudSignalLevel.HIGH):
-        return RecommendedTone.FIRM
-    return RecommendedTone.COOPERATIVE
+class EscalationRisk(str, Enum):
+    IMMINENT  = "IMMINENT"    # Will escalate within 24h if unresolved
+    HIGH      = "HIGH"
+    MODERATE  = "MODERATE"
+    LOW       = "LOW"
 
 
 @dataclass
-class BuyerMessage:
-    """A single buyer message in the dispute thread."""
-    message_id: str
-    text: str
-    timestamp_epoch: int
-    is_from_buyer: bool = True
+class MessageRecord:
+    """A single message in the conversation thread."""
+    sender: MessageSender
+    content: str
+    timestamp_epoch: int   # Unix timestamp
+    message_index: int = 0
 
 
 @dataclass
-class CommunicationInput:
-    """Input for buyer communication analysis."""
+class BuyerCommunicationInput:
+    """Input: the full message thread for a dispute."""
     dispute_id: str
-    messages: list[BuyerMessage] = field(default_factory=list)
+    messages: list[MessageRecord]
 
-    # Context
-    is_repeat_disputer: bool = False
-    prior_dispute_count: int = 0
-    dispute_resolved_prior: bool = False   # Had a prior dispute resolved in buyer's favor
-    claim_type: str = "INR"
+    # Contextual flags (from other oracles or database)
+    buyer_prior_disputes: int = 0
+    buyer_won_prior: int = 0
+    dispute_reason_code: str = "INR"
+    transaction_amount: float = 0.0
+
+
+# ── Signal detection patterns ─────────────────────────────────────
+
+_LEGAL_THREAT_PHRASES = [
+    "lawyer", "attorney", "legal action", "sue", "court", "ftc", "bbb",
+    "consumer protection", "fraud report", "file a complaint",
+]
+_SOCIAL_THREAT_PHRASES = [
+    "social media", "twitter", "facebook", "instagram", "review",
+    "yelp", "trustpilot", "post about", "tell everyone",
+]
+_DELIVERY_ACK_PHRASES = [
+    "received", "got it", "package arrived", "delivered", "picked it up",
+    "got the item", "got the package",
+]
+_FRAUD_SCRIPT_PHRASES = [
+    "i never received", "i did not receive", "item not received",
+    "never got", "tracking shows delivered but",
+    "package was stolen", "not what i ordered",
+    "completely different",
+]
+_HOSTILE_PHRASES = [
+    "scam", "fraud", "criminal", "thief", "steal", "rip off",
+    "worst company", "disgusting", "unacceptable",
+]
+_COOPERATIVE_PHRASES = [
+    "understand", "happy to", "willing to", "let me know", "please",
+    "thank you", "appreciate", "work together",
+]
+
+
+def _contains_any(text: str, phrases: list[str]) -> bool:
+    t = text.lower()
+    return any(p in t for p in phrases)
+
+
+def _count_buyer_messages(messages: list[MessageRecord]) -> int:
+    return sum(1 for m in messages if m.sender == MessageSender.BUYER)
+
+
+def _message_burst(messages: list[MessageRecord], window_seconds: int = 3600) -> bool:
+    """True if buyer sent 3+ messages within window_seconds."""
+    buyer_times = sorted(
+        m.timestamp_epoch for m in messages if m.sender == MessageSender.BUYER
+    )
+    for i in range(len(buyer_times) - 2):
+        if buyer_times[i + 2] - buyer_times[i] <= window_seconds:
+            return True
+    return False
 
 
 @dataclass
-class CommunicationReport:
-    """Full analysis of buyer communications."""
+class ContradictionFlag:
+    description: str
+    evidence_a: str
+    evidence_b: str
+
+
+@dataclass
+class SignalFlag:
+    signal_type: str
+    severity: str    # HIGH / MEDIUM / LOW
+    excerpt: str
+
+
+@dataclass
+class BuyerCommunicationReport:
+    """Analysis of buyer communication for a dispute."""
     dispute_id: str
+
+    buyer_tone: BuyerTone
     fraud_signal_level: FraudSignalLevel
-    hostility_level: HostilityLevel
-    recommended_tone: RecommendedTone
+    escalation_risk: EscalationRisk
 
-    threat_count: int
-    urgency_count: int
-    sophistication_count: int
-    cooperation_count: int
+    # Specific signals
+    legal_threat_detected: bool
+    social_media_threat_detected: bool
+    delivery_acknowledged_by_buyer: bool
+    message_burst_detected: bool
 
-    buyer_acknowledged_receipt: bool
-    inconsistencies: list[str]
+    contradiction_flags: list[ContradictionFlag]
+    signal_flags: list[SignalFlag]
 
-    key_fraud_phrases: list[str]
-    key_threat_phrases: list[str]
+    # Counts
+    total_messages: int
+    buyer_message_count: int
+    merchant_message_count: int
 
-    action_note: str
+    # Negotiation guidance
+    negotiation_leverage: str   # What leverage the merchant has
+    suggested_response_tone: str
+
     summary: str
 
 
-def analyze_buyer_communication(inp: CommunicationInput) -> CommunicationReport:
-    """Analyze all buyer messages and return a fraud/hostility profile."""
-    buyer_texts = [m.text for m in inp.messages if m.is_from_buyer]
-    combined = " ".join(buyer_texts)
-    lower = combined.lower()
+def analyze_buyer_communication(inp: BuyerCommunicationInput) -> BuyerCommunicationReport:
+    """Analyze buyer communication for signals and fraud indicators."""
+    messages = inp.messages
+    buyer_msgs = [m for m in messages if m.sender == MessageSender.BUYER]
+    merchant_msgs = [m for m in messages if m.sender == MessageSender.MERCHANT]
 
-    threat_count     = _count_keywords(combined, _THREAT_KEYWORDS)
-    urgency_count    = _count_keywords(combined, _URGENCY_KEYWORDS)
-    soph_count       = _count_keywords(combined, _SOPHISTICATION_KEYWORDS)
-    coop_count       = _count_keywords(combined, _COOPERATION_KEYWORDS)
-    receipt_ack      = _count_keywords(combined, _RECEIPT_ACKNOWLEDGEMENT) > 0
+    buyer_text_all = " ".join(m.content for m in buyer_msgs)
 
-    inconsistencies  = _detect_inconsistencies(buyer_texts)
+    # ── Threat detection ─────────────────────────────────────────
+    legal_threat = _contains_any(buyer_text_all, _LEGAL_THREAT_PHRASES)
+    social_threat = _contains_any(buyer_text_all, _SOCIAL_THREAT_PHRASES)
+    delivery_ack = _contains_any(buyer_text_all, _DELIVERY_ACK_PHRASES)
+    burst = _message_burst(messages)
 
-    fraud_level    = _score_fraud(
-        threat_count, soph_count, inconsistencies, receipt_ack,
-        inp.is_repeat_disputer)
-    hostility_level = _score_hostility(threat_count, urgency_count, coop_count)
-    tone           = _recommend_tone(hostility_level, fraud_level)
+    # ── Contradiction detection ───────────────────────────────────
+    contradictions: list[ContradictionFlag] = []
 
-    # Extract notable phrases
-    fraud_phrases  = [kw for kw in _SOPHISTICATION_KEYWORDS + _RECEIPT_ACKNOWLEDGEMENT
-                      if kw in lower]
-    threat_phrases = [kw for kw in _THREAT_KEYWORDS if kw in lower]
+    if delivery_ack and inp.dispute_reason_code == "INR":
+        # Buyer acknowledged delivery but filed INR — contradiction
+        ack_msg = next(
+            (m.content[:120] for m in buyer_msgs
+             if _contains_any(m.content, _DELIVERY_ACK_PHRASES)),
+            "acknowledged delivery in a prior message"
+        )
+        contradictions.append(ContradictionFlag(
+            description="Buyer acknowledged delivery but filed INR dispute",
+            evidence_a=ack_msg,
+            evidence_b="Dispute reason: Item Not Received (INR)",
+        ))
 
-    # Action note
-    if fraud_level in (FraudSignalLevel.VERY_HIGH, FraudSignalLevel.HIGH):
-        action = "Strong fraud signals — escalate to manual review; document all contradictions"
-    elif hostility_level in (HostilityLevel.EXTREME, HostilityLevel.HIGH):
-        action = "Buyer is hostile — use firm/legal tone; do not concede under pressure"
-    elif fraud_level == FraudSignalLevel.MODERATE:
-        action = "Some fraud signals — proceed cautiously; request additional evidence from buyer"
+    # ── Signal flags ─────────────────────────────────────────────
+    signal_flags: list[SignalFlag] = []
+
+    if legal_threat:
+        # Find excerpt
+        lt_msg = next(
+            (m.content[:100] for m in buyer_msgs
+             if _contains_any(m.content, _LEGAL_THREAT_PHRASES)),
+            buyer_text_all[:100]
+        )
+        signal_flags.append(SignalFlag("LEGAL_THREAT", "HIGH", lt_msg))
+
+    if social_threat:
+        st_msg = next(
+            (m.content[:100] for m in buyer_msgs
+             if _contains_any(m.content, _SOCIAL_THREAT_PHRASES)),
+            buyer_text_all[:100]
+        )
+        signal_flags.append(SignalFlag("SOCIAL_MEDIA_THREAT", "MEDIUM", st_msg))
+
+    # Fraud script pattern — buyer using boilerplate dispute phrasing
+    fraud_script_count = sum(
+        1 for phrase in _FRAUD_SCRIPT_PHRASES
+        if phrase in buyer_text_all.lower()
+    )
+    if fraud_script_count >= 2:
+        signal_flags.append(SignalFlag(
+            "BOILERPLATE_FRAUD_SCRIPT", "HIGH",
+            f"Buyer used {fraud_script_count} common fraud-dispute phrases",
+        ))
+
+    if burst:
+        signal_flags.append(SignalFlag(
+            "MESSAGE_BURST", "MEDIUM",
+            "3+ buyer messages within 1 hour — escalation pressure tactic",
+        ))
+
+    if inp.buyer_prior_disputes >= 3:
+        signal_flags.append(SignalFlag(
+            "REPEAT_DISPUTER", "HIGH",
+            f"Buyer has {inp.buyer_prior_disputes} prior disputes",
+        ))
+
+    if inp.buyer_won_prior >= 2:
+        signal_flags.append(SignalFlag(
+            "SERIAL_WINNER", "MODERATE",
+            f"Buyer has won {inp.buyer_won_prior} prior disputes — may be pattern",
+        ))
+
+    # ── Tone classification ───────────────────────────────────────
+    hostile_count = sum(
+        1 for phrase in _HOSTILE_PHRASES if phrase in buyer_text_all.lower()
+    )
+    cooperative_count = sum(
+        1 for phrase in _COOPERATIVE_PHRASES if phrase in buyer_text_all.lower()
+    )
+
+    if hostile_count >= 2 or legal_threat:
+        tone = BuyerTone.HOSTILE
+    elif hostile_count == 1 or social_threat:
+        tone = BuyerTone.DEMANDING
+    elif cooperative_count >= 2:
+        tone = BuyerTone.COOPERATIVE
+    elif len(buyer_msgs) == 0:
+        tone = BuyerTone.NEUTRAL
     else:
-        action = "Routine dispute — standard response tone appropriate"
+        tone = BuyerTone.NEUTRAL
+
+    # ── Fraud signal level ────────────────────────────────────────
+    high_signals = sum(1 for f in signal_flags if f.severity == "HIGH")
+    med_signals  = sum(1 for f in signal_flags if f.severity in ("MEDIUM", "MODERATE"))
+
+    if high_signals >= 2 or len(contradictions) >= 1:
+        fraud_level = FraudSignalLevel.VERY_HIGH
+    elif high_signals == 1:
+        fraud_level = FraudSignalLevel.HIGH
+    elif med_signals >= 2:
+        fraud_level = FraudSignalLevel.MODERATE
+    elif med_signals == 1:
+        fraud_level = FraudSignalLevel.LOW
+    else:
+        fraud_level = FraudSignalLevel.MINIMAL
+
+    # ── Escalation risk ───────────────────────────────────────────
+    if legal_threat and tone == BuyerTone.HOSTILE:
+        esc_risk = EscalationRisk.IMMINENT
+    elif burst or social_threat:
+        esc_risk = EscalationRisk.HIGH
+    elif tone == BuyerTone.DEMANDING:
+        esc_risk = EscalationRisk.MODERATE
+    else:
+        esc_risk = EscalationRisk.LOW
+
+    # ── Negotiation leverage ──────────────────────────────────────
+    leverage_parts = []
+    if delivery_ack:
+        leverage_parts.append("Buyer previously acknowledged delivery in writing")
+    if legal_threat:
+        leverage_parts.append("Legal threats often signal awareness of a weak claim")
+    if contradictions:
+        leverage_parts.append(f"{len(contradictions)} contradiction(s) in buyer messages")
+    if inp.buyer_prior_disputes >= 3:
+        leverage_parts.append("Buyer dispute history pattern supports fraud flag")
+    if not leverage_parts:
+        leverage_parts.append("No strong leverage — focus on evidence quality")
+    negotiation_leverage = "; ".join(leverage_parts)
+
+    # ── Suggested response tone ───────────────────────────────────
+    if tone == BuyerTone.COOPERATIVE:
+        suggested = "Acknowledge buyer's concern, present evidence factually, offer resolution"
+    elif tone in (BuyerTone.DEMANDING, BuyerTone.HOSTILE):
+        suggested = "Professional and factual — do not engage with threats, cite evidence only"
+    else:
+        suggested = "Professional and factual"
 
     summary = (
         f"Comms {inp.dispute_id}: "
-        f"fraud={fraud_level.value} | hostility={hostility_level.value} | "
-        f"tone={tone.value} | msgs={len(buyer_texts)}"
+        f"tone={tone.value} | fraud={fraud_level.value} | "
+        f"esc={esc_risk.value} | contradictions={len(contradictions)}"
     )
 
-    return CommunicationReport(
+    return BuyerCommunicationReport(
         dispute_id=inp.dispute_id,
+        buyer_tone=tone,
         fraud_signal_level=fraud_level,
-        hostility_level=hostility_level,
-        recommended_tone=tone,
-        threat_count=threat_count,
-        urgency_count=urgency_count,
-        sophistication_count=soph_count,
-        cooperation_count=coop_count,
-        buyer_acknowledged_receipt=receipt_ack,
-        inconsistencies=inconsistencies,
-        key_fraud_phrases=fraud_phrases,
-        key_threat_phrases=threat_phrases,
-        action_note=action,
+        escalation_risk=esc_risk,
+        legal_threat_detected=legal_threat,
+        social_media_threat_detected=social_threat,
+        delivery_acknowledged_by_buyer=delivery_ack,
+        message_burst_detected=burst,
+        contradiction_flags=contradictions,
+        signal_flags=signal_flags,
+        total_messages=len(messages),
+        buyer_message_count=len(buyer_msgs),
+        merchant_message_count=len(merchant_msgs),
+        negotiation_leverage=negotiation_leverage,
+        suggested_response_tone=suggested,
         summary=summary,
     )
