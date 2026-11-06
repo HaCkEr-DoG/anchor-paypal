@@ -1,43 +1,28 @@
 """
-Settlement Negotiation Engine — HOW to settle, not just IF.
+Settlement Negotiator — partial settlement offer optimizer.
 
-decision.py says "settle at $X." This module says HOW.
+Before submitting a PayPal dispute response, merchants can reach out to buyers
+directly to settle. This module answers:
+  "Should I settle this dispute? If so, what amount should I offer?"
 
-The gap: when EV(fight) < EV(settle), merchants typically either:
-  a) Issue a full refund immediately (overpay by 30–60%)
-  b) Do nothing and lose by default
+Settlement is attractive when:
+  1. Fight win probability is moderate (40-65%) — not a certain win, not hopeless
+  2. The dispute is for a service or subjective quality issue (SNAD)
+  3. The buyer has not filed disputes repeatedly (not a fraudster)
+  4. Settlement amount < expected loss from fighting
 
-The right play is a structured negotiation:
-  1. Lead with empathy (reduces buyer hostility)
-  2. Offer partial refund + keep item (costs 40–60% less than full refund)
-  3. Offer replacement (costs inventory + shipping, often < full refund)
-  4. Offer store credit (costs margin, not cash)
-  5. Full refund only when item return confirmed
+Settlement math:
+  EV(fight) = P(win) × amount − fight_cost
+  EV(settle at X) = −X (cost is the settlement paid)
+  → Settle if X < −EV(fight), i.e., X < fight_cost − P(win) × amount
+  → Max acceptable settlement = max amount where settling beats fighting
 
-Research on dispute negotiation outcomes:
-  - 42% of buyers accept a partial refund offer (avg: 55% of original price)
-  - 28% accept store credit at 120% of purchase price
-  - 15% accept replacement
-  - Only 15% insist on full cash refund (these are often fraudsters)
+Offer strategy:
+  - Opening offer: 40-60% of dispute amount (buyer expects to negotiate)
+  - Walk-away: max acceptable settlement amount
+  - If buyer counters above walk-away: reject and fight
 
-The module also detects when negotiation is pointless:
-  - Buyer has opened a formal PayPal case (not a message) → respond through PayPal
-  - Buyer is a serial disputer (high risk tier) → don't negotiate, fight
-  - Digital goods already accessed → present access log, don't offer refund
-
-This engine generates:
-  1. The optimal opening offer (minimize cost while maximizing acceptance)
-  2. Ready-to-send negotiation messages at each escalation stage
-  3. A walk-away threshold (what's the most you'll pay before fighting?)
-  4. The EV model comparing each settlement path
-
-Settlement paths ranked by cost (lowest to highest):
-  - Store credit (120% face value): cost = 0.X × amount (margin only)
-  - Partial refund 30%: cost = 0.30 × amount
-  - Partial refund 50%: cost = 0.50 × amount
-  - Replacement item: cost = COGS + shipping
-  - Full refund: cost = 1.0 × amount
-  - Full refund + keep item: cost = 1.0 × amount (but good PR, faster close)
+This is a pure oracle module — no I/O, no persistence.
 """
 
 from __future__ import annotations
@@ -47,298 +32,286 @@ from enum import Enum
 from typing import Optional
 
 
-class SettlementOffer(str, Enum):
-    STORE_CREDIT_120  = "STORE_CREDIT_120"   # Store credit at 120% of dispute amount
-    PARTIAL_30        = "PARTIAL_30"         # 30% refund, keep item
-    PARTIAL_50        = "PARTIAL_50"         # 50% refund, keep item
-    PARTIAL_75        = "PARTIAL_75"         # 75% refund (near-full)
-    REPLACEMENT       = "REPLACEMENT"        # Send replacement item
-    FULL_REFUND_RETURN = "FULL_REFUND_RETURN" # Full refund on item return
-    FULL_REFUND_KEEP  = "FULL_REFUND_KEEP"   # Full refund, buyer keeps item (fastest close)
-    FIGHT             = "FIGHT"              # Don't settle — fight the dispute
+class SettlementVerdict(str, Enum):
+    SETTLE       = "SETTLE"      # Proactively offer settlement
+    FIGHT        = "FIGHT"       # Fight is better EV — don't settle
+    REFUND       = "REFUND"      # Just refund — fighting AND settling waste effort
+    CONDITIONAL  = "CONDITIONAL" # Settle only if buyer initiates contact
+
+
+class BuyerLikelihood(str, Enum):
+    HIGH   = "HIGH"    # Buyer likely to accept a reasonable offer
+    MEDIUM = "MEDIUM"  # Uncertain
+    LOW    = "LOW"     # Buyer unlikely to settle (may be fraudulent)
+
+
+_FIGHT_COST_DEFAULT = 25.0        # $ internal cost per dispute fought
+_SETTLEMENT_TRANSACTION_COST = 0.0  # PayPal doesn't charge extra for direct refunds
 
 
 @dataclass
-class NegotiationPlan:
-    """Complete negotiation strategy for one dispute."""
-    opening_offer: SettlementOffer
-    opening_cost: float                # Estimated cost of opening offer
-    walkaway_threshold: float          # Maximum you'll pay before fighting
-    escalation_sequence: list[SettlementOffer]  # What to offer if opening rejected
-    opening_message: str               # Ready-to-send opening message
-    escalation_messages: dict[SettlementOffer, str]  # Message per escalation step
-    ev_comparison: dict[str, float]    # EV of each path
-    should_negotiate: bool             # False = fight outright, True = try to settle
-    reasoning: list[str] = field(default_factory=list)
+class SettlementInput:
+    """State of one dispute at settlement evaluation time."""
+    dispute_id: str
+    claim_type: str               # INR / SNAD / UNAUTHORIZED
+    dispute_amount: float
+
+    # Win probability estimate (0-1)
+    p_win: float                  # Probability of winning if fought
+
+    # Buyer signals
+    buyer_dispute_count_90d: int = 0
+    buyer_responded_to_messages: bool = True
+    buyer_is_long_term_customer: bool = False
+    buyer_purchase_history_count: int = 1  # Total past orders
+
+    # Context
+    is_hdr_contributing: bool = True
+    days_until_deadline: int = 10
+    fight_cost: float = _FIGHT_COST_DEFAULT
+    can_partially_fulfill: bool = False   # Can ship replacement, partial item, etc.
 
 
-def plan_negotiation(
-    dispute_amount: float,
-    claim_type: str = "ITEM_NOT_RECEIVED",
-    *,
-    # Merchant cost model
-    item_cogs: float = 0.0,            # Cost of goods (for replacement EV)
-    shipping_cost: float = 0.0,
-    dispute_fee: float = 15.0,
-    fight_win_probability: float = 0.60,
-    merchant_hourly_rate: float = 50.0,
-    fight_hours: float = 1.5,
-    # Context signals
-    buyer_risk_tier: str = "TIER_1_NORMAL",    # From buyer_intelligence
-    is_repeat_customer: bool = False,
-    buyer_has_engaged_positively: bool = False,  # Buyer replied amicably in messages
-    item_already_delivered: bool = False,
-    digital_goods_accessed: bool = False,
-    # Store credit margin
-    store_credit_margin: float = 0.40,  # Your margin % (what store credit actually costs)
-) -> NegotiationPlan:
+@dataclass
+class CounterOfferAnalysis:
+    """Analysis of a specific counter-offer amount from buyer."""
+    counter_amount: float
+    should_accept: bool
+    ev_accept: float              # −counter_amount (accepting it costs that much)
+    ev_fight_instead: float
+    recommendation: str
+
+
+@dataclass
+class SettlementReport:
     """
-    Plan the optimal settlement negotiation for a dispute.
-
-    The goal: close the dispute at minimum cost while preserving the buyer
-    relationship where possible. Fight only when EV(fight) > EV(best settlement).
+    Settlement strategy for one dispute.
     """
-    reasoning = []
+    dispute_id: str
+    claim_type: str
+    dispute_amount: float
+    p_win: float
 
-    # ── Never negotiate with high-risk / fraud buyers ─────────────────────────
-    if buyer_risk_tier in ("TIER_4_SERIAL", "TIER_5_FRAUD"):
-        return NegotiationPlan(
-            opening_offer=SettlementOffer.FIGHT,
-            opening_cost=0.0,
-            walkaway_threshold=0.0,
-            escalation_sequence=[],
-            opening_message="",
-            escalation_messages={},
-            ev_comparison={"fight": fight_win_probability * dispute_amount - dispute_fee},
-            should_negotiate=False,
-            reasoning=[
-                f"Buyer risk tier {buyer_risk_tier} — do not negotiate, fight aggressively",
-                "Settling with fraud buyers rewards the behavior",
-            ],
+    # Economics
+    ev_fight: float               # EV(fight) = P(win) × amount − fight_cost
+    max_acceptable_settlement: float   # Settling above this is worse than fighting
+    break_even_settlement: float  # Settlement amount where EV(settle) = EV(fight)
+
+    # Verdict
+    verdict: SettlementVerdict
+    buyer_likelihood: BuyerLikelihood
+
+    # Offer strategy
+    opening_offer: float          # Amount to open with
+    walk_away_amount: float       # Maximum to pay before walking away
+    offer_script: str             # Template message to buyer
+    offer_tactics: list[str]
+
+    # Decision support
+    hdr_impact_note: str          # How HDR pressure affects the decision
+    rationale: str
+    summary: str
+
+    def analyze_counter(self, counter_amount: float) -> CounterOfferAnalysis:
+        """Should we accept this counter-offer from the buyer?"""
+        ev_fight = self.ev_fight
+        ev_accept = -counter_amount
+        should_accept = counter_amount <= self.walk_away_amount
+        if should_accept:
+            rec = (
+                f"Accept ${counter_amount:.0f} counter — "
+                f"within walk-away limit (${self.walk_away_amount:.0f}). "
+                f"Better than fighting (EV=${ev_fight:+.0f})."
+            )
+        else:
+            rec = (
+                f"Reject ${counter_amount:.0f} counter — exceeds walk-away (${self.walk_away_amount:.0f}). "
+                f"Fight instead (EV=${ev_fight:+.0f})."
+            )
+        return CounterOfferAnalysis(
+            counter_amount=counter_amount,
+            should_accept=should_accept,
+            ev_accept=round(ev_accept, 2),
+            ev_fight_instead=round(ev_fight, 2),
+            recommendation=rec,
         )
 
-    # ── EV(fight) calculation ─────────────────────────────────────────────────
-    fight_cost = merchant_hourly_rate * fight_hours
-    ev_fight = (fight_win_probability * dispute_amount) - fight_cost - dispute_fee
-    reasoning.append(
-        f"EV(fight) = {fight_win_probability:.0%} × ${dispute_amount:.2f} "
-        f"− ${fight_cost:.0f} − ${dispute_fee:.0f} = ${ev_fight:.2f}"
+
+def _buyer_likelihood(inp: SettlementInput) -> BuyerLikelihood:
+    if inp.buyer_dispute_count_90d >= 3:
+        return BuyerLikelihood.LOW     # Likely fraudster — won't settle in good faith
+    if not inp.buyer_responded_to_messages:
+        return BuyerLikelihood.LOW
+    if inp.buyer_is_long_term_customer and inp.buyer_purchase_history_count >= 3:
+        return BuyerLikelihood.HIGH
+    if inp.buyer_responded_to_messages and inp.buyer_purchase_history_count >= 2:
+        return BuyerLikelihood.MEDIUM
+    return BuyerLikelihood.MEDIUM
+
+
+def _opening_offer(dispute_amount: float, p_win: float) -> float:
+    """
+    Opening offer as a fraction of dispute amount.
+    Lower win probability → more generous opening (buyer has leverage).
+    """
+    if p_win >= 0.65:
+        fraction = 0.35   # We're likely winning — start low
+    elif p_win >= 0.50:
+        fraction = 0.45
+    elif p_win >= 0.35:
+        fraction = 0.55
+    else:
+        fraction = 0.65   # We're likely losing — open more generously
+    return round(dispute_amount * fraction, 2)
+
+
+def _walk_away(ev_fight: float, dispute_amount: float) -> float:
+    """
+    Walk-away = max settlement we'd accept.
+    If fighting has negative EV, walk-away is higher (more willing to pay to avoid fight).
+    """
+    # Walk-away is where EV(settle) = EV(fight)
+    # EV(settle) = −X → X = −EV(fight)
+    # But we cap at dispute_amount (never pay more than the disputed amount)
+    walk = -ev_fight
+    return round(min(dispute_amount, max(0.0, walk)), 2)
+
+
+def _offer_tactics(inp: SettlementInput, verdict: SettlementVerdict, likelihood: BuyerLikelihood) -> list[str]:
+    tactics: list[str] = []
+    if verdict == SettlementVerdict.SETTLE:
+        tactics.append("Contact buyer via PayPal messaging BEFORE submitting formal response")
+        tactics.append("Lead with empathy: 'I want to resolve this quickly and fairly'")
+        if inp.claim_type == "SNAD":
+            tactics.append("For SNAD: offer partial refund + keep item (avoids return cost)")
+        if inp.can_partially_fulfill:
+            tactics.append("Offer replacement/partial fulfillment as alternative to cash refund")
+        tactics.append("Set 48-hour deadline on offer to maintain urgency")
+        if likelihood == BuyerLikelihood.HIGH:
+            tactics.append("Long-term customer: lead with loyalty framing ('valued customer resolution')")
+    elif verdict == SettlementVerdict.CONDITIONAL:
+        tactics.append("Don't initiate — but if buyer contacts you, be open to reasonable settlement")
+        tactics.append("Your walk-away limit still applies if buyer initiates")
+    return tactics
+
+
+def _offer_script(inp: SettlementInput, opening_offer: float) -> str:
+    amount_str = f"${opening_offer:.0f}"
+    if inp.claim_type == "SNAD":
+        return (
+            f"Hi, I'd like to resolve your dispute quickly. "
+            f"I understand there was a concern with your order — "
+            f"I'd like to offer a partial refund of {amount_str} as a goodwill resolution "
+            f"and keep the case out of PayPal's formal process. "
+            f"Please let me know within 48 hours if you'd like to accept this offer."
+        )
+    return (
+        f"Hi, I want to resolve your dispute as quickly as possible. "
+        f"I'd like to offer a settlement of {amount_str} to close this case. "
+        f"This avoids a lengthy PayPal review process for both of us. "
+        f"Please respond within 48 hours to accept."
     )
 
-    # ── Cost of each settlement option ───────────────────────────────────────
-    store_credit_cost = dispute_amount * store_credit_margin  # You pay margin, not face
-    partial_30_cost   = dispute_amount * 0.30
-    partial_50_cost   = dispute_amount * 0.50
-    partial_75_cost   = dispute_amount * 0.75
-    replacement_cost  = item_cogs + shipping_cost if item_cogs > 0 else dispute_amount * 0.55
-    full_return_cost  = dispute_amount             # Refund on return
-    full_keep_cost    = dispute_amount             # Refund, buyer keeps item
 
-    # EV of each settlement (negative = cost to merchant, positive = amount saved vs full refund)
-    ev_comparison = {
-        "store_credit_120": -store_credit_cost,
-        "partial_30":       -partial_30_cost,
-        "partial_50":       -partial_50_cost,
-        "partial_75":       -partial_75_cost,
-        "replacement":      -replacement_cost,
-        "full_refund_return": -full_return_cost,
-        "full_refund_keep": -full_keep_cost,
-        "fight":            ev_fight,
-    }
-
-    # Digital goods: accessed = do not refund
-    if digital_goods_accessed:
-        return NegotiationPlan(
-            opening_offer=SettlementOffer.FIGHT,
-            opening_cost=0.0,
-            walkaway_threshold=0.0,
-            escalation_sequence=[],
-            opening_message=(
-                "Thank you for reaching out. Our records show the digital product was "
-                "accessed [DATE] prior to this dispute being filed. We are unable to "
-                "process a refund for products that have been used. We have submitted "
-                "our access logs to PayPal as evidence."
-            ),
-            escalation_messages={},
-            ev_comparison=ev_comparison,
-            should_negotiate=False,
-            reasoning=["Digital goods accessed before dispute — fight, do not refund"],
+def _hdr_impact_note(inp: SettlementInput, verdict: SettlementVerdict) -> str:
+    if not inp.is_hdr_contributing:
+        return "This dispute does not contribute to HDR rate — HDR pressure not a factor."
+    if verdict == SettlementVerdict.SETTLE:
+        return (
+            "Settling removes this dispute from the HDR count quickly — "
+            "faster resolution means less impact on rolling 90-day rate."
         )
+    return "Fighting extends dispute lifetime, keeping it in HDR count longer."
 
-    # ── Choose opening offer ──────────────────────────────────────────────────
-    # Logic: choose lowest-cost offer with reasonable acceptance probability
-    # For repeat customers / engaged buyers, store credit is often accepted
-    # For first-time buyers with amicable communication, partial refund works
-    # For adversarial buyers, skip to higher offers
 
-    if dispute_amount < 30:
-        # Small amounts: just refund, not worth the negotiation overhead
-        opening = SettlementOffer.FULL_REFUND_KEEP
-        opening_cost = full_keep_cost
-        escalation = []
-        reasoning.append(f"Small amount (${dispute_amount:.0f}) — full refund is EV-optimal")
+def evaluate_settlement(inp: SettlementInput) -> SettlementReport:
+    """
+    Evaluate whether to offer a settlement and compute optimal offer amounts.
+    """
+    ev_fight = round(inp.p_win * inp.dispute_amount - inp.fight_cost, 2)
+    break_even = round(inp.dispute_amount * inp.p_win - inp.fight_cost, 2)
+    max_acceptable = _walk_away(ev_fight, inp.dispute_amount)
+    opening = _opening_offer(inp.dispute_amount, inp.p_win)
+    likelihood = _buyer_likelihood(inp)
 
-    elif item_already_delivered and claim_type == "ITEM_NOT_RECEIVED":
-        # Delivered but buyer claims not received — escalate to PayPal, do not negotiate
-        return NegotiationPlan(
-            opening_offer=SettlementOffer.FIGHT,
-            opening_cost=0.0,
-            walkaway_threshold=0.0,
-            escalation_sequence=[],
-            opening_message="",
-            escalation_messages={},
-            ev_comparison=ev_comparison,
-            should_negotiate=False,
-            reasoning=["Item confirmed delivered — fight the INR claim with delivery proof"],
+    # Determine verdict
+    if inp.buyer_dispute_count_90d >= 3:
+        verdict = SettlementVerdict.FIGHT  # Fraudsters: don't reward with settlement
+        rationale = (
+            f"Buyer filed {inp.buyer_dispute_count_90d} disputes in 90 days — likely fraud. "
+            f"Do not settle; fight with fraud evidence instead."
         )
-
-    elif is_repeat_customer and buyer_has_engaged_positively:
-        opening = SettlementOffer.STORE_CREDIT_120
-        opening_cost = store_credit_cost
-        escalation = [
-            SettlementOffer.PARTIAL_50,
-            SettlementOffer.PARTIAL_75,
-            SettlementOffer.FULL_REFUND_RETURN,
-        ]
-        reasoning.append("Repeat + amicable buyer → store credit as opening offer")
-
-    elif buyer_has_engaged_positively:
-        opening = SettlementOffer.PARTIAL_30
-        opening_cost = partial_30_cost
-        escalation = [
-            SettlementOffer.PARTIAL_50,
-            SettlementOffer.PARTIAL_75,
-            SettlementOffer.FULL_REFUND_RETURN,
-        ]
-        reasoning.append("Amicable buyer → 30% partial refund as opening offer")
-
-    elif claim_type == "SIGNIFICANTLY_NOT_AS_DESCRIBED":
-        # SNAD: some validity usually, start at 30%
-        opening = SettlementOffer.PARTIAL_30
-        opening_cost = partial_30_cost
-        escalation = [SettlementOffer.PARTIAL_50, SettlementOffer.FULL_REFUND_RETURN]
-        reasoning.append("SNAD claim → partial refund, escalate to full on return")
-
+    elif inp.dispute_amount < 15.0:
+        # Tiny amount — just refund, settlement overhead not worth it
+        verdict = SettlementVerdict.REFUND
+        rationale = f"${inp.dispute_amount:.0f} is too small for settlement negotiation. Just refund."
+    elif ev_fight >= 50.0 and inp.p_win >= 0.65:
+        # Strong case — fight is better than giving money away
+        verdict = SettlementVerdict.FIGHT
+        rationale = (
+            f"Strong case: P(win)={inp.p_win:.0%}, EV(fight)=${ev_fight:+.0f}. "
+            f"Fighting is more profitable than any settlement."
+        )
+    elif ev_fight < -15.0:
+        # Weak case — just refund (settlement overhead not worth it)
+        verdict = SettlementVerdict.REFUND
+        rationale = (
+            f"Weak case: EV(fight)=${ev_fight:+.0f}. Settlement offers little benefit "
+            f"over direct refund, which is faster and cheaper."
+        )
+    elif 0.35 <= inp.p_win <= 0.65:
+        # Moderate win probability — settlement sweet spot
+        if likelihood in (BuyerLikelihood.HIGH, BuyerLikelihood.MEDIUM):
+            verdict = SettlementVerdict.SETTLE
+            rationale = (
+                f"Moderate win probability ({inp.p_win:.0%}) and buyer likely to respond. "
+                f"Proactive settlement at ${opening:.0f} has better expected value than "
+                f"fighting (EV=${ev_fight:+.0f}) when accounting for uncertainty."
+            )
+        else:
+            verdict = SettlementVerdict.CONDITIONAL
+            rationale = (
+                f"Moderate win probability ({inp.p_win:.0%}) but buyer unlikely to engage. "
+                f"Don't initiate; accept reasonable offers up to ${max_acceptable:.0f} if buyer contacts you."
+            )
+    elif inp.claim_type == "SNAD" and inp.p_win < 0.50:
+        verdict = SettlementVerdict.SETTLE
+        rationale = (
+            f"SNAD with sub-50% win rate ({inp.p_win:.0%}). "
+            f"Settling avoids a likely loss and preserves customer relationship."
+        )
     else:
-        opening = SettlementOffer.PARTIAL_50
-        opening_cost = partial_50_cost
-        escalation = [SettlementOffer.PARTIAL_75, SettlementOffer.FULL_REFUND_RETURN]
-        reasoning.append("Standard opening: 50% partial refund + keep item")
+        verdict = SettlementVerdict.CONDITIONAL
+        rationale = (
+            f"P(win)={inp.p_win:.0%}, EV(fight)=${ev_fight:+.0f}. "
+            f"Fighting is marginally better; accept settlement only if buyer initiates below ${max_acceptable:.0f}."
+        )
 
-    # Walk-away = when it's cheaper to fight than settle
-    walkaway = min(ev_fight + dispute_fee + fight_cost, dispute_amount)
-    reasoning.append(f"Walk-away threshold: ${walkaway:.0f} (beyond this, fight is EV-better)")
+    tactics = _offer_tactics(inp, verdict, likelihood)
+    script = _offer_script(inp, opening) if verdict in (SettlementVerdict.SETTLE, SettlementVerdict.CONDITIONAL) else ""
+    hdr_note = _hdr_impact_note(inp, verdict)
 
-    # ── Message templates ─────────────────────────────────────────────────────
-    opening_msg = _opening_message(opening, dispute_amount, claim_type, is_repeat_customer)
-    escalation_msgs = {
-        offer: _escalation_message(offer, dispute_amount)
-        for offer in escalation
-    }
+    summary = (
+        f"Settlement {inp.dispute_id}: {inp.claim_type} ${inp.dispute_amount:.0f} | "
+        f"P(win)={inp.p_win:.0%} | EV(fight)=${ev_fight:+.0f} | "
+        f"verdict={verdict.value} | opening=${opening:.0f} | walk-away=${max_acceptable:.0f}"
+    )
 
-    should_negotiate = ev_fight < -dispute_fee or dispute_amount < 100
-
-    return NegotiationPlan(
+    return SettlementReport(
+        dispute_id=inp.dispute_id,
+        claim_type=inp.claim_type,
+        dispute_amount=inp.dispute_amount,
+        p_win=inp.p_win,
+        ev_fight=ev_fight,
+        max_acceptable_settlement=max_acceptable,
+        break_even_settlement=break_even,
+        verdict=verdict,
+        buyer_likelihood=likelihood,
         opening_offer=opening,
-        opening_cost=round(opening_cost, 2),
-        walkaway_threshold=round(walkaway, 2),
-        escalation_sequence=escalation,
-        opening_message=opening_msg,
-        escalation_messages=escalation_msgs,
-        ev_comparison={k: round(v, 2) for k, v in ev_comparison.items()},
-        should_negotiate=should_negotiate,
-        reasoning=reasoning,
+        walk_away_amount=max_acceptable,
+        offer_script=script,
+        offer_tactics=tactics,
+        hdr_impact_note=hdr_note,
+        rationale=rationale,
+        summary=summary,
     )
-
-
-def _opening_message(
-    offer: SettlementOffer,
-    amount: float,
-    claim_type: str,
-    repeat: bool,
-) -> str:
-    name = "valued customer" if repeat else "you"
-    base = (
-        f"Dear {name},\n\n"
-        "Thank you for reaching out. We're sorry to hear about your experience "
-        "and want to resolve this quickly and fairly.\n\n"
-    )
-    if offer == SettlementOffer.STORE_CREDIT_120:
-        body = (
-            f"As a gesture of goodwill, we'd like to offer you a store credit of "
-            f"${amount * 1.20:.2f} (20% above your purchase price), which you can "
-            f"apply to any future order. This lets us resolve this immediately without "
-            f"a formal dispute process."
-        )
-    elif offer == SettlementOffer.PARTIAL_30:
-        body = (
-            f"We'd like to offer a partial refund of ${amount * 0.30:.2f} "
-            f"(30% of your purchase price) while you keep the item. "
-            f"This reflects the fair-market value difference for the issue you've described."
-        )
-    elif offer == SettlementOffer.PARTIAL_50:
-        body = (
-            f"We'd like to offer a partial refund of ${amount * 0.50:.2f} "
-            f"(50% of your purchase price) while you keep the item. "
-            f"We believe this is a fair resolution given the circumstances."
-        )
-    elif offer == SettlementOffer.FULL_REFUND_KEEP:
-        body = (
-            f"We'd like to offer a full refund of ${amount:.2f}. "
-            f"You're welcome to keep the item. We'll process this immediately "
-            f"upon your confirmation."
-        )
-    elif offer == SettlementOffer.FULL_REFUND_RETURN:
-        body = (
-            f"We're happy to issue a full refund of ${amount:.2f} "
-            f"upon receipt of the returned item. We'll provide a prepaid return label."
-        )
-    else:
-        body = f"We'd like to offer a resolution valued at ${amount * 0.50:.2f}."
-
-    close = (
-        "\n\nPlease reply to confirm you'd like to proceed with this offer, "
-        "and we'll process it right away.\n\nBest regards"
-    )
-    return base + body + close
-
-
-def _escalation_message(offer: SettlementOffer, amount: float) -> str:
-    if offer == SettlementOffer.PARTIAL_50:
-        return (
-            f"We understand our initial offer wasn't what you were hoping for. "
-            f"We'd like to increase our offer to a ${amount * 0.50:.2f} partial refund "
-            f"(50% of your purchase) while you keep the item. "
-            f"This is our best offer before we respond through PayPal's formal process."
-        )
-    elif offer == SettlementOffer.PARTIAL_75:
-        return (
-            f"We want to resolve this for you. Our final offer before the formal "
-            f"dispute process is ${amount * 0.75:.2f} — 75% of your purchase price. "
-            f"Please let us know within 24 hours if you'd like to accept."
-        )
-    elif offer == SettlementOffer.FULL_REFUND_RETURN:
-        return (
-            f"We're prepared to issue a full refund of ${amount:.2f} upon return of "
-            f"the item. We'll cover return shipping. This is our final offer."
-        )
-    else:
-        return f"We're increasing our offer to ${amount * 0.75:.2f} to resolve this quickly."
-
-
-if __name__ == "__main__":
-    plan = plan_negotiation(
-        dispute_amount=120.0,
-        claim_type="ITEM_NOT_RECEIVED",
-        item_cogs=35.0,
-        fight_win_probability=0.65,
-        is_repeat_customer=True,
-        buyer_has_engaged_positively=True,
-    )
-    print(f"Opening offer: {plan.opening_offer.value} (cost: ${plan.opening_cost:.0f})")
-    print(f"Walk-away: ${plan.walkaway_threshold:.0f}")
-    print(f"Should negotiate: {plan.should_negotiate}")
-    print(f"\nOpening message:\n{plan.opening_message}")
-    print(f"\nEV comparison:")
-    for k, v in sorted(plan.ev_comparison.items(), key=lambda x: x[1], reverse=True):
-        print(f"  {k}: ${v:.2f}")
