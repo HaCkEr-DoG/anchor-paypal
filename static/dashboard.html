@@ -1442,6 +1442,8 @@ async function loadAll() {
     const disputes   = await disputesRes.json();
     const recoveries = await recoveriesRes.json();
 
+    if (stats.demo) { loadDemo(); return; }
+
     const dRows = disputes.rows || disputes;
     const rRows = recoveries.rows || recoveries;
     _lastDisputes = dRows;
