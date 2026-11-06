@@ -98,7 +98,7 @@
       border-color: rgba(139,92,246,.3);
     }
     .hero-card-label {
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: .08em;
@@ -107,7 +107,7 @@
     .hero-card-header { display: flex; align-items: center; justify-content: space-between; }
     .hero-metric { font-size: 38px; font-weight: 700; letter-spacing: -.03em; line-height: 1; color: var(--text); }
     .hero-metric-sm { font-size: 28px; font-weight: 700; letter-spacing: -.02em; line-height: 1; color: var(--text); }
-    .hero-sub { font-size: 11px; color: var(--muted); margin-top: -4px; }
+    .hero-sub { font-size: 13px; color: var(--muted); margin-top: -4px; }
     .hero-chip {
       font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
       text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0;
@@ -125,14 +125,14 @@
     .hero-pill.yellow { background: rgba(201,126,0,.1); color: var(--yellow); }
     .hero-pill.muted  { background: rgba(0,0,0,.06); color: var(--muted-light); }
     .hero-spark-wrap { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
-    .hero-spark-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; font-weight: 500; }
+    .hero-spark-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; font-weight: 500; }
     .spark-bars-svg { width: 100%; height: 56px; }
     .spark-line-svg  { width: 100%; height: 48px; }
     .hero-highlight {
       background: rgba(5,150,105,.06); border: 1px solid rgba(5,150,105,.18);
       border-radius: 10px; padding: 12px 16px; margin-top: auto;
     }
-    .hero-highlight-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; font-weight: 600; }
+    .hero-highlight-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; font-weight: 600; }
     .hero-highlight-value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; color: var(--green); }
     .ring-card-inner { display: flex; align-items: center; gap: 20px; }
     .ring-legend { display: flex; flex-direction: column; gap: 8px; }
@@ -142,7 +142,7 @@
     .oracle-formula-box {
       background: rgba(180,83,9,.05); border: 1px solid rgba(180,83,9,.15);
       border-radius: 8px; padding: 10px 12px;
-      font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--muted); line-height: 1.6;
+      font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; color: var(--muted); line-height: 1.6;
     }
     .oracle-link {
       display: inline-block; font-size: 12px; color: var(--amber); text-decoration: none;
@@ -481,18 +481,18 @@
       <span class="hero-chip green">Auto-pilot</span>
     </div>
     <div class="hero-metric" id="hc-total">—</div>
-    <div class="hero-sub">disputes handled autonomously</div>
+    <div class="hero-sub">disputes handled by AI</div>
 
     <div class="hero-breakdown">
       <div class="hero-breakdown-row">
         <span class="hero-pill green">Fought</span>
         <span id="hc-fought">—</span>
-        <span style="color:var(--muted);font-size:11px;" id="hc-fought-pct"></span>
+        <span style="color:var(--muted);font-size:13px;" id="hc-fought-pct"></span>
       </div>
       <div class="hero-breakdown-row">
         <span class="hero-pill yellow">Accepted</span>
         <span id="hc-accepted">—</span>
-        <span style="color:var(--muted);font-size:11px;" id="hc-accepted-pct"></span>
+        <span style="color:var(--muted);font-size:13px;" id="hc-accepted-pct"></span>
       </div>
       <div class="hero-breakdown-row">
         <span class="hero-pill muted">Pending</span>
@@ -518,11 +518,11 @@
       <span class="hero-chip purple">Checkout</span>
     </div>
     <div class="hero-metric-sm" id="hc-rev-recovered">—</div>
-    <div class="hero-sub">revenue recovered from abandoned checkouts</div>
+    <div class="hero-sub">earned back from abandoned carts</div>
     <svg id="spark-line-recovery" class="spark-line-svg" viewBox="0 0 200 48" preserveAspectRatio="none" style="margin-top:4px;"></svg>
     <div style="display:flex;align-items:center;gap:6px;margin-top:auto;">
       <span style="font-size:18px;font-weight:700;color:var(--text);" id="hc-recovered">—</span>
-      <span style="font-size:11px;color:var(--muted);">invoices sent</span>
+      <span style="font-size:13px;color:var(--muted);">emails sent</span>
     </div>
   </div>
 
@@ -563,18 +563,18 @@
   <div class="hero-card">
     <div class="hero-card-header">
       <div class="hero-card-label">Settlement Oracle</div>
-      <span class="hero-chip amber">EV Math</span>
+      <span class="hero-chip amber">Decision AI</span>
     </div>
     <div class="oracle-formula-box">
       EV(fight) = p_win × amount − cost<br>
       Break-even: (cost + $15) / (amount + $15)
     </div>
-    <div style="font-size:12px;color:var(--muted);margin-top:2px;">
-      Avg win prob across fought:
+    <div style="font-size:13px;color:var(--muted);margin-top:2px;">
+      Avg win rate on disputes:
       <span style="font-weight:700;color:var(--text);font-size:14px;" id="hc-avg-win">—%</span>
     </div>
     <a href="#oracle-panel" class="oracle-link" onclick="document.getElementById('oracle-panel').scrollIntoView({behavior:'smooth'});return false;">
-      Open Oracle Calculator →
+      Open Calculator →
     </a>
   </div>
 
@@ -584,11 +584,11 @@
       <div class="hero-card-label">AI Confidence</div>
     </div>
     <div class="hero-metric" style="color:#fff;" id="hc-avg-win-pct">—%</div>
-    <div class="hero-sub" style="color:rgba(255,255,255,.5);">avg win probability across fought</div>
+    <div class="hero-sub" style="color:rgba(255,255,255,.5);">chance of winning a dispute</div>
     <svg id="spark-line-wins" class="spark-line-svg" viewBox="0 0 200 48" preserveAspectRatio="none" style="margin-top:4px;"></svg>
     <div class="hero-breakdown-row" style="margin-top:auto;">
       <span style="font-size:22px;font-weight:700;color:#fff;" id="hc-attention-count">—</span>
-      <span style="font-size:12px;color:rgba(255,255,255,.6);">disputes need attention</span>
+      <span style="font-size:13px;color:rgba(255,255,255,.6);">need your review</span>
     </div>
   </div>
 
