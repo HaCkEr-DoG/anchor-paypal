@@ -20,6 +20,7 @@ Why invoices over re-capture:
   prompt from PayPal itself, with full context, that they can complete or ignore.
 """
 
+import asyncio
 import os
 import time
 from dataclasses import dataclass, field
@@ -27,6 +28,11 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
+
+_PAYPAL_BASE = {
+    "sandbox": "https://api.sandbox.paypal.com",
+    "live":    "https://api.paypal.com",
+}
 
 
 @dataclass
@@ -53,9 +59,11 @@ class AbandonedOrder:
 class RecoveryAgent:
     def __init__(self, config: Optional[RecoveryConfig] = None):
         self.config = config or RecoveryConfig()
-        self.paypal_base = "https://api.sandbox.paypal.com"
+        env = os.environ.get("PAYPAL_ENV", "sandbox")
+        self.paypal_base = _PAYPAL_BASE.get(env, _PAYPAL_BASE["sandbox"])
         self._token: Optional[str] = None
         self._token_expires_at: float = 0
+        self._token_lock = asyncio.Lock()
 
     # ── Webhook entry point ─────────────────────────────────────────────────
 
@@ -160,19 +168,22 @@ class RecoveryAgent:
     # ── PayPal API calls ────────────────────────────────────────────────────
 
     async def _get_token(self) -> str:
-        # Cache token; PayPal tokens expire after ~9h (expires_in=32400).
         if self._token and time.monotonic() < self._token_expires_at - 60:
             return self._token
-        import base64
-        creds = base64.b64encode(
-            f"{os.environ['PAYPAL_CLIENT_ID']}:{os.environ['PAYPAL_CLIENT_SECRET']}".encode()
-        ).decode()
-        async with httpx.AsyncClient() as c:
-            r = await c.post(
-                f"{self.paypal_base}/v1/oauth2/token",
-                headers={"Authorization": f"Basic {creds}"},
-                data={"grant_type": "client_credentials"},
-            )
+        async with self._token_lock:
+            if self._token and time.monotonic() < self._token_expires_at - 60:
+                return self._token
+            import base64
+            creds = base64.b64encode(
+                f"{os.environ['PAYPAL_CLIENT_ID']}:{os.environ['PAYPAL_CLIENT_SECRET']}".encode()
+            ).decode()
+            async with httpx.AsyncClient() as c:
+                r = await c.post(
+                    f"{self.paypal_base}/v1/oauth2/token",
+                    headers={"Authorization": f"Basic {creds}"},
+                    data={"grant_type": "client_credentials"},
+                )
+                r.raise_for_status()
             data = r.json()
             self._token = data["access_token"]
             self._token_expires_at = time.monotonic() + data.get("expires_in", 32400)
@@ -198,9 +209,8 @@ class RecoveryAgent:
         """
         merchant_email = os.environ.get("MERCHANT_EMAIL", "")
         if not merchant_email:
-            # Fall back to just logging — invoice creation requires merchant email
             print("[Recovery] MERCHANT_EMAIL not set — skipping invoice creation")
-            return f"https://www.paypal.com/invoice/payerView/details/{order.order_id}"
+            return None
 
         line_items = []
         if order.items:

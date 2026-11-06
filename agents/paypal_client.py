@@ -118,7 +118,7 @@ class PayPalClient:
         }
 
     async def _request(self, method: str, url: str, timeout: float = 15.0, **kwargs):
-        """Send one authenticated request and refresh once after an HTTP 401."""
+        """Send one authenticated request, refresh once after 401, back off on 429."""
         caller_headers = kwargs.pop("headers", {})
         async with httpx.AsyncClient(timeout=timeout) as c:
             headers = {**await self._headers(), **caller_headers}
@@ -126,6 +126,11 @@ class PayPalClient:
             if response.status_code == 401:
                 self._token = None
                 self._token_expires_at = 0
+                headers = {**await self._headers(), **caller_headers}
+                response = await c.request(method, url, headers=headers, **kwargs)
+            if response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", "30"))
+                await asyncio.sleep(min(retry_after, 60))
                 headers = {**await self._headers(), **caller_headers}
                 response = await c.request(method, url, headers=headers, **kwargs)
             response.raise_for_status()

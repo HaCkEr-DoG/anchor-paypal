@@ -61,6 +61,22 @@ _DASHBOARD_HTML = (
 # Render auto-generates this; for local dev set it in .env.
 APPROVAL_TOKEN_SECRET = os.environ.get("APPROVAL_TOKEN_SECRET", secrets.token_hex(32))
 
+# API key for internal cron/admin endpoints. Set API_SECRET in Render env vars.
+# If unset in dev the check is skipped; warn loudly so it isn't forgotten.
+_API_SECRET = os.environ.get("API_SECRET", "")
+if not _API_SECRET:
+    print("[Watcher] WARNING: API_SECRET not set — /recovery-check, /morning-brief and dashboard API endpoints are unauthenticated")
+
+
+def _require_api_key(request: Request) -> None:
+    """Raise 401 unless the caller supplies the correct X-API-Key header or ?api_key= param."""
+    if not _API_SECRET:
+        return
+    key = request.headers.get("X-API-Key") or request.query_params.get("api_key", "")
+    if not hmac.compare_digest(key, _API_SECRET):
+        raise HTTPException(401, "Unauthorized")
+
+
 # ---------------------------------------------------------------------------
 # Idempotency store — prevents duplicate processing on PayPal's 25 retries.
 # In-memory for single-instance; swap for Redis/ES on multi-instance deploy.
@@ -449,11 +465,12 @@ async def _execute_approved_fight(dispute_id: str):
 
 
 @app.post("/recovery-check")
-async def recovery_check(background: BackgroundTasks):
+async def recovery_check(background: BackgroundTasks, request: Request):
     """
     Triggered every 15 minutes by Render cron.
-    Scans for approved-but-uncaptured orders and sends buyer recovery invoices.
+    Requires X-API-Key header matching API_SECRET env var.
     """
+    _require_api_key(request)
     background.add_task(_run_recovery_check)
     return JSONResponse({"status": "recovery_check_queued"})
 
@@ -466,11 +483,12 @@ async def _run_recovery_check():
 
 
 @app.post("/morning-brief")
-async def morning_brief(background: BackgroundTasks):
+async def morning_brief(background: BackgroundTasks, request: Request):
     """
     Trigger the morning brief manually, or from Render cron at 8 AM.
-    Also callable from Zapier on a schedule.
+    Requires X-API-Key header matching API_SECRET env var.
     """
+    _require_api_key(request)
     background.add_task(_send_morning_brief)
     return JSONResponse({"status": "brief_queued"})
 
@@ -491,8 +509,9 @@ async def dashboard():
 
 
 @app.get("/api/stats")
-async def api_stats():
-    """Aggregate stats for the dashboard header cards."""
+async def api_stats(request: Request):
+    """Aggregate stats for the dashboard header cards. Requires X-API-Key."""
+    _require_api_key(request)
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
@@ -564,8 +583,9 @@ async def api_stats():
 
 
 @app.get("/api/disputes")
-async def api_disputes():
-    """Recent dispute actions for the AG Grid disputes table."""
+async def api_disputes(request: Request):
+    """Recent dispute actions for the AG Grid disputes table. Requires X-API-Key."""
+    _require_api_key(request)
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
@@ -607,6 +627,7 @@ async def api_oracle_calculate(
     high_volume: bool = False,
     deadline_hours: int = 72,
     dispute_fee: Optional[float] = None,
+    currency: str = "USD",
 ):
     """Settlement Oracle — live EV calculation. No API key required."""
     from oracle.decision import calculate, ClaimType, Evidence
@@ -634,6 +655,7 @@ async def api_oracle_calculate(
             seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
             high_volume_tier=high_volume,
             dispute_fee_override=dispute_fee,
+            currency_code=currency,
         )
     except (ValueError, TypeError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)

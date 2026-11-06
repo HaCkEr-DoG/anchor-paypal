@@ -132,6 +132,7 @@ def calculate(
     similar_dispute_win_rate: Optional[float] = None,  # from Elasticsearch history
     high_volume_tier: bool = False,  # Confirmed/estimated PayPal fee tier; see README caveat
     dispute_fee_override: Optional[float] = None,  # user-supplied actual fee
+    currency_code: str = "USD",  # ISO 4217 — Oracle fees are USD; non-USD produces a warning
 ) -> OracleDecision:
     """
     Core Oracle calculation.
@@ -145,9 +146,14 @@ def calculate(
     Break-even (minimum p_win to justify fighting):
       Standard:    p_break = (time_cost + 15) / (amount + 15)
       High-volume: p_break = (time_cost + 30) / amount
+
+    NOTE: dispute fees ($15/$30) are USD constants. For non-USD disputes the EV
+    comparison is cross-currency; treat the result as directional, not precise.
     """
     if not math.isfinite(dispute_amount) or dispute_amount < 0:
         raise ValueError("dispute_amount must be a finite, non-negative number")
+    if dispute_amount > 100_000:
+        raise ValueError("dispute_amount exceeds $100,000 — verify the currency and amount")
     if not math.isfinite(seller_hourly_rate) or seller_hourly_rate < 0:
         raise ValueError("seller_hourly_rate must be a finite, non-negative number")
     if dispute_fee_override is not None and (
@@ -156,6 +162,12 @@ def calculate(
         raise ValueError("dispute_fee_override must be a finite, non-negative number")
 
     reasoning = []
+
+    if currency_code.upper() != "USD":
+        reasoning.append(
+            f"⚠ Currency: {currency_code.upper()} — dispute fees ($15/$30) are USD constants; "
+            "EV comparison is cross-currency and directional only"
+        )
 
     # Fee tier — user override takes priority
     if dispute_fee_override is not None:

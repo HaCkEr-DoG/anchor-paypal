@@ -101,8 +101,9 @@ async def load_config(merchant_id: str) -> GuardianConfig:
             )
             if r.status_code == 200:
                 return GuardianConfig.from_dict(r.json().get("_source", {}))
-    except Exception:
-        pass
+            print(f"[Config] ES returned {r.status_code} for merchant {merchant_id} — using defaults")
+    except Exception as exc:
+        print(f"[Config] ES unreachable for merchant {merchant_id} ({exc}) — using defaults; autonomous thresholds may not reflect merchant settings")
     return DEFAULT_CONFIG
 
 
