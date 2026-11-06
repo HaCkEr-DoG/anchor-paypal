@@ -1,29 +1,32 @@
 """
-Evidence Quality Scorer — assess how strong a merchant's dispute evidence is.
+Evidence Quality Scorer — assess the quality and completeness of a dispute
+evidence package before submission.
 
-PayPal's dispute review team evaluates evidence on:
-  1. Delivery proof strength (tracking, signature, photo)
-  2. Product match (shipped item = ordered item)
-  3. Buyer interaction (communication attempts)
-  4. Policy compliance (ToS, description accuracy)
-  5. Transaction legitimacy (device match, prior orders)
+PayPal and card networks evaluate dispute evidence on completeness, relevance,
+and specificity. Weak evidence is the leading cause of winnable disputes being
+lost. This module scores an evidence package and identifies the most impactful
+gaps before submission.
 
-This module scores a merchant's evidence package (0-100) and predicts
-how much it will boost the win probability for each claim type.
+Evidence types by claim category:
+  INR:          tracking number, proof of delivery, carrier confirmation
+  SNAD:         product listing screenshots, description match, photos,
+                return policy, communication logs
+  UNAUTHORIZED: device fingerprint, IP logs, 2FA records, prior order history
+  DUPLICATE:    original order receipt, payment records, refund confirmation
+  SUBSCRIPTION: cancellation confirmation, terms, communication history
 
-Evidence tiers:
-  EXCELLENT (85-100): Signature confirmation + photo + tracking — near-certain win
-  GOOD      (65-84):  Tracking shows delivered + communication logs
-  ADEQUATE  (45-64):  Tracking only, or partial evidence
-  WEAK      (25-44):  No delivery proof or only self-reported info
-  INSUFFICIENT (0-24): No meaningful evidence
+Score components (each 0–100, weighted to composite):
+  COMPLETENESS   — Are the required evidence types present?
+  SPECIFICITY    — Does evidence directly address the specific claim?
+  DOCUMENTATION  — Are files in acceptable format and date-stamped?
+  TIMELINE       — Is there a coherent chronological narrative?
+  REBUTTAL       — Does the evidence directly counter buyer's claim?
 
-Claim-type weights (which evidence matters most per claim):
-  INR:            Delivery proof (40%), tracking details (30%), photos (20%), comms (10%)
-  SNAD:           Photos (35%), description accuracy (30%), return policy (20%), comms (15%)
-  UNAUTHORIZED:   Transaction legitimacy (40%), device match (30%), prior orders (20%), comms (10%)
-  SUBSCRIPTION:   ToS acceptance (45%), cancellation policy (35%), comms (20%)
-  DUPLICATE:      Transaction records (60%), comms (40%)
+Composite thresholds:
+  STRONG  ≥ 80 — submit as-is; high confidence
+  ADEQUATE 60–79 — submit; flag minor gaps
+  WEAK    40–59 — supplement before submitting
+  POOR    < 40  — do not submit; high loss risk
 
 This is a pure oracle module — no I/O, no persistence.
 """
@@ -35,348 +38,439 @@ from enum import Enum
 from typing import Optional
 
 
-class EvidenceTier(str, Enum):
-    EXCELLENT     = "EXCELLENT"
-    GOOD          = "GOOD"
-    ADEQUATE      = "ADEQUATE"
-    WEAK          = "WEAK"
-    INSUFFICIENT  = "INSUFFICIENT"
+class EvidenceStrength(str, Enum):
+    STRONG   = "STRONG"
+    ADEQUATE = "ADEQUATE"
+    WEAK     = "WEAK"
+    POOR     = "POOR"
 
 
-class EvidenceItem(str, Enum):
-    # Delivery evidence
-    TRACKING_NUMBER         = "TRACKING_NUMBER"
-    TRACKING_SHOWS_DELIVERED = "TRACKING_SHOWS_DELIVERED"
-    SIGNATURE_CONFIRMATION  = "SIGNATURE_CONFIRMATION"
-    DELIVERY_PHOTO          = "DELIVERY_PHOTO"
-    CARRIER_AFFIDAVIT       = "CARRIER_AFFIDAVIT"
-
-    # Product match evidence
-    PRODUCT_PHOTOS          = "PRODUCT_PHOTOS"
-    LISTING_SCREENSHOT      = "LISTING_SCREENSHOT"
-    PACKING_SLIP            = "PACKING_SLIP"
-    WEIGHT_MANIFEST         = "WEIGHT_MANIFEST"
-
-    # Buyer interaction
-    BUYER_MESSAGES_LOG      = "BUYER_MESSAGES_LOG"
-    RESOLUTION_ATTEMPT      = "RESOLUTION_ATTEMPT"
-    BUYER_ACKNOWLEDGMENT    = "BUYER_ACKNOWLEDGMENT"
-
-    # Transaction legitimacy
-    MATCHING_IP_ADDRESS     = "MATCHING_IP_ADDRESS"
-    MATCHING_DEVICE         = "MATCHING_DEVICE"
-    PRIOR_SUCCESSFUL_ORDERS = "PRIOR_SUCCESSFUL_ORDERS"
-    ADDRESS_VERIFICATION    = "ADDRESS_VERIFICATION"
-
-    # Policy / ToS
-    TOS_ACCEPTANCE          = "TOS_ACCEPTANCE"
-    CANCELLATION_POLICY     = "CANCELLATION_POLICY"
-    RETURN_POLICY           = "RETURN_POLICY"
-    DESCRIPTION_ACCURACY    = "DESCRIPTION_ACCURACY"
-
-    # Administrative
-    INVOICE                 = "INVOICE"
-    SHIPPING_LABEL          = "SHIPPING_LABEL"
+class EvidenceType(str, Enum):
+    TRACKING_NUMBER        = "TRACKING_NUMBER"
+    PROOF_OF_DELIVERY      = "PROOF_OF_DELIVERY"
+    CARRIER_CONFIRMATION   = "CARRIER_CONFIRMATION"
+    PRODUCT_LISTING        = "PRODUCT_LISTING"
+    DESCRIPTION_MATCH      = "DESCRIPTION_MATCH"
+    ITEM_PHOTOS            = "ITEM_PHOTOS"
+    RETURN_POLICY          = "RETURN_POLICY"
+    COMMUNICATION_LOG      = "COMMUNICATION_LOG"
+    DEVICE_FINGERPRINT     = "DEVICE_FINGERPRINT"
+    IP_ADDRESS_LOG         = "IP_ADDRESS_LOG"
+    TWO_FA_RECORD          = "TWO_FA_RECORD"
+    ORDER_HISTORY          = "ORDER_HISTORY"
+    ORIGINAL_RECEIPT       = "ORIGINAL_RECEIPT"
+    PAYMENT_RECORD         = "PAYMENT_RECORD"
+    REFUND_CONFIRMATION    = "REFUND_CONFIRMATION"
+    CANCELLATION_CONFIRM   = "CANCELLATION_CONFIRM"
+    SUBSCRIPTION_TERMS     = "SUBSCRIPTION_TERMS"
+    SIGNATURE_CONFIRMATION = "SIGNATURE_CONFIRMATION"
+    INVOICE                = "INVOICE"
+    CUSTOM_ORDER_PROOF     = "CUSTOM_ORDER_PROOF"
 
 
-# Base score contribution per evidence item (1-25)
-_EVIDENCE_WEIGHTS: dict[EvidenceItem, float] = {
-    EvidenceItem.TRACKING_NUMBER:           8.0,
-    EvidenceItem.TRACKING_SHOWS_DELIVERED:  18.0,
-    EvidenceItem.SIGNATURE_CONFIRMATION:    22.0,
-    EvidenceItem.DELIVERY_PHOTO:            15.0,
-    EvidenceItem.CARRIER_AFFIDAVIT:         20.0,
+class ClaimType(str, Enum):
+    INR          = "INR"
+    SNAD         = "SNAD"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    DUPLICATE    = "DUPLICATE"
+    SUBSCRIPTION = "SUBSCRIPTION"
 
-    EvidenceItem.PRODUCT_PHOTOS:            12.0,
-    EvidenceItem.LISTING_SCREENSHOT:        10.0,
-    EvidenceItem.PACKING_SLIP:              8.0,
-    EvidenceItem.WEIGHT_MANIFEST:           10.0,
 
-    EvidenceItem.BUYER_MESSAGES_LOG:        10.0,
-    EvidenceItem.RESOLUTION_ATTEMPT:        8.0,
-    EvidenceItem.BUYER_ACKNOWLEDGMENT:      14.0,
-
-    EvidenceItem.MATCHING_IP_ADDRESS:       15.0,
-    EvidenceItem.MATCHING_DEVICE:           18.0,
-    EvidenceItem.PRIOR_SUCCESSFUL_ORDERS:   14.0,
-    EvidenceItem.ADDRESS_VERIFICATION:      10.0,
-
-    EvidenceItem.TOS_ACCEPTANCE:            20.0,
-    EvidenceItem.CANCELLATION_POLICY:       15.0,
-    EvidenceItem.RETURN_POLICY:             10.0,
-    EvidenceItem.DESCRIPTION_ACCURACY:      12.0,
-
-    EvidenceItem.INVOICE:                   8.0,
-    EvidenceItem.SHIPPING_LABEL:            10.0,
-}
-
-# Per-claim-type relevance multiplier (1.0 = full weight, 0.3 = minimal relevance)
-_CLAIM_RELEVANCE: dict[str, dict[EvidenceItem, float]] = {
-    "INR": {
-        EvidenceItem.TRACKING_SHOWS_DELIVERED:  1.5,
-        EvidenceItem.SIGNATURE_CONFIRMATION:    1.5,
-        EvidenceItem.DELIVERY_PHOTO:            1.3,
-        EvidenceItem.CARRIER_AFFIDAVIT:         1.4,
-        EvidenceItem.TRACKING_NUMBER:           1.2,
-        EvidenceItem.SHIPPING_LABEL:            1.1,
-        EvidenceItem.BUYER_MESSAGES_LOG:        0.8,
-        EvidenceItem.TOS_ACCEPTANCE:            0.3,
-        EvidenceItem.CANCELLATION_POLICY:       0.2,
-    },
-    "SNAD": {
-        EvidenceItem.PRODUCT_PHOTOS:            1.5,
-        EvidenceItem.LISTING_SCREENSHOT:        1.4,
-        EvidenceItem.DESCRIPTION_ACCURACY:      1.4,
-        EvidenceItem.RETURN_POLICY:             1.3,
-        EvidenceItem.WEIGHT_MANIFEST:           1.2,
-        EvidenceItem.BUYER_MESSAGES_LOG:        1.2,
-        EvidenceItem.TRACKING_SHOWS_DELIVERED:  0.5,
-        EvidenceItem.SIGNATURE_CONFIRMATION:    0.5,
-    },
-    "UNAUTHORIZED": {
-        EvidenceItem.MATCHING_IP_ADDRESS:       1.5,
-        EvidenceItem.MATCHING_DEVICE:           1.5,
-        EvidenceItem.PRIOR_SUCCESSFUL_ORDERS:   1.4,
-        EvidenceItem.ADDRESS_VERIFICATION:      1.3,
-        EvidenceItem.TRACKING_SHOWS_DELIVERED:  1.0,
-        EvidenceItem.SIGNATURE_CONFIRMATION:    1.0,
-        EvidenceItem.BUYER_ACKNOWLEDGMENT:      0.6,
-        EvidenceItem.TOS_ACCEPTANCE:            0.4,
-    },
-    "SUBSCRIPTION": {
-        EvidenceItem.TOS_ACCEPTANCE:            1.5,
-        EvidenceItem.CANCELLATION_POLICY:       1.5,
-        EvidenceItem.BUYER_ACKNOWLEDGMENT:      1.4,
-        EvidenceItem.BUYER_MESSAGES_LOG:        1.2,
-        EvidenceItem.RESOLUTION_ATTEMPT:        1.0,
-        EvidenceItem.TRACKING_SHOWS_DELIVERED:  0.2,
-    },
-    "DUPLICATE": {
-        EvidenceItem.INVOICE:                   1.5,
-        EvidenceItem.BUYER_MESSAGES_LOG:        1.3,
-        EvidenceItem.RESOLUTION_ATTEMPT:        1.2,
-        EvidenceItem.BUYER_ACKNOWLEDGMENT:      1.4,
-        EvidenceItem.TRACKING_SHOWS_DELIVERED:  0.6,
-    },
-}
-
-# Base win-rate boost per evidence tier (additive pp)
-_TIER_WIN_BOOST: dict[EvidenceTier, float] = {
-    EvidenceTier.EXCELLENT:    0.22,
-    EvidenceTier.GOOD:         0.14,
-    EvidenceTier.ADEQUATE:     0.07,
-    EvidenceTier.WEAK:         0.02,
-    EvidenceTier.INSUFFICIENT: -0.05,
-}
+class EvidenceGapSeverity(str, Enum):
+    CRITICAL = "CRITICAL"   # Winning without this is very unlikely
+    MAJOR    = "MAJOR"      # Significantly reduces win probability
+    MINOR    = "MINOR"      # Nice to have; small marginal benefit
 
 
 @dataclass
-class EvidencePackage:
-    """Evidence a merchant has collected for one dispute."""
-    dispute_id: str
-    claim_type: str               # INR / SNAD / UNAUTHORIZED / SUBSCRIPTION / DUPLICATE
-    items: list[EvidenceItem] = field(default_factory=list)
-    notes: str = ""               # Free-form notes about evidence quality
+class EvidenceItem:
+    """One piece of evidence in the package."""
+    evidence_type: EvidenceType
+    is_present: bool
+    is_dated: bool = False       # Does it have a clear date?
+    is_specific: bool = False    # Is it specific to this transaction?
+    file_format_ok: bool = True  # Acceptable file format (PDF, image, etc.)
+    description: str = ""        # Optional free-text description
 
 
 @dataclass
 class EvidenceGap:
-    """An evidence item not present but recommended."""
-    item: EvidenceItem
-    importance: str               # HIGH / MEDIUM / LOW
-    action: str                   # What to do to get it
+    """A missing or weak evidence item."""
+    evidence_type: EvidenceType
+    severity: EvidenceGapSeverity
+    description: str
+    suggested_action: str
 
 
 @dataclass
-class EvidenceScoreReport:
-    """
-    Complete evidence quality assessment for one dispute.
-    """
+class EvidenceScoreComponent:
+    """Score for one quality dimension."""
+    dimension: str
+    score: float        # 0–100
+    weight: float
+    weighted_contribution: float
+    notes: str
+
+
+@dataclass
+class EvidenceQualityInput:
+    """Input for evidence quality assessment."""
     dispute_id: str
-    claim_type: str
+    claim_type: ClaimType
+    dispute_amount: float
+    evidence_items: list[EvidenceItem]
 
-    # Score & tier
-    raw_score: float              # 0-100 before normalization
-    normalized_score: float       # 0-100 normalized to claim type max
-    tier: EvidenceTier
+    # Context
+    days_until_deadline: int = 10
+    has_prior_buyer_communication: bool = False
+    buyer_claimed_non_delivery: bool = True
+    order_above_signature_threshold: bool = False   # ≥ $750
+    is_digital_goods: bool = False
 
-    # Win-rate impact
-    win_rate_boost: float         # Additive adjustment to base win rate
 
-    # What merchant has
-    items_present: list[EvidenceItem]
-    items_present_count: int
+# Required evidence per claim type (ordered by criticality)
+_REQUIRED: dict[ClaimType, list[tuple[EvidenceType, EvidenceGapSeverity]]] = {
+    ClaimType.INR: [
+        (EvidenceType.TRACKING_NUMBER,       EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.PROOF_OF_DELIVERY,     EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.CARRIER_CONFIRMATION,  EvidenceGapSeverity.MAJOR),
+        (EvidenceType.COMMUNICATION_LOG,     EvidenceGapSeverity.MINOR),
+    ],
+    ClaimType.SNAD: [
+        (EvidenceType.PRODUCT_LISTING,       EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.DESCRIPTION_MATCH,     EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.ITEM_PHOTOS,           EvidenceGapSeverity.MAJOR),
+        (EvidenceType.RETURN_POLICY,         EvidenceGapSeverity.MAJOR),
+        (EvidenceType.COMMUNICATION_LOG,     EvidenceGapSeverity.MINOR),
+    ],
+    ClaimType.UNAUTHORIZED: [
+        (EvidenceType.IP_ADDRESS_LOG,        EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.ORDER_HISTORY,         EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.DEVICE_FINGERPRINT,    EvidenceGapSeverity.MAJOR),
+        (EvidenceType.TWO_FA_RECORD,         EvidenceGapSeverity.MAJOR),
+    ],
+    ClaimType.DUPLICATE: [
+        (EvidenceType.ORIGINAL_RECEIPT,      EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.PAYMENT_RECORD,        EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.REFUND_CONFIRMATION,   EvidenceGapSeverity.MAJOR),
+    ],
+    ClaimType.SUBSCRIPTION: [
+        (EvidenceType.SUBSCRIPTION_TERMS,    EvidenceGapSeverity.CRITICAL),
+        (EvidenceType.CANCELLATION_CONFIRM,  EvidenceGapSeverity.MAJOR),
+        (EvidenceType.COMMUNICATION_LOG,     EvidenceGapSeverity.MAJOR),
+        (EvidenceType.ORIGINAL_RECEIPT,      EvidenceGapSeverity.MINOR),
+    ],
+}
 
-    # What's missing
+
+def _score_completeness(inp: EvidenceQualityInput,
+                        present: set[EvidenceType]) -> tuple[float, str]:
+    required = _REQUIRED.get(inp.claim_type, [])
+    if not required:
+        return 50.0, "Unknown claim type — cannot assess completeness"
+
+    critical = [(t, s) for t, s in required if s == EvidenceGapSeverity.CRITICAL]
+    major    = [(t, s) for t, s in required if s == EvidenceGapSeverity.MAJOR]
+
+    critical_present = sum(1 for t, _ in critical if t in present)
+    major_present    = sum(1 for t, _ in major    if t in present)
+
+    score = 0.0
+    if critical:
+        score += 60.0 * (critical_present / len(critical))
+    else:
+        score += 60.0
+    if major:
+        score += 30.0 * (major_present / len(major))
+    else:
+        score += 30.0
+    score += 10.0  # Minor items bonus assumed if critical + major present
+
+    extra = ""
+    if inp.order_above_signature_threshold and EvidenceType.SIGNATURE_CONFIRMATION not in present:
+        score = max(0, score - 15.0)
+        extra = " (signature confirmation missing for ≥$750 order)"
+
+    return round(score, 1), f"{critical_present}/{len(critical)} critical, {major_present}/{len(major)} major{extra}"
+
+
+def _score_specificity(inp: EvidenceQualityInput) -> tuple[float, str]:
+    items = [i for i in inp.evidence_items if i.is_present]
+    if not items:
+        return 0.0, "No evidence present"
+    specific_count = sum(1 for i in items if i.is_specific)
+    pct = specific_count / len(items)
+    if pct >= 0.90:
+        return 100.0, f"{specific_count}/{len(items)} items transaction-specific"
+    if pct >= 0.70:
+        return 75.0, f"{specific_count}/{len(items)} items transaction-specific"
+    if pct >= 0.50:
+        return 50.0, f"{specific_count}/{len(items)} items transaction-specific"
+    return 25.0, f"Only {specific_count}/{len(items)} items are transaction-specific"
+
+
+def _score_documentation(inp: EvidenceQualityInput) -> tuple[float, str]:
+    items = [i for i in inp.evidence_items if i.is_present]
+    if not items:
+        return 0.0, "No evidence present"
+    dated_count  = sum(1 for i in items if i.is_dated)
+    format_ok    = sum(1 for i in items if i.file_format_ok)
+    dated_pct    = dated_count / len(items)
+    format_pct   = format_ok  / len(items)
+    score = round((dated_pct * 60 + format_pct * 40) * 100 / 100, 1)
+    return score, f"{dated_count}/{len(items)} dated, {format_ok}/{len(items)} correct format"
+
+
+def _score_timeline(inp: EvidenceQualityInput) -> tuple[float, str]:
+    # Timeline quality: communication log + dated evidence creates a narrative
+    items = [i for i in inp.evidence_items if i.is_present]
+    dated_count = sum(1 for i in items if i.is_dated)
+    has_comm = any(i.evidence_type == EvidenceType.COMMUNICATION_LOG
+                   for i in items)
+    has_receipt = any(i.evidence_type in (EvidenceType.ORIGINAL_RECEIPT,
+                                           EvidenceType.INVOICE,
+                                           EvidenceType.PAYMENT_RECORD)
+                      for i in items)
+    score = 0.0
+    if dated_count >= 2:
+        score += 40.0
+    elif dated_count == 1:
+        score += 20.0
+    if has_comm:
+        score += 30.0
+    if has_receipt:
+        score += 30.0
+    return round(score, 1), f"dated_docs={dated_count}, has_communication={has_comm}, has_receipt={has_receipt}"
+
+
+def _score_rebuttal(inp: EvidenceQualityInput,
+                    present: set[EvidenceType]) -> tuple[float, str]:
+    # Does evidence directly rebut the buyer's specific claim?
+    score = 50.0  # Base — neutral
+    notes_parts = []
+
+    if inp.claim_type == ClaimType.INR:
+        if EvidenceType.PROOF_OF_DELIVERY in present:
+            score = min(100.0, score + 35.0)
+            notes_parts.append("delivery proof present")
+        if EvidenceType.SIGNATURE_CONFIRMATION in present:
+            score = min(100.0, score + 15.0)
+            notes_parts.append("signature confirmation")
+        if inp.buyer_claimed_non_delivery and EvidenceType.CARRIER_CONFIRMATION in present:
+            score = min(100.0, score + 10.0)
+            notes_parts.append("carrier confirmation")
+
+    elif inp.claim_type == ClaimType.SNAD:
+        if EvidenceType.DESCRIPTION_MATCH in present and EvidenceType.ITEM_PHOTOS in present:
+            score = min(100.0, score + 30.0)
+            notes_parts.append("listing + photos match claim")
+        if EvidenceType.PRODUCT_LISTING in present:
+            score = min(100.0, score + 15.0)
+
+    elif inp.claim_type == ClaimType.UNAUTHORIZED:
+        if EvidenceType.IP_ADDRESS_LOG in present and EvidenceType.ORDER_HISTORY in present:
+            score = min(100.0, score + 35.0)
+            notes_parts.append("IP + order history rebut fraud claim")
+        if EvidenceType.DEVICE_FINGERPRINT in present:
+            score = min(100.0, score + 15.0)
+
+    elif inp.claim_type == ClaimType.DUPLICATE:
+        if EvidenceType.ORIGINAL_RECEIPT in present:
+            score = min(100.0, score + 35.0)
+        if EvidenceType.REFUND_CONFIRMATION in present:
+            score = min(100.0, score + 15.0)
+
+    elif inp.claim_type == ClaimType.SUBSCRIPTION:
+        if EvidenceType.SUBSCRIPTION_TERMS in present:
+            score = min(100.0, score + 30.0)
+        if EvidenceType.COMMUNICATION_LOG in present:
+            score = min(100.0, score + 20.0)
+
+    notes = ", ".join(notes_parts) if notes_parts else "limited direct rebuttal evidence"
+    return round(score, 1), notes
+
+
+_WEIGHTS = {
+    "completeness":    0.35,
+    "specificity":     0.20,
+    "documentation":   0.15,
+    "timeline":        0.15,
+    "rebuttal":        0.15,
+}
+
+
+@dataclass
+class EvidenceQualityReport:
+    """Complete evidence quality assessment."""
+    dispute_id: str
+    claim_type: ClaimType
+
+    # Overall
+    composite_score: float
+    strength: EvidenceStrength
+
+    # Components
+    components: list[EvidenceScoreComponent]
+
+    # Gaps
     gaps: list[EvidenceGap]
-    critical_gaps: list[EvidenceItem]   # Missing items that heavily impact the case
-
-    # Scoring breakdown
-    top_evidence_items: list[tuple[EvidenceItem, float]]  # (item, weighted_score)
+    critical_gaps: int
+    major_gaps: int
 
     # Guidance
-    collection_priority: list[str]   # Ordered list of things to collect
+    submit_recommended: bool
+    submission_risk: str      # "LOW" / "MEDIUM" / "HIGH"
+    top_actions: list[str]    # Highest-impact actions to take now
+
     summary: str
 
 
-def _tier_from_score(score: float) -> EvidenceTier:
-    if score >= 85:
-        return EvidenceTier.EXCELLENT
-    if score >= 65:
-        return EvidenceTier.GOOD
-    if score >= 45:
-        return EvidenceTier.ADEQUATE
-    if score >= 25:
-        return EvidenceTier.WEAK
-    return EvidenceTier.INSUFFICIENT
-
-
-def _critical_gap_items(claim_type: str) -> list[EvidenceItem]:
-    """Items that are near-mandatory for each claim type."""
-    critical = {
-        "INR": [EvidenceItem.TRACKING_SHOWS_DELIVERED, EvidenceItem.TRACKING_NUMBER],
-        "SNAD": [EvidenceItem.PRODUCT_PHOTOS, EvidenceItem.LISTING_SCREENSHOT],
-        "UNAUTHORIZED": [EvidenceItem.MATCHING_IP_ADDRESS, EvidenceItem.MATCHING_DEVICE],
-        "SUBSCRIPTION": [EvidenceItem.TOS_ACCEPTANCE, EvidenceItem.CANCELLATION_POLICY],
-        "DUPLICATE": [EvidenceItem.INVOICE],
-    }
-    return critical.get(claim_type, [EvidenceItem.BUYER_MESSAGES_LOG])
-
-
-def _recommended_items(claim_type: str) -> list[EvidenceItem]:
-    """Full recommended list for a claim type, ordered by importance."""
-    recs = {
-        "INR": [
-            EvidenceItem.TRACKING_SHOWS_DELIVERED,
-            EvidenceItem.SIGNATURE_CONFIRMATION,
-            EvidenceItem.DELIVERY_PHOTO,
-            EvidenceItem.CARRIER_AFFIDAVIT,
-            EvidenceItem.TRACKING_NUMBER,
-            EvidenceItem.SHIPPING_LABEL,
-            EvidenceItem.BUYER_MESSAGES_LOG,
-            EvidenceItem.PACKING_SLIP,
-        ],
-        "SNAD": [
-            EvidenceItem.PRODUCT_PHOTOS,
-            EvidenceItem.LISTING_SCREENSHOT,
-            EvidenceItem.DESCRIPTION_ACCURACY,
-            EvidenceItem.RETURN_POLICY,
-            EvidenceItem.WEIGHT_MANIFEST,
-            EvidenceItem.BUYER_MESSAGES_LOG,
-            EvidenceItem.RESOLUTION_ATTEMPT,
-        ],
-        "UNAUTHORIZED": [
-            EvidenceItem.MATCHING_IP_ADDRESS,
-            EvidenceItem.MATCHING_DEVICE,
-            EvidenceItem.PRIOR_SUCCESSFUL_ORDERS,
-            EvidenceItem.ADDRESS_VERIFICATION,
-            EvidenceItem.TRACKING_SHOWS_DELIVERED,
-            EvidenceItem.SIGNATURE_CONFIRMATION,
-        ],
-        "SUBSCRIPTION": [
-            EvidenceItem.TOS_ACCEPTANCE,
-            EvidenceItem.CANCELLATION_POLICY,
-            EvidenceItem.BUYER_ACKNOWLEDGMENT,
-            EvidenceItem.BUYER_MESSAGES_LOG,
-            EvidenceItem.RESOLUTION_ATTEMPT,
-        ],
-        "DUPLICATE": [
-            EvidenceItem.INVOICE,
-            EvidenceItem.BUYER_ACKNOWLEDGMENT,
-            EvidenceItem.BUYER_MESSAGES_LOG,
-            EvidenceItem.RESOLUTION_ATTEMPT,
-        ],
-    }
-    return recs.get(claim_type, list(EvidenceItem))
-
-
-def score_evidence(pkg: EvidencePackage) -> EvidenceScoreReport:
-    """
-    Score the quality of a merchant's evidence package for one dispute.
-    """
-    relevance = _CLAIM_RELEVANCE.get(pkg.claim_type, {})
-    present_set = set(pkg.items)
-
-    # Compute weighted score per item
-    item_scores: list[tuple[EvidenceItem, float]] = []
-    for item in pkg.items:
-        base = _EVIDENCE_WEIGHTS.get(item, 5.0)
-        multiplier = relevance.get(item, 1.0)
-        item_scores.append((item, round(base * multiplier, 2)))
-
-    item_scores.sort(key=lambda x: -x[1])
-
-    # Raw score: sum of item scores, capped at 100
-    raw = round(min(100.0, sum(s for _, s in item_scores)), 1)
-
-    # Max possible score for this claim type (top-N items)
-    recommended = _recommended_items(pkg.claim_type)
-    max_possible = min(100.0, sum(
-        _EVIDENCE_WEIGHTS.get(i, 5.0) * relevance.get(i, 1.0)
-        for i in recommended[:8]
-    ))
-    normalized = round(min(100.0, raw / max(max_possible, 1.0) * 100.0), 1)
-
-    tier = _tier_from_score(normalized)
-    win_boost = _TIER_WIN_BOOST[tier]
-
-    # Gaps
-    critical_items = _critical_gap_items(pkg.claim_type)
-    critical_gaps = [i for i in critical_items if i not in present_set]
-
-    all_recommended = recommended[:8]
+def _build_gaps(inp: EvidenceQualityInput,
+                present: set[EvidenceType]) -> list[EvidenceGap]:
     gaps: list[EvidenceGap] = []
-    for item in all_recommended:
-        if item not in present_set:
-            is_critical = item in critical_items
-            gap_actions = {
-                EvidenceItem.TRACKING_SHOWS_DELIVERED: "Screenshot the tracking page showing 'Delivered' status",
-                EvidenceItem.SIGNATURE_CONFIRMATION:   "Request proof of delivery with signature from carrier",
-                EvidenceItem.DELIVERY_PHOTO:           "Contact carrier to retrieve delivery photo",
-                EvidenceItem.PRODUCT_PHOTOS:           "Photograph the actual item vs listing photos side-by-side",
-                EvidenceItem.LISTING_SCREENSHOT:       "Screenshot the original product listing at time of sale",
-                EvidenceItem.MATCHING_IP_ADDRESS:      "Export transaction IP from your payment processor",
-                EvidenceItem.MATCHING_DEVICE:          "Pull device fingerprint from your platform's fraud tools",
-                EvidenceItem.TOS_ACCEPTANCE:           "Export ToS acceptance log with timestamp and IP",
-                EvidenceItem.CANCELLATION_POLICY:      "Screenshot your subscription cancellation policy page",
-                EvidenceItem.INVOICE:                  "Attach the original transaction invoice/receipt",
-                EvidenceItem.BUYER_MESSAGES_LOG:       "Export the full PayPal messaging thread",
-            }
+    required = _REQUIRED.get(inp.claim_type, [])
+
+    for ev_type, severity in required:
+        if ev_type not in present:
+            if ev_type == EvidenceType.TRACKING_NUMBER:
+                action = "Retrieve shipment tracking number from carrier dashboard"
+            elif ev_type == EvidenceType.PROOF_OF_DELIVERY:
+                action = "Download delivery confirmation PDF from carrier portal"
+            elif ev_type == EvidenceType.CARRIER_CONFIRMATION:
+                action = "Contact carrier for official delivery confirmation letter"
+            elif ev_type == EvidenceType.PRODUCT_LISTING:
+                action = "Export product listing page as PDF with timestamps"
+            elif ev_type == EvidenceType.DESCRIPTION_MATCH:
+                action = "Create side-by-side comparison of listing vs. item shipped"
+            elif ev_type == EvidenceType.ITEM_PHOTOS:
+                action = "Retrieve item photos taken at packing/shipping time"
+            elif ev_type == EvidenceType.RETURN_POLICY:
+                action = "Export return policy page or policy text from order confirmation"
+            elif ev_type == EvidenceType.COMMUNICATION_LOG:
+                action = "Export all messages with buyer from platform messaging system"
+            elif ev_type == EvidenceType.IP_ADDRESS_LOG:
+                action = "Pull IP address and device metadata from order placement logs"
+            elif ev_type == EvidenceType.ORDER_HISTORY:
+                action = "Export prior order history showing buyer's established pattern"
+            elif ev_type == EvidenceType.DEVICE_FINGERPRINT:
+                action = "Retrieve device fingerprint / browser session from fraud tools"
+            elif ev_type == EvidenceType.TWO_FA_RECORD:
+                action = "Export 2FA verification log for the account at order time"
+            elif ev_type == EvidenceType.ORIGINAL_RECEIPT:
+                action = "Export original order receipt with order ID and timestamp"
+            elif ev_type == EvidenceType.PAYMENT_RECORD:
+                action = "Pull payment capture records from payment processor"
+            elif ev_type == EvidenceType.REFUND_CONFIRMATION:
+                action = "Retrieve refund confirmation email or processor record"
+            elif ev_type == EvidenceType.SUBSCRIPTION_TERMS:
+                action = "Export subscription terms and billing schedule accepted at sign-up"
+            elif ev_type == EvidenceType.CANCELLATION_CONFIRM:
+                action = "Provide cancellation confirmation email or system record"
+            else:
+                action = f"Obtain {ev_type.value.replace('_', ' ').lower()} for this transaction"
+
             gaps.append(EvidenceGap(
-                item=item,
-                importance="HIGH" if is_critical else "MEDIUM",
-                action=gap_actions.get(item, f"Collect {item.value.lower().replace('_', ' ')}"),
+                evidence_type=ev_type,
+                severity=severity,
+                description=f"Missing: {ev_type.value.replace('_', ' ').lower()}",
+                suggested_action=action,
             ))
 
-    # Collection priority
-    priority = []
-    if critical_gaps:
-        priority.append(f"CRITICAL: Collect {', '.join(i.value for i in critical_gaps)}")
-    for gap in gaps[:3]:
-        priority.append(f"Collect {gap.item.value.lower().replace('_', ' ')} ({gap.importance})")
-    if tier in (EvidenceTier.EXCELLENT, EvidenceTier.GOOD):
-        priority.append("Evidence is strong — submit promptly before deadline")
+    # Signature for high-value orders
+    if (inp.order_above_signature_threshold
+            and EvidenceType.SIGNATURE_CONFIRMATION not in present):
+        gaps.append(EvidenceGap(
+            evidence_type=EvidenceType.SIGNATURE_CONFIRMATION,
+            severity=EvidenceGapSeverity.CRITICAL,
+            description="Signature confirmation required for orders ≥$750",
+            suggested_action="Retrieve adult signature confirmation from carrier or delivery service",
+        ))
+
+    return gaps
+
+
+def score_evidence_quality(inp: EvidenceQualityInput) -> EvidenceQualityReport:
+    """
+    Score the quality and completeness of a dispute evidence package.
+    """
+    present = {item.evidence_type for item in inp.evidence_items if item.is_present}
+
+    # Score each dimension
+    s_completeness,  n_completeness  = _score_completeness(inp, present)
+    s_specificity,   n_specificity   = _score_specificity(inp)
+    s_documentation, n_documentation = _score_documentation(inp)
+    s_timeline,      n_timeline      = _score_timeline(inp)
+    s_rebuttal,      n_rebuttal      = _score_rebuttal(inp, present)
+
+    dim_scores = {
+        "completeness":  (s_completeness,  n_completeness),
+        "specificity":   (s_specificity,   n_specificity),
+        "documentation": (s_documentation, n_documentation),
+        "timeline":      (s_timeline,      n_timeline),
+        "rebuttal":      (s_rebuttal,      n_rebuttal),
+    }
+
+    components: list[EvidenceScoreComponent] = []
+    composite = 0.0
+    for dim, (score, notes) in dim_scores.items():
+        w = _WEIGHTS[dim]
+        contrib = score * w
+        composite += contrib
+        components.append(EvidenceScoreComponent(
+            dimension=dim,
+            score=round(score, 1),
+            weight=w,
+            weighted_contribution=round(contrib, 2),
+            notes=notes,
+        ))
+
+    composite = round(composite, 1)
+
+    strength = (EvidenceStrength.STRONG   if composite >= 80
+                else EvidenceStrength.ADEQUATE if composite >= 60
+                else EvidenceStrength.WEAK     if composite >= 40
+                else EvidenceStrength.POOR)
+
+    gaps = _build_gaps(inp, present)
+    critical_gaps = sum(1 for g in gaps if g.severity == EvidenceGapSeverity.CRITICAL)
+    major_gaps    = sum(1 for g in gaps if g.severity == EvidenceGapSeverity.MAJOR)
+
+    submit_recommended = composite >= 60 and critical_gaps == 0
+    if critical_gaps > 0:
+        submission_risk = "HIGH"
+    elif major_gaps > 1 or composite < 60:
+        submission_risk = "MEDIUM"
+    else:
+        submission_risk = "LOW"
+
+    # Top actions: critical gaps first, then major
+    top_actions: list[str] = []
+    for gap in sorted(gaps, key=lambda g: (0 if g.severity == EvidenceGapSeverity.CRITICAL else 1)):
+        top_actions.append(gap.suggested_action)
+        if len(top_actions) >= 3:
+            break
+
+    if not top_actions and strength in (EvidenceStrength.STRONG, EvidenceStrength.ADEQUATE):
+        top_actions.append("Package is ready — review for date/timestamp accuracy before submission")
 
     summary = (
-        f"Evidence {pkg.dispute_id}: {pkg.claim_type} | "
-        f"score={normalized:.0f}/100 ({tier.value}) | "
-        f"items={len(pkg.items)} | "
-        f"win_boost={win_boost:+.0%} | "
-        f"critical_gaps={len(critical_gaps)}"
+        f"Evidence {inp.dispute_id} [{inp.claim_type.value}]: "
+        f"score={composite:.0f}/100 | strength={strength.value} | "
+        f"critical_gaps={critical_gaps} | submit={'YES' if submit_recommended else 'NO'} | "
+        f"risk={submission_risk}"
     )
 
-    return EvidenceScoreReport(
-        dispute_id=pkg.dispute_id,
-        claim_type=pkg.claim_type,
-        raw_score=raw,
-        normalized_score=normalized,
-        tier=tier,
-        win_rate_boost=win_boost,
-        items_present=list(pkg.items),
-        items_present_count=len(pkg.items),
+    return EvidenceQualityReport(
+        dispute_id=inp.dispute_id,
+        claim_type=inp.claim_type,
+        composite_score=composite,
+        strength=strength,
+        components=components,
         gaps=gaps,
         critical_gaps=critical_gaps,
-        top_evidence_items=item_scores[:5],
-        collection_priority=priority,
+        major_gaps=major_gaps,
+        submit_recommended=submit_recommended,
+        submission_risk=submission_risk,
+        top_actions=top_actions,
         summary=summary,
     )
