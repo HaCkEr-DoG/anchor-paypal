@@ -108,19 +108,58 @@ class Guardian:
                 return
             win_probability = decision.win_probability
 
-        # Account health guardrail
+        # ── Dispute Rate Protection (account survival) ───────────────────────────
+        # This is the most important guardrail: even if Oracle says FIGHT (EV > 0),
+        # crossing PayPal's 1% threshold triggers account limitations that cost more
+        # than any single dispute recovery. should_protect_rate() decides whether
+        # to override Oracle's FIGHT recommendation to ACCEPT strategically.
         if cfg.auto_protect_account:
-            if current_rate >= cfg.dispute_rate_critical:
+            try:
+                from agents.risk_monitor import should_protect_rate
+                override, override_reason, health = await should_protect_rate(
+                    merchant_id=self.merchant_id or MERCHANT_ID,
+                    oracle_ev=getattr(decision, "ev_fight", 0.0),
+                    oracle_win_prob=win_probability or 0.0,
+                )
+                if override:
+                    print(
+                        f"[Guardian] Rate protection override for {dispute_id}: {override_reason}"
+                    )
+                    # Accept strategically but log rate-protection as the reason
+                    await self._accept_dispute(
+                        dispute_id, dispute_amount,
+                        reason=f"rate_protection:{health.threshold_status}"
+                    )
+                    await self._notify(
+                        f"🛡️ Rate protection: accepted ${dispute_amount:.2f} dispute `{dispute_id}` "
+                        f"strategically.\n"
+                        f"Current rate: *{health.window_30d.rate_by_amount:.2%}* "
+                        f"(status: {health.threshold_status}, "
+                        f"quota remaining: {health.safe_fight_quota})\n"
+                        f"Reason: {override_reason}"
+                    )
+                    return
+                # Log posture even when not overriding, so merchant has visibility
                 print(
-                    f"[Guardian] Dispute rate {current_rate:.1%} ≥ critical "
-                    f"{cfg.dispute_rate_critical:.1%} — deferring to manual review to protect account"
+                    f"[Guardian] Rate health: {health.threshold_status} "
+                    f"({health.window_30d.rate_by_amount:.2%}), "
+                    f"quota={health.safe_fight_quota}, posture={health.fight_posture}"
                 )
-                await self._request_approval(dispute_id, dispute_amount, win_probability, decision)
-                await self._notify(
-                    f"⚠️ Account health: dispute rate at {current_rate:.1%}. "
-                    f"Deferred ${dispute_amount:.2f} dispute to your review — dispute rate trending high."
-                )
-                return
+            except Exception as exc:
+                # Rate monitor failure must NEVER block dispute processing
+                print(f"[Guardian] Rate monitor error (non-fatal): {exc}")
+                # Fallback to old basic check
+                if current_rate >= cfg.dispute_rate_critical:
+                    print(
+                        f"[Guardian] Fallback: dispute rate {current_rate:.1%} ≥ critical "
+                        f"{cfg.dispute_rate_critical:.1%} — deferring to manual review"
+                    )
+                    await self._request_approval(dispute_id, dispute_amount, win_probability, decision)
+                    await self._notify(
+                        f"⚠️ Account health: dispute rate at {current_rate:.1%}. "
+                        f"Deferred ${dispute_amount:.2f} dispute to your review."
+                    )
+                    return
 
         # Astropods AI Gateway — when configured, all LLM reasoning routes through
         # the governance layer for audit trail, spend control, and model switching.
@@ -301,10 +340,48 @@ class Guardian:
         transaction = dispute_detail.get("disputed_transactions", [{}])[0]
 
         tracking = transaction.get("items", [{}])[0].get("tracking_info", {}) if transaction.get("items") else {}
-        if tracking.get("tracking_number") and str(tracking.get("status", "")).upper() == "DELIVERED":
+        tracking_number = tracking.get("tracking_number", "")
+
+        # ── Carrier Auto-Verification ─────────────────────────────────────────
+        # For INR disputes: auto-pull live delivery confirmation from the carrier.
+        # This converts 15 minutes of manual tracking lookups into <2 seconds
+        # and dramatically improves evidence quality for INR fights.
+        carrier_result = None
+        if tracking_number and reason_code.upper() in {
+            "ITEM_NOT_RECEIVED", "INR", "MERCHANDISE_OR_SERVICE_NOT_RECEIVED"
+        }:
+            try:
+                from agents.carrier import verify_delivery
+                carrier_result = await verify_delivery(tracking_number)
+                if carrier_result and carrier_result.delivered:
+                    print(
+                        f"[Guardian] Carrier confirmed delivery for {dispute_id}: "
+                        f"{carrier_result.carrier} — {carrier_result.delivery_date} "
+                        f"at {carrier_result.delivery_location}"
+                    )
+                    # Auto-inject delivery confirmation into evidence package notes
+                    package.notes += (
+                        f"\nCarrier verification: {carrier_result.carrier} confirmed delivery "
+                        f"on {carrier_result.delivery_date} to {carrier_result.delivery_location}. "
+                        f"Tracking: {tracking_number}. "
+                        f"Signature obtained: {carrier_result.signature_obtained}. "
+                        f"Carrier URL: {carrier_result.carrier_url}"
+                    )
+                elif carrier_result:
+                    print(
+                        f"[Guardian] Carrier status for {dispute_id}: "
+                        f"{carrier_result.latest_status} (not yet delivered)"
+                    )
+            except Exception as exc:
+                print(f"[Guardian] Carrier verification error (non-fatal): {exc}")
+
+        if tracking_number and (
+            str(tracking.get("status", "")).upper() == "DELIVERED"
+            or (carrier_result and carrier_result.delivered)
+        ):
             f = await assembler.gather_tracking_evidence(
-                tracking_number=tracking["tracking_number"],
-                carrier=tracking.get("carrier_name", "USPS"),
+                tracking_number=tracking_number,
+                carrier=tracking.get("carrier_name", carrier_result.carrier if carrier_result else "USPS"),
                 tmp_dir=tmp_dir,
             )
             if f:

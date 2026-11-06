@@ -1553,3 +1553,114 @@ async def demo_scenarios():
             for k, v in DEMO_SCENARIOS.items()
         ]
     })
+
+
+# ── Dispute Rate Protection & Account Health ──────────────────────────────────
+
+@app.get("/api/account-health/{merchant_id}")
+async def api_account_health(merchant_id: str, open_disputes: int = 0):
+    """
+    Real-time dispute rate health check for a merchant.
+
+    Returns current dispute rate, threshold status, fight quota, and posture
+    recommendation. This is the core output of the Dispute Rate Protection System.
+
+    PayPal thresholds:
+      < 0.5%  — safe
+      0.5–1%  — elevated
+      1–1.5%  — limited (account holds)
+      1.5–3%  — hdr ($30 non-refundable fee)
+      > 3%    — critical (suspension risk)
+    """
+    from agents.risk_monitor import get_account_health
+    health = await get_account_health(merchant_id, open_disputes=open_disputes)
+    return JSONResponse({
+        "merchant_id": health.merchant_id,
+        "threshold_status": health.threshold_status,
+        "threshold_description": health.threshold_description,
+        "dispute_rate_30d": round(health.window_30d.rate_by_amount, 5),
+        "dispute_rate_90d": round(health.window_90d.rate_by_amount, 5),
+        "dispute_count_30d": health.window_30d.dispute_count,
+        "capture_count_30d": health.window_30d.capture_count,
+        "safe_fight_quota": health.safe_fight_quota,
+        "threshold_breach_at": health.threshold_breach_at,
+        "next_threshold": health.next_threshold,
+        "next_threshold_name": health.next_threshold_name,
+        "fight_posture": health.fight_posture,
+        "posture_reason": health.posture_reason,
+        "open_disputes": health.open_disputes,
+        "projected_rate_all_accepted": health.projected_rate_all_accepted,
+        "projected_rate_all_fought": health.projected_rate_all_fought,
+        "checked_at": health.checked_at,
+    })
+
+
+@app.get("/api/account-health")
+async def api_account_health_default(open_disputes: int = 0):
+    """Account health for the default merchant (MERCHANT_ID env var)."""
+    return await api_account_health(os.environ.get("MERCHANT_ID", "default"), open_disputes=open_disputes)
+
+
+# ── Buyer Risk Profiling ───────────────────────────────────────────────────────
+
+@app.get("/api/buyer-risk")
+async def api_buyer_risk(buyer_email: str, merchant_id: str = ""):
+    """
+    Score a buyer's dispute risk profile based on their history in Elasticsearch.
+
+    Call this at capture time (when a buyer pays) to flag high-risk buyers
+    before they can file a dispute. Use the recommendation to require extra
+    verification, signature on delivery, etc.
+    """
+    from agents.fraud_detector import score_buyer
+    mid = merchant_id or os.environ.get("MERCHANT_ID", "default")
+    if not buyer_email:
+        return JSONResponse({"error": "buyer_email required"}, status_code=422)
+    profile = await score_buyer(buyer_email, mid)
+    return JSONResponse({
+        "buyer_email": profile.buyer_email,
+        "merchant_id": profile.merchant_id,
+        "risk_level": profile.risk_level,
+        "risk_score": profile.risk_score,
+        "is_serial_disputer": profile.is_serial_disputer,
+        "recommendation": profile.recommendation,
+        "flags": profile.flags,
+        "total_disputes_90d": profile.total_disputes_90d,
+        "total_disputes_180d": profile.total_disputes_180d,
+        "disputes_reversed_90d": profile.disputes_reversed_90d,
+        "dispute_rate": profile.dispute_rate,
+        "checked_at": profile.checked_at,
+    })
+
+
+# ── Carrier Tracking Verification ────────────────────────────────────────────
+
+@app.get("/api/tracking/verify")
+async def api_tracking_verify(tracking_number: str):
+    """
+    Verify delivery status for a tracking number via USPS/FedEx/UPS/17track.
+
+    Returns confirmed delivery date, location, signature status, and a deep
+    link to the carrier's tracking page for use as dispute evidence.
+    """
+    from agents.carrier import verify_delivery
+    if not tracking_number:
+        return JSONResponse({"error": "tracking_number required"}, status_code=422)
+    result = await verify_delivery(tracking_number)
+    if result is None:
+        return JSONResponse({
+            "tracking_number": tracking_number,
+            "delivered": False,
+            "carrier": "unknown",
+            "error": "No carrier credentials configured or tracking number format unrecognized.",
+        }, status_code=200)
+    return JSONResponse({
+        "tracking_number": result.tracking_number,
+        "carrier": result.carrier,
+        "delivered": result.delivered,
+        "delivery_date": result.delivery_date,
+        "delivery_location": result.delivery_location,
+        "signature_obtained": result.signature_obtained,
+        "latest_status": result.latest_status,
+        "carrier_url": result.carrier_url,
+    })
