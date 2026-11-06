@@ -1,35 +1,33 @@
 """
-HDR War Room — emergency response when dispute rate is approaching thresholds.
+HDR War Room — emergency action protocol engine for High Dispute Rate intervention.
 
-PayPal's HDR program is the existential threat to any merchant's account.
-Most merchants realize they have a problem AFTER they've crossed a threshold.
-The war room detects the trajectory BEFORE the crossing and generates a
-30-day battle plan to pull the rate back down.
+PayPal's High Dispute Rate (HDR) program punishes merchants with elevated dispute rates:
+  < 0.50%:  Normal (safe)
+  0.50-1.0%: ELEVATED — warning, monitor closely
+  1.0-1.5%: LIMITED — processing restrictions may activate
+  1.5-3.0%: FEE TIER — $30 surcharge per dispute above 1.5% threshold
+  3.0-5.0%: SEVERE — additional restrictions + account review
+  5.0%+:    TERMINAL — account suspension risk
 
-Thresholds (rolling 90-day):
-  0.50% → ELEVATED (monitoring starts, may contact merchant)
-  1.00% → LIMITED (payment processing restrictions)
-  1.50% → FEE_TIER ($30 per dispute above 1.5%)
-  3.00% → SEVERE (further processing restrictions)
-  5.00% → TERMINAL (account suspension risk)
+The war room module answers:
+  "Given current HDR rate, trajectory, and time window — what are the highest-leverage
+  interventions to reduce rate before PayPal's next monthly calculation?"
 
-The war room does three things:
-  1. FORECAST: Project HDR for next 30/60/90 days given current trajectory
-  2. TRIAGE: Identify which open disputes, if won, would most reduce HDR
-  3. BATTLE_PLAN: 30-day playbook to get back below the nearest safe threshold
+Key insight: HDR is computed on a ROLLING 90-DAY window.
+  - New disputes enter at the front
+  - Old disputes fall off at the back
+  - You can lower HDR by: (a) reducing new disputes, (b) increasing transaction volume,
+    or (c) waiting for old dispute clusters to age out
 
-Key insight competitors miss:
-  - Winning disputes does NOT remove them from the dispute count
-  - Disputes count toward HDR regardless of outcome
-  - Reducing HDR requires: more successful transactions + fewer new disputes
-  - The only way to rapidly fix HDR is to PREVENT new disputes, not win old ones
+This module provides:
+  - Current zone assessment
+  - Projected HDR in 30/60/90 days under different intervention scenarios
+  - Prioritized action plan sorted by expected rate reduction
+  - Specific product/channel pause recommendations
+  - Preemptive refund ROI calculation
 
-Emergency levers (ranked by speed of impact):
-  1. Delay/hold shipments to high-risk buyers (prevents new disputes)
-  2. Proactive refunds to buyers who haven't filed yet (preempts disputes)
-  3. Increase transaction volume (dilutes dispute rate)
-  4. Restrict dispute-prone product categories temporarily
-  5. Fight ALL open disputes aggressively (preserves current rate)
+Output:
+  - WarRoomReport with current zone, projections, and action plan
 """
 
 from __future__ import annotations
@@ -37,394 +35,403 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-from datetime import date, timedelta
 
 
 class HDRZone(str, Enum):
-    SAFE         = "SAFE"           # < 0.50%
-    ELEVATED     = "ELEVATED"       # 0.50% – 1.00%
-    LIMITED      = "LIMITED"        # 1.00% – 1.50%
-    FEE_TIER     = "FEE_TIER"       # 1.50% – 3.00%
-    SEVERE       = "SEVERE"         # 3.00% – 5.00%
-    TERMINAL     = "TERMINAL"       # > 5.00%
+    SAFE     = "SAFE"      # < 0.50%
+    ELEVATED = "ELEVATED"  # 0.50-1.0%
+    LIMITED  = "LIMITED"   # 1.0-1.5%
+    FEE_TIER = "FEE_TIER"  # 1.5-3.0%
+    SEVERE   = "SEVERE"    # 3.0-5.0%
+    TERMINAL = "TERMINAL"  # 5.0%+
 
 
-class ActionPriority(str, Enum):
-    IMMEDIATE   = "IMMEDIATE"       # Do today
-    THIS_WEEK   = "THIS_WEEK"
-    THIS_MONTH  = "THIS_MONTH"
-    ONGOING     = "ONGOING"
+class InterventionType(str, Enum):
+    PAUSE_HIGH_RISK_PRODUCTS  = "PAUSE_HIGH_RISK_PRODUCTS"
+    PAUSE_HIGH_RISK_CHANNELS  = "PAUSE_HIGH_RISK_CHANNELS"
+    PREEMPTIVE_REFUNDS        = "PREEMPTIVE_REFUNDS"
+    UPGRADE_CARRIER           = "UPGRADE_CARRIER"
+    REQUIRE_SIGNATURE         = "REQUIRE_SIGNATURE"
+    INCREASE_VOLUME           = "INCREASE_VOLUME"
+    BLOCK_RISKY_BUYERS        = "BLOCK_RISKY_BUYERS"
+    CONTACT_PAYPAL            = "CONTACT_PAYPAL"
+    EVIDENCE_QUALITY_BOOST    = "EVIDENCE_QUALITY_BOOST"
+    ADDRESS_VERIFICATION      = "ADDRESS_VERIFICATION"
 
 
-@dataclass
-class HDRSnapshot:
-    """Current and historical HDR state."""
-    snapshot_date: date
-    total_transactions_90d: int
-    total_disputes_90d: int
-    dispute_rate: float                 # total_disputes_90d / total_transactions_90d
-    zone: HDRZone
-    # Trend data (last 4 weeks)
-    weekly_new_disputes: list[int]       # [week_ago_4, week_ago_3, week_ago_2, last_week]
-    weekly_new_transactions: list[int]
-    # Open disputes that are still counted
-    open_disputes: int
-
-
-@dataclass
-class HDRForecast:
-    """30/60/90 day projection of dispute rate."""
-    days_30_projected: float
-    days_60_projected: float
-    days_90_projected: float
-    zone_30d: HDRZone
-    zone_60d: HDRZone
-    zone_90d: HDRZone
-    days_to_threshold_breach: Optional[int]   # Days until next threshold crossed (or None if improving)
-    threshold_at_risk: Optional[float]
-    trajectory: str    # "WORSENING" / "IMPROVING" / "STABLE"
-    forecast_confidence: float
-
-
-@dataclass
-class HDRBattleAction:
-    """One specific action in the HDR battle plan."""
-    action_id: str
-    priority: ActionPriority
-    action: str                     # What to do
-    expected_impact: str            # What it changes
-    hdr_improvement_estimate: float # How many basis points this could reduce HDR
-    implementation_effort: str      # "minutes" / "hours" / "days"
-    risk: str                       # "none" / "low" / "medium" / "high"
-
-
-@dataclass
-class HDRWarRoomReport:
-    """
-    Complete HDR crisis assessment and battle plan.
-    Generated when HDR zone is ELEVATED or worse.
-    """
-    generated_date: date
-    current_rate: float
-    current_zone: HDRZone
-    # Forecast
-    forecast: HDRForecast
-    # Distance to thresholds
-    basis_points_from_limited: float    # Positive = below LIMITED (safe)
-    basis_points_from_fee_tier: float
-    basis_points_from_severe: float
-    # Battle plan
-    immediate_actions: list[HDRBattleAction]    # Do today
-    week_actions: list[HDRBattleAction]
-    month_actions: list[HDRBattleAction]
-    # Specific levers
-    disputes_to_fight_aggressively: int     # How many open disputes to prioritize
-    transactions_needed_to_normalize: int   # Additional transactions to dilute rate
-    maximum_new_disputes_this_month: int    # Cap to stay below next threshold
-    # Communication
-    paypal_proactive_contact_recommended: bool
-    executive_escalation_required: bool     # True if SEVERE or TERMINAL zone
-    summary: str
-    alarm_message: str                      # What to tell the team right now
-
-
-# Threshold map: (rate, zone, label)
-_THRESHOLDS = [
-    (0.0050, HDRZone.ELEVATED,  "ELEVATED"),
-    (0.0100, HDRZone.LIMITED,   "LIMITED"),
-    (0.0150, HDRZone.FEE_TIER,  "FEE_TIER ($30/dispute)"),
-    (0.0300, HDRZone.SEVERE,    "SEVERE"),
-    (0.0500, HDRZone.TERMINAL,  "TERMINAL"),
+# Zone boundaries (inclusive lower)
+_ZONE_THRESHOLDS = [
+    (0.050, HDRZone.TERMINAL),
+    (0.030, HDRZone.SEVERE),
+    (0.015, HDRZone.FEE_TIER),
+    (0.010, HDRZone.LIMITED),
+    (0.005, HDRZone.ELEVATED),
+    (0.000, HDRZone.SAFE),
 ]
 
 
-def _rate_to_zone(rate: float) -> HDRZone:
-    if rate >= 0.0500:
-        return HDRZone.TERMINAL
-    elif rate >= 0.0300:
-        return HDRZone.SEVERE
-    elif rate >= 0.0150:
-        return HDRZone.FEE_TIER
-    elif rate >= 0.0100:
-        return HDRZone.LIMITED
-    elif rate >= 0.0050:
-        return HDRZone.ELEVATED
-    else:
-        return HDRZone.SAFE
+def _classify_zone(rate: float) -> HDRZone:
+    for threshold, zone in _ZONE_THRESHOLDS:
+        if rate >= threshold:
+            return zone
+    return HDRZone.SAFE
 
 
-def analyze_hdr_crisis(snapshot: HDRSnapshot) -> HDRWarRoomReport:
+@dataclass
+class HDRWarRoomInput:
+    """Current merchant state for war room analysis."""
+    # Current HDR metrics
+    current_hdr_rate: float          # E.g. 0.012 = 1.2%
+    disputes_last_90d: int           # Total disputes in rolling window
+    transactions_last_90d: int       # Total transactions in rolling window
+
+    # Trend signals
+    disputes_last_30d: int = 0       # Recent dispute acceleration
+    transactions_last_30d: int = 0   # Recent transaction volume
+
+    # Monthly revenue context
+    monthly_gmv: float = 100000.0
+    avg_dispute_amount: float = 150.0
+
+    # Existing interventions
+    has_carrier_upgrade: bool = False
+    has_buyer_vetting: bool = False
+    has_address_verification: bool = False
+
+    # Product mix (% of disputes from high-risk categories)
+    high_risk_product_pct: float = 0.30   # % of sales that are high-risk products
+    high_risk_channel_pct: float = 0.20   # % of sales from high-risk channels
+
+    # Preemptive refund context
+    open_at_risk_disputes: int = 0        # Disputes where you could proactively refund
+    avg_at_risk_dispute_amount: float = 100.0
+
+    # PayPal relationship context
+    months_in_hdr_program: int = 0        # How long at current zone
+
+
+@dataclass
+class HDRIntervention:
+    """One specific recommended action with projected impact."""
+    intervention_type: InterventionType
+    title: str
+    description: str
+    expected_rate_reduction: float    # Absolute reduction (e.g. 0.003 = 0.3pp)
+    implementation_effort: str        # LOW / MEDIUM / HIGH
+    time_to_impact_days: int         # Days until rate starts improving
+    revenue_impact_estimate: float    # Negative = revenue loss, positive = revenue protected
+    priority: int                     # 1 = highest
+
+
+@dataclass
+class HDRProjection:
+    """Projected HDR rate under a specific scenario."""
+    scenario: str
+    days_out: int
+    projected_rate: float
+    projected_zone: HDRZone
+    assumptions: list[str] = field(default_factory=list)
+
+
+@dataclass
+class WarRoomReport:
     """
-    Assess HDR situation and generate battle plan.
-
-    The war room triggers when zone is ELEVATED or worse. For SAFE zones,
-    it still provides forecasting and monitoring guidance.
+    Complete HDR War Room assessment.
+    Entry point for emergency dispute rate intervention.
     """
-    today = snapshot.snapshot_date
-    current_rate = snapshot.dispute_rate
-    current_zone = snapshot.zone
+    # Current state
+    current_hdr_rate: float
+    current_zone: HDRZone
+    is_emergency: bool      # True if LIMITED or worse
 
-    # ── Forecast ───────────────────────────────────────────────────────────
-    forecast = _forecast_hdr(snapshot)
+    # Rate to next zone
+    bps_to_next_threshold: int      # Basis points of headroom (positive = moving away)
+    bps_from_prev_threshold: int    # Basis points above last threshold
 
-    # ── Threshold distances ─────────────────────────────────────────────────
-    bps_from_limited  = round((0.0100 - current_rate) * 10000, 1)
-    bps_from_fee_tier = round((0.0150 - current_rate) * 10000, 1)
-    bps_from_severe   = round((0.0300 - current_rate) * 10000, 1)
+    # Monthly fee impact (if in FEE_TIER)
+    monthly_hdr_fee: float
+    fee_tier_annual_cost: float
 
-    # ── Battle plan actions ────────────────────────────────────────────────
-    immediate: list[HDRBattleAction] = []
-    week: list[HDRBattleAction] = []
-    month: list[HDRBattleAction] = []
+    # Projections
+    projections: list[HDRProjection]
 
-    # Always: Fight everything aggressively
-    immediate.append(HDRBattleAction(
-        action_id="FIGHT_ALL",
-        priority=ActionPriority.IMMEDIATE,
-        action="Fight ALL open disputes aggressively — submit maximum evidence",
-        expected_impact="Prevents disputes from aging into losses; preserves current rate",
-        hdr_improvement_estimate=0.0,  # Winning doesn't remove disputes
-        implementation_effort="hours",
-        risk="none",
-    ))
+    # Interventions (sorted by priority)
+    interventions: list[HDRIntervention]
 
-    # Identify and block high-risk buyers
-    immediate.append(HDRBattleAction(
-        action_id="BLOCK_HIGH_RISK",
-        priority=ActionPriority.IMMEDIATE,
-        action=(
-            "Block buyers with 2+ disputes in last 90 days from new orders. "
-            "Use network intelligence to identify at-risk buyers before they order."
-        ),
-        expected_impact="Prevents 20-40% of future disputes from known bad actors",
-        hdr_improvement_estimate=5.0,  # 5 basis points per month if 20% of disputes blocked
-        implementation_effort="hours",
-        risk="low",
-    ))
+    # Narrative
+    zone_assessment: str
+    immediate_actions: list[str]     # Do today
+    this_week_actions: list[str]     # Do this week
+    avoid_actions: list[str]         # What NOT to do (common mistakes)
 
-    if current_zone in (HDRZone.LIMITED, HDRZone.FEE_TIER, HDRZone.SEVERE, HDRZone.TERMINAL):
-        # Emergency: proactive pre-dispute refunds
-        immediate.append(HDRBattleAction(
-            action_id="PREEMPTIVE_REFUNDS",
-            priority=ActionPriority.IMMEDIATE,
-            action=(
-                "Identify all recent orders with delivery issues (delayed/missing). "
-                "Proactively refund BEFORE buyer files dispute. "
-                "Target: orders > 10 days with no delivery confirmation."
-            ),
-            expected_impact="Each prevented dispute reduces HDR by 1/N transactions",
-            hdr_improvement_estimate=10.0,
-            implementation_effort="hours",
-            risk="medium",  # Cash outflow
+    summary: str
+
+
+def _bps_to_next_threshold(rate: float, zone: HDRZone) -> int:
+    """Basis points of room before entering next (worse) zone. Negative = already over."""
+    zone_upper = {
+        HDRZone.SAFE: 0.005,
+        HDRZone.ELEVATED: 0.010,
+        HDRZone.LIMITED: 0.015,
+        HDRZone.FEE_TIER: 0.030,
+        HDRZone.SEVERE: 0.050,
+        HDRZone.TERMINAL: 1.0,
+    }
+    upper = zone_upper.get(zone, 1.0)
+    return int((upper - rate) * 10000)
+
+
+def _bps_from_prev_threshold(rate: float, zone: HDRZone) -> int:
+    """Basis points above entering this zone (how deep in)."""
+    zone_lower = {
+        HDRZone.SAFE: 0.0,
+        HDRZone.ELEVATED: 0.005,
+        HDRZone.LIMITED: 0.010,
+        HDRZone.FEE_TIER: 0.015,
+        HDRZone.SEVERE: 0.030,
+        HDRZone.TERMINAL: 0.050,
+    }
+    lower = zone_lower.get(zone, 0.0)
+    return int((rate - lower) * 10000)
+
+
+def _monthly_hdr_fee(rate: float, transactions_per_month: int) -> float:
+    """$30 per dispute above 1.5% threshold."""
+    if rate <= 0.015:
+        return 0.0
+    excess_disputes = (rate - 0.015) * transactions_per_month
+    return excess_disputes * 30.0
+
+
+def _build_projections(inp: HDRWarRoomInput) -> list[HDRProjection]:
+    """
+    Project HDR rate under three scenarios: do-nothing, moderate, aggressive.
+    Uses simplified rolling window model.
+    """
+    projections: list[HDRProjection] = []
+    t90 = inp.transactions_last_90d
+    d90 = inp.disputes_last_90d
+    # Monthly run rate
+    d30 = inp.disputes_last_30d or round(d90 / 3)
+    t30 = inp.transactions_last_30d or round(t90 / 3)
+
+    for days_out in [30, 60, 90]:
+        # Periods rolling off (old) and new additions
+        months = days_out / 30
+        d_aging_off = round(d30 * months * 0.9)   # 90% of old disputes age off
+
+        # Do-nothing: same rate continues
+        new_d = round(d30 * months)
+        new_t = round(t30 * months)
+        proj_d = max(0, d90 - d_aging_off + new_d)
+        proj_t = max(1, t90 - round(t30 * months * 0.9) + new_t)
+        rate_dn = proj_d / proj_t
+        projections.append(HDRProjection(
+            "do_nothing", days_out, round(rate_dn, 4), _classify_zone(rate_dn),
+            [f"Assumes {d30} disputes/month and {t30} transactions/month continue"],
         ))
 
-        # Emergency: pause high-dispute product categories
-        immediate.append(HDRBattleAction(
-            action_id="PAUSE_HIGH_RISK_PRODUCTS",
-            priority=ActionPriority.IMMEDIATE,
-            action=(
-                "Temporarily pause or add extra verification for product categories "
-                "with dispute rate > 2% (electronics, gift cards, luxury items). "
-                "Re-enable after HDR returns to ELEVATED zone."
-            ),
-            expected_impact="Reduces new dispute volume immediately",
-            hdr_improvement_estimate=20.0,
-            implementation_effort="hours",
-            risk="medium",  # Revenue impact
+        # Moderate: 20% dispute reduction, 10% volume increase
+        new_d_mod = round(d30 * months * 0.80)
+        new_t_mod = round(t30 * months * 1.10)
+        proj_d_mod = max(0, d90 - d_aging_off + new_d_mod)
+        proj_t_mod = max(1, t90 - round(t30 * months * 0.9) + new_t_mod)
+        rate_mod = proj_d_mod / proj_t_mod
+        projections.append(HDRProjection(
+            "moderate_intervention", days_out, round(rate_mod, 4), _classify_zone(rate_mod),
+            ["20% dispute reduction via carrier upgrade + buyer vetting", "10% transaction volume increase"],
         ))
 
-    # Increase transaction volume
-    week.append(HDRBattleAction(
-        action_id="INCREASE_VOLUME",
-        priority=ActionPriority.THIS_WEEK,
-        action=(
-            "Run promotions to increase successful transaction volume. "
-            "Target: +10-20% transaction volume dilutes dispute rate by same percentage."
-        ),
-        expected_impact=f"Each 10% volume increase reduces HDR rate by ~{current_rate * 0.10 * 10000:.1f} bps",
-        hdr_improvement_estimate=current_rate * 0.10 * 10000,
-        implementation_effort="days",
-        risk="low",
+        # Aggressive: 40% dispute reduction, 20% volume increase + preemptive refunds
+        new_d_agg = round(d30 * months * 0.60)
+        new_t_agg = round(t30 * months * 1.20)
+        proj_d_agg = max(0, d90 - d_aging_off + new_d_agg)
+        proj_t_agg = max(1, t90 - round(t30 * months * 0.9) + new_t_agg)
+        rate_agg = proj_d_agg / proj_t_agg
+        projections.append(HDRProjection(
+            "aggressive_intervention", days_out, round(rate_agg, 4), _classify_zone(rate_agg),
+            ["40% dispute reduction: pause high-risk products + preemptive refunds + carrier upgrade", "20% volume increase from safe channels"],
+        ))
+
+    return projections
+
+
+def _build_interventions(inp: HDRWarRoomInput, zone: HDRZone) -> list[HDRIntervention]:
+    interventions: list[HDRIntervention] = []
+    priority = 1
+
+    # 1. Preemptive refunds — fastest impact on open disputes
+    if inp.open_at_risk_disputes > 0:
+        cost = inp.open_at_risk_disputes * inp.avg_at_risk_dispute_amount
+        saved_rate = inp.open_at_risk_disputes / max(1, inp.transactions_last_90d)
+        interventions.append(HDRIntervention(
+            InterventionType.PREEMPTIVE_REFUNDS,
+            f"Issue preemptive refunds on {inp.open_at_risk_disputes} at-risk open disputes",
+            f"Proactively refund disputes where you are likely to lose. Removes them from HDR count immediately.",
+            expected_rate_reduction=round(saved_rate, 4),
+            implementation_effort="LOW",
+            time_to_impact_days=1,
+            revenue_impact_estimate=-cost,
+            priority=priority,
+        ))
+        priority += 1
+
+    # 2. Pause high-risk products
+    if inp.high_risk_product_pct > 0.15:
+        reduction = inp.current_hdr_rate * inp.high_risk_product_pct * 0.70
+        interventions.append(HDRIntervention(
+            InterventionType.PAUSE_HIGH_RISK_PRODUCTS,
+            "Pause or restrict high-risk product categories",
+            f"Temporarily pause sales of gift cards, digital goods, event tickets, or collectibles "
+            f"(currently {inp.high_risk_product_pct:.0%} of sales). These categories have 3-8x average dispute rates.",
+            expected_rate_reduction=round(reduction, 4),
+            implementation_effort="LOW",
+            time_to_impact_days=3,
+            revenue_impact_estimate=-inp.monthly_gmv * inp.high_risk_product_pct * 0.20,
+            priority=priority,
+        ))
+        priority += 1
+
+    # 3. Carrier upgrade
+    if not inp.has_carrier_upgrade:
+        interventions.append(HDRIntervention(
+            InterventionType.UPGRADE_CARRIER,
+            "Upgrade to PLATINUM carrier (FedEx Express or USPS Priority)",
+            "Switch to carriers with <1% INR dispute rate. Provides tracking + delivery confirmation "
+            "that PayPal reviewers accept as delivery proof. Reduces INR disputes by 40-60%.",
+            expected_rate_reduction=round(inp.current_hdr_rate * 0.20, 4),
+            implementation_effort="LOW",
+            time_to_impact_days=7,
+            revenue_impact_estimate=-inp.monthly_gmv * 0.002,  # ~0.2% shipping cost increase
+            priority=priority,
+        ))
+        priority += 1
+
+    # 4. Increase volume (dilutes rate)
+    interventions.append(HDRIntervention(
+        InterventionType.INCREASE_VOLUME,
+        "Increase transaction volume in safe product categories",
+        "More transactions at safe dispute rates dilutes HDR rate without reducing dispute count. "
+        "Even 10% volume increase in low-risk products can move rate down 1-2 basis points.",
+        expected_rate_reduction=round(inp.current_hdr_rate * 0.10, 4),
+        implementation_effort="MEDIUM",
+        time_to_impact_days=14,
+        revenue_impact_estimate=inp.monthly_gmv * 0.10,
+        priority=priority,
     ))
+    priority += 1
 
-    # Upgrade carriers
-    week.append(HDRBattleAction(
-        action_id="UPGRADE_CARRIERS",
-        priority=ActionPriority.THIS_WEEK,
-        action=(
-            "Switch all shipments from BRONZE/RISKY carriers (LaserShip, OnTrac) "
-            "to PLATINUM carriers (USPS Priority, FedEx Express). "
-            "Carrier disputes are 60% of INR claims for most merchants."
-        ),
-        expected_impact="Reduces INR dispute rate by 20-40% over next 30 days",
-        hdr_improvement_estimate=15.0,
-        implementation_effort="days",
-        risk="low",
-    ))
+    # 5. Block risky buyers
+    if not inp.has_buyer_vetting:
+        interventions.append(HDRIntervention(
+            InterventionType.BLOCK_RISKY_BUYERS,
+            "Activate buyer dispute prediction and block repeat disputers",
+            "Block buyers with >10% lifetime dispute rate. Enable pre-order dispute prediction. "
+            "Buyer vetting reduces dispute rate by 15-25% with minimal revenue impact.",
+            expected_rate_reduction=round(inp.current_hdr_rate * 0.15, 4),
+            implementation_effort="LOW",
+            time_to_impact_days=3,
+            revenue_impact_estimate=-inp.monthly_gmv * 0.01,
+            priority=priority,
+        ))
+        priority += 1
 
-    # Buyer verification
-    month.append(HDRBattleAction(
-        action_id="BUYER_VERIFICATION",
-        priority=ActionPriority.THIS_MONTH,
-        action=(
-            "Implement phone/address verification for orders from: "
-            "(a) new PayPal accounts < 90 days old, "
-            "(b) first-time buyers from high-dispute ZIPs, "
-            "(c) orders with mismatched billing/shipping address."
-        ),
-        expected_impact="Prevents account farm and triangulation fraud",
-        hdr_improvement_estimate=8.0,
-        implementation_effort="days",
-        risk="low",
-    ))
+    # 6. Require signature on all orders
+    if zone in (HDRZone.FEE_TIER, HDRZone.SEVERE, HDRZone.TERMINAL):
+        interventions.append(HDRIntervention(
+            InterventionType.REQUIRE_SIGNATURE,
+            "Require signature confirmation on ALL orders (emergency mode)",
+            "Signature confirmation provides definitive delivery proof. In fee tier or severe zone, "
+            "the carrier cost (~$3-5/shipment) is vastly cheaper than $30/dispute HDR fees.",
+            expected_rate_reduction=round(inp.current_hdr_rate * 0.12, 4),
+            implementation_effort="LOW",
+            time_to_impact_days=7,
+            revenue_impact_estimate=-inp.transactions_last_30d * 4.0,
+            priority=priority,
+        ))
+        priority += 1
 
-    # Required volume to normalize
-    target_rate = 0.0045  # Target well below ELEVATED
-    if snapshot.total_disputes_90d > 0:
-        needed_transactions = max(0, int(snapshot.total_disputes_90d / target_rate) - snapshot.total_transactions_90d)
-    else:
-        needed_transactions = 0
+    # 7. Contact PayPal (only for severe/terminal)
+    if zone in (HDRZone.SEVERE, HDRZone.TERMINAL):
+        interventions.append(HDRIntervention(
+            InterventionType.CONTACT_PAYPAL,
+            "Contact PayPal Merchant Relations immediately",
+            "At SEVERE or TERMINAL rates, proactive outreach to PayPal demonstrates good faith. "
+            "Explain remediation plan. Request temporary processing allowance while rate recovers.",
+            expected_rate_reduction=0.0,
+            implementation_effort="MEDIUM",
+            time_to_impact_days=0,
+            revenue_impact_estimate=0.0,
+            priority=priority,
+        ))
+        priority += 1
 
-    # Maximum new disputes this month to stay below next threshold
-    next_threshold = 0.0050  # ELEVATED
-    for thresh, zone, _ in _THRESHOLDS:
-        if thresh > current_rate:
-            next_threshold = thresh
-            break
-    max_new_disputes = max(0, int(snapshot.total_transactions_90d * next_threshold) - snapshot.total_disputes_90d)
-
-    # PayPal proactive contact
-    paypal_contact = current_zone in (HDRZone.LIMITED, HDRZone.FEE_TIER, HDRZone.SEVERE)
-    exec_escalation = current_zone in (HDRZone.SEVERE, HDRZone.TERMINAL)
-
-    if current_zone == HDRZone.SAFE:
-        alarm = f"HDR at {current_rate:.2%} — SAFE. Monitor monthly."
-    elif current_zone == HDRZone.ELEVATED:
-        alarm = (
-            f"⚠ HDR {current_rate:.2%} — ELEVATED. "
-            f"{bps_from_limited:.0f} bps from LIMITED processing restrictions. "
-            f"Take preventive action now."
-        )
-    elif current_zone == HDRZone.LIMITED:
-        alarm = (
-            f"🚨 HDR {current_rate:.2%} — LIMITED. Processing restrictions active. "
-            f"{bps_from_fee_tier:.0f} bps from $30/dispute fee tier. "
-            f"Emergency protocol: activate all immediate actions NOW."
-        )
-    elif current_zone == HDRZone.FEE_TIER:
-        alarm = (
-            f"🚨🚨 HDR {current_rate:.2%} — FEE TIER. "
-            f"$30 fee applies to each dispute above 1.5% threshold. "
-            f"Contact PayPal Merchant Relations proactively."
-        )
-    else:
-        alarm = (
-            f"⛔ HDR {current_rate:.2%} — {current_zone.value}. "
-            f"CRITICAL: Account suspension risk. Executive escalation required."
-        )
-
-    summary = (
-        f"HDR {current_rate:.2%} ({current_zone.value}) | "
-        f"30d forecast: {forecast.days_30_projected:.2%} ({forecast.zone_30d.value}) | "
-        f"immediate actions: {len(immediate)} | "
-        f"volume needed to normalize: +{needed_transactions:,} transactions"
-    )
-
-    return HDRWarRoomReport(
-        generated_date=today,
-        current_rate=current_rate,
-        current_zone=current_zone,
-        forecast=forecast,
-        basis_points_from_limited=bps_from_limited,
-        basis_points_from_fee_tier=bps_from_fee_tier,
-        basis_points_from_severe=bps_from_severe,
-        immediate_actions=immediate,
-        week_actions=week,
-        month_actions=month,
-        disputes_to_fight_aggressively=snapshot.open_disputes,
-        transactions_needed_to_normalize=needed_transactions,
-        maximum_new_disputes_this_month=max_new_disputes,
-        paypal_proactive_contact_recommended=paypal_contact,
-        executive_escalation_required=exec_escalation,
-        summary=summary,
-        alarm_message=alarm,
-    )
+    interventions.sort(key=lambda i: i.priority)
+    return interventions
 
 
-def _forecast_hdr(snapshot: HDRSnapshot) -> HDRForecast:
-    """Project HDR rate forward based on weekly trend."""
-    weekly_disputes = snapshot.weekly_new_disputes
-    weekly_tx = snapshot.weekly_new_transactions
+def _build_zone_assessment(rate: float, zone: HDRZone, bps_to_next: int) -> str:
+    assessments = {
+        HDRZone.SAFE: f"HDR at {rate:.2%} — SAFE zone. {bps_to_next}bps buffer to ELEVATED. No action required; monitor monthly.",
+        HDRZone.ELEVATED: f"HDR at {rate:.2%} — ELEVATED zone. {bps_to_next}bps to LIMITED restrictions. Implement preventive measures now.",
+        HDRZone.LIMITED: f"HDR at {rate:.2%} — LIMITED zone. Processing restrictions may activate. URGENT: initiate war room protocol.",
+        HDRZone.FEE_TIER: f"HDR at {rate:.2%} — FEE TIER. $30/dispute surcharge active. Immediate action required to stop bleeding.",
+        HDRZone.SEVERE: f"HDR at {rate:.2%} — SEVERE zone. Account review active. Executive escalation + PayPal contact required NOW.",
+        HDRZone.TERMINAL: f"HDR at {rate:.2%} — TERMINAL zone. Account suspension imminent. All non-essential operations should halt.",
+    }
+    return assessments.get(zone, f"HDR at {rate:.2%}")
 
-    if not weekly_disputes or not weekly_tx:
-        # No trend data — project flat
-        return HDRForecast(
-            days_30_projected=snapshot.dispute_rate,
-            days_60_projected=snapshot.dispute_rate,
-            days_90_projected=snapshot.dispute_rate,
-            zone_30d=snapshot.zone,
-            zone_60d=snapshot.zone,
-            zone_90d=snapshot.zone,
-            days_to_threshold_breach=None,
-            threshold_at_risk=None,
-            trajectory="STABLE",
-            forecast_confidence=0.40,
-        )
 
-    # Compute weekly dispute rate trend
-    weekly_rates = [
-        d / max(t, 1)
-        for d, t in zip(weekly_disputes, weekly_tx)
+def assess_hdr_war_room(inp: HDRWarRoomInput) -> WarRoomReport:
+    """
+    Generate complete HDR war room assessment with prioritized intervention plan.
+    """
+    zone = _classify_zone(inp.current_hdr_rate)
+    is_emergency = zone not in (HDRZone.SAFE, HDRZone.ELEVATED)
+
+    bps_to_next = _bps_to_next_threshold(inp.current_hdr_rate, zone)
+    bps_from_prev = _bps_from_prev_threshold(inp.current_hdr_rate, zone)
+
+    t_per_month = inp.transactions_last_30d or round(inp.transactions_last_90d / 3)
+    monthly_fee = _monthly_hdr_fee(inp.current_hdr_rate, t_per_month)
+    annual_fee = monthly_fee * 12
+
+    projections = _build_projections(inp)
+    interventions = _build_interventions(inp, zone)
+
+    zone_assessment = _build_zone_assessment(inp.current_hdr_rate, zone, bps_to_next)
+
+    # Immediate vs. this-week actions
+    immediate = [i.title for i in interventions if i.time_to_impact_days <= 1]
+    this_week = [i.title for i in interventions if 1 < i.time_to_impact_days <= 7]
+
+    avoid = [
+        "Do NOT pause ALL sales — diluting volume by reducing transactions makes rate WORSE",
+        "Do NOT dispute every case to 'win' HDR — fighting doesn't remove disputes from count",
+        "Do NOT ignore the trajectory — waiting a month to act compounds the fee exposure",
+        "Do NOT refund only the top 10 disputes — partial effort rarely moves rate enough",
     ]
 
-    # Simple linear trend from last 4 weeks
-    n = len(weekly_rates)
-    if n >= 2:
-        # Slope of weekly rates (positive = worsening)
-        slope = (weekly_rates[-1] - weekly_rates[0]) / max(n - 1, 1)
-    else:
-        slope = 0.0
+    summary = (
+        f"HDR {inp.current_hdr_rate:.2%} — {zone.value} | "
+        f"Headroom to next threshold: {bps_to_next}bps | "
+        f"Monthly fee: ${monthly_fee:,.0f} | "
+        f"Top action: {interventions[0].title if interventions else 'Monitor'}"
+    )
 
-    # Project 90-day rate forward (rolling window makes this complex — approximate)
-    base_rate = snapshot.dispute_rate
-    # 30 days = ~1/3 of rolling window replacement
-    proj_30 = max(0.0, base_rate + slope * 4.3)   # ~4.3 weeks in 30 days
-    proj_60 = max(0.0, base_rate + slope * 8.6)
-    proj_90 = max(0.0, base_rate + slope * 13.0)
-
-    # Cap at reasonable maximum
-    proj_30 = min(proj_30, 0.20)
-    proj_60 = min(proj_60, 0.20)
-    proj_90 = min(proj_90, 0.20)
-
-    # Trajectory
-    if slope > 0.0001:
-        trajectory = "WORSENING"
-    elif slope < -0.0001:
-        trajectory = "IMPROVING"
-    else:
-        trajectory = "STABLE"
-
-    # Days to next threshold breach
-    next_threshold: Optional[float] = None
-    days_to_breach: Optional[int] = None
-    for thresh, _, _ in _THRESHOLDS:
-        if thresh > base_rate:
-            next_threshold = thresh
-            if slope > 0:
-                weeks_to_breach = (thresh - base_rate) / slope
-                days_to_breach = int(weeks_to_breach * 7)
-            break
-
-    return HDRForecast(
-        days_30_projected=round(proj_30, 4),
-        days_60_projected=round(proj_60, 4),
-        days_90_projected=round(proj_90, 4),
-        zone_30d=_rate_to_zone(proj_30),
-        zone_60d=_rate_to_zone(proj_60),
-        zone_90d=_rate_to_zone(proj_90),
-        days_to_threshold_breach=days_to_breach,
-        threshold_at_risk=next_threshold,
-        trajectory=trajectory,
-        forecast_confidence=0.60 if n >= 4 else 0.40,
+    return WarRoomReport(
+        current_hdr_rate=inp.current_hdr_rate,
+        current_zone=zone,
+        is_emergency=is_emergency,
+        bps_to_next_threshold=bps_to_next,
+        bps_from_prev_threshold=bps_from_prev,
+        monthly_hdr_fee=round(monthly_fee, 2),
+        fee_tier_annual_cost=round(annual_fee, 2),
+        projections=projections,
+        interventions=interventions,
+        zone_assessment=zone_assessment,
+        immediate_actions=immediate,
+        this_week_actions=this_week,
+        avoid_actions=avoid,
+        summary=summary,
     )
