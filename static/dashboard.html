@@ -198,6 +198,13 @@
     }
     .grid-title { font-size: 15px; font-weight: 600; }
     .grid-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .grid-toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0 0 10px; }
+  .grid-control { padding:7px 10px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); font-size:12px; }
+  .flow-step { border:1px solid var(--border); border-radius:9px; padding:9px 10px; background:var(--surface); font-size:11px; line-height:1.4; }
+  .flow-step.active { border-color:#6d28d9; box-shadow:0 0 0 3px rgba(109,40,217,.12); animation:stepPulse 1.2s ease-in-out infinite; }
+  .roi-label { display:flex; flex-direction:column; gap:5px; font-size:11px; color:var(--muted); }
+  @keyframes stepPulse { 50% { box-shadow:0 0 0 6px rgba(109,40,217,.04); } }
+  @media (max-width: 900px) { .hero-grid { grid-template-columns:1fr; } #sim-cols { grid-template-columns:1fr !important; } }
     .refresh-btn {
       padding: 6px 14px;
       background: transparent;
@@ -599,6 +606,121 @@
   <span id="s-protected"></span><span id="s-recovered"></span><span id="s-rev-recovered"></span>
 </div>
 
+<!-- Live Dispute Simulator Panel -->
+<div class="card" id="demo-panel" style="border-top:3px solid #6d28d9;">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+    <div style="font-size:15px;font-weight:600;">Live Dispute Simulator</div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(109,40,217,.12);color:#6d28d9;border:1px solid rgba(109,40,217,.3);">try it now</span>
+    <span style="font-size:12px;color:var(--muted);">— fire a PayPal dispute, watch Anchor decide in real time</span>
+  </div>
+
+  <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;">
+    Choose a scenario below. Anchor runs the full pipeline: Settlement Oracle calculates EV(fight) vs EV(accept),
+    Guardian checks pre-auth thresholds, and decides whether to auto-fight, auto-accept, or ask for your approval.
+    No PayPal credentials required.
+  </p>
+
+  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;" id="scenario-buttons">
+    <button onclick="runScenario('inr_fight')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">⚔️ INR — Auto Fight</button>
+    <button onclick="runScenario('micro_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">✅ Micro Dispute — Auto Accept</button>
+    <button onclick="runScenario('unauthorized_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">🚫 Unauthorized — Accept (10% base)</button>
+    <button onclick="runScenario('high_volume_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">💰 High-Volume $30 Fee</button>
+    <button onclick="runScenario('snad_fight')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">📦 SNAD — Fight with Proof</button>
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-top:-12px;margin-bottom:12px;">Scenarios run: <strong id="sim-run-count" style="color:var(--text);">0</strong></div>
+
+  <div id="sim-result" style="display:none;">
+    <div id="sim-loading" style="text-align:center;padding:20px;color:var(--muted);font-size:13px;">Running simulation…</div>
+    <div id="sim-content" style="display:none;">
+      <!-- Scenario label + narrative -->
+      <div id="sim-label" style="font-size:14px;font-weight:600;margin-bottom:4px;"></div>
+      <div id="sim-narrative" style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5;"></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;" id="sim-cols">
+        <!-- Oracle column -->
+        <div id="sim-oracle-card" style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">SETTLEMENT ORACLE</div>
+          <div id="sim-rec" style="font-size:20px;font-weight:700;margin-bottom:8px;"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <div>
+              <div title="Estimated fight value after accounting for evidence-based win probability, handling time, and the dispute fee." style="font-size:10px;color:var(--muted);cursor:help;">EV(fight) ⓘ</div>
+              <div id="sim-ev-fight" style="font-size:14px;font-weight:600;"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);">EV(accept)</div>
+              <div id="sim-ev-accept" style="font-size:14px;font-weight:600;color:var(--red);"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);">Win prob</div>
+              <div id="sim-win-prob" style="font-size:14px;font-weight:600;"></div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);">Break-even</div>
+              <div id="sim-break-even" style="font-size:14px;font-weight:600;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Guardian column -->
+        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">GUARDIAN AGENT</div>
+          <div id="sim-action" style="font-size:17px;font-weight:700;margin-bottom:8px;"></div>
+          <div id="sim-guardian-reason" style="font-size:11px;color:var(--muted);line-height:1.5;"></div>
+          <div id="sim-what-happened" style="font-size:11px;color:var(--text);line-height:1.5;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);"></div>
+        </div>
+
+        <!-- PayPal API calls column -->
+        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">PAYPAL API CALLS</div>
+          <div id="sim-calls" style="font-size:11px;font-family:monospace;color:var(--text);line-height:1.8;"></div>
+        </div>
+      </div>
+
+      <!-- Oracle reasoning -->
+      <details style="margin-bottom:12px;">
+        <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);padding:4px 0;">Oracle reasoning steps</summary>
+        <div id="sim-reasoning" style="font-size:11px;color:var(--muted);padding:10px 0;line-height:1.8;border-top:1px solid var(--border);margin-top:8px;"></div>
+      </details>
+
+      <!-- Morning brief -->
+      <div style="background:rgba(0,0,0,.03);border-radius:8px;padding:12px 16px;border:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:6px;">MORNING BRIEF ENTRY</div>
+        <div id="sim-brief" style="font-size:12px;color:var(--text);font-family:monospace;"></div>
+      </div>
+      <details id="decision-audit" style="margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:var(--surface);">
+        <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text);">Decision Audit Trail</summary>
+        <div style="font-size:11px;color:var(--muted);margin:6px 0 8px;">Simulated trace · demo mode does not submit a real PayPal action.</div>
+        <ol id="sim-audit" style="font-size:11px;line-height:1.8;padding-left:18px;color:var(--text);"></ol>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- Autonomous Commerce Engine -->
+<div class="card" id="commerce-engine" style="border-top:3px solid #6d28d9;">
+  <div style="font-size:15px;font-weight:600;margin-bottom:4px;">The Autonomous Commerce Engine</div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Two event driven loops, with every external action gated by current PayPal state.</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+    <div><div style="font-size:11px;font-weight:700;color:#6d28d9;margin-bottom:8px;">DISPUTE LOOP</div>
+      <div id="dispute-flow" class="commerce-flow" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;">
+        <div class="flow-step">Buyer files dispute</div><div class="flow-step">PayPal webhook → Anchor</div>
+        <div class="flow-step">Settlement Oracle: EV + evidence</div><div class="flow-step">Guardian checks live HATEOAS links</div>
+        <div class="flow-step">Gather verified merchant evidence</div><div class="flow-step">PayPal: message, evidence, or accept</div>
+        <div class="flow-step">Log outcome to history</div><div class="flow-step">History informs future estimates</div>
+      </div>
+    </div>
+    <div><div style="font-size:11px;font-weight:700;color:#0070c7;margin-bottom:8px;">RECOVERY LOOP</div>
+      <div class="commerce-flow" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;">
+        <div class="flow-step">Buyer approves PayPal order</div><div class="flow-step">Approved webhook recorded</div>
+        <div class="flow-step">Wait 30 minutes</div><div class="flow-step">15 minute recovery scan</div>
+        <div class="flow-step">Confirm order is uncaptured</div><div class="flow-step">Create and send PayPal invoice</div>
+        <div class="flow-step">Buyer pays invoice</div><div class="flow-step">Paid webhook updates history</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
 <!-- Tabs -->
 <div class="tabs-bar">
   <div class="tab active" onclick="switchTab('disputes')">
@@ -625,7 +747,19 @@
         <button class="refresh-btn" onclick="agExportCsv('disputes')" title="Export disputes as CSV">⬇ CSV</button>
       </div>
     </div>
+    <div class="grid-toolbar">
+      <input id="grid-search" class="grid-control" placeholder="Search disputes…" oninput="filterGrid(this.value)" aria-label="Search disputes">
+      <label for="grid-view" style="font-size:11px;color:var(--muted);">Columns</label>
+      <select id="grid-view" class="grid-control" onchange="setGridView(this.value)">
+        <option value="full">Full view</option><option value="compact">Compact view</option>
+      </select>
+      <span style="font-size:11px;color:var(--muted);">Select a row to inspect its recorded decision details.</span>
+    </div>
     <div id="disputes-grid" class="ag-theme-custom ag-theme-alpine"></div>
+    <aside id="dispute-detail" aria-live="polite" style="display:none;margin-top:12px;padding:16px 18px;border:1px solid var(--border);border-left:3px solid #6d28d9;border-radius:8px;background:var(--surface);">
+      <button onclick="closeDisputeDetail()" style="float:right;border:0;background:transparent;cursor:pointer;color:var(--muted);font-size:18px;" aria-label="Close dispute details">×</button>
+      <div id="dispute-detail-content"></div>
+    </aside>
   </div>
 </div>
 
@@ -696,89 +830,6 @@
 <!-- Tooltip (shared) -->
 <div class="tl-tooltip" id="tl-tooltip"></div>
 
-<!-- Live Dispute Simulator Panel -->
-<div class="card" id="demo-panel" style="border-top:3px solid #6d28d9;">
-  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-    <div style="font-size:15px;font-weight:600;">Live Dispute Simulator</div>
-    <span style="font-size:11px;padding:2px 8px;border-radius:999px;background:rgba(109,40,217,.12);color:#6d28d9;border:1px solid rgba(109,40,217,.3);">try it now</span>
-    <span style="font-size:12px;color:var(--muted);">— fire a PayPal dispute, watch Anchor decide in real time</span>
-  </div>
-
-  <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;">
-    Choose a scenario below. Anchor runs the full pipeline: Settlement Oracle calculates EV(fight) vs EV(accept),
-    Guardian checks pre-auth thresholds, and decides whether to auto-fight, auto-accept, or ask for your approval.
-    No PayPal credentials required.
-  </p>
-
-  <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;" id="scenario-buttons">
-    <button onclick="runScenario('inr_fight')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">⚔️ INR — Auto Fight</button>
-    <button onclick="runScenario('micro_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">✅ Micro Dispute — Auto Accept</button>
-    <button onclick="runScenario('unauthorized_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">🚫 Unauthorized — Accept (10% base)</button>
-    <button onclick="runScenario('high_volume_accept')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">💰 High-Volume $30 Fee</button>
-    <button onclick="runScenario('snad_fight')" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12px;font-weight:500;color:var(--text);">📦 SNAD — Fight with Proof</button>
-  </div>
-
-  <div id="sim-result" style="display:none;">
-    <div id="sim-loading" style="text-align:center;padding:20px;color:var(--muted);font-size:13px;">Running simulation…</div>
-    <div id="sim-content" style="display:none;">
-      <!-- Scenario label + narrative -->
-      <div id="sim-label" style="font-size:14px;font-weight:600;margin-bottom:4px;"></div>
-      <div id="sim-narrative" style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.5;"></div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px;" id="sim-cols">
-        <!-- Oracle column -->
-        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">SETTLEMENT ORACLE</div>
-          <div id="sim-rec" style="font-size:20px;font-weight:700;margin-bottom:8px;"></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-            <div>
-              <div style="font-size:10px;color:var(--muted);">EV(fight)</div>
-              <div id="sim-ev-fight" style="font-size:14px;font-weight:600;"></div>
-            </div>
-            <div>
-              <div style="font-size:10px;color:var(--muted);">EV(accept)</div>
-              <div id="sim-ev-accept" style="font-size:14px;font-weight:600;color:var(--red);"></div>
-            </div>
-            <div>
-              <div style="font-size:10px;color:var(--muted);">Win prob</div>
-              <div id="sim-win-prob" style="font-size:14px;font-weight:600;"></div>
-            </div>
-            <div>
-              <div style="font-size:10px;color:var(--muted);">Break-even</div>
-              <div id="sim-break-even" style="font-size:14px;font-weight:600;"></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Guardian column -->
-        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">GUARDIAN AGENT</div>
-          <div id="sim-action" style="font-size:17px;font-weight:700;margin-bottom:8px;"></div>
-          <div id="sim-guardian-reason" style="font-size:11px;color:var(--muted);line-height:1.5;"></div>
-        </div>
-
-        <!-- PayPal API calls column -->
-        <div style="background:var(--bg);border-radius:10px;padding:14px;border:1px solid var(--border);">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:10px;">PAYPAL API CALLS</div>
-          <div id="sim-calls" style="font-size:11px;font-family:monospace;color:var(--text);line-height:1.8;"></div>
-        </div>
-      </div>
-
-      <!-- Oracle reasoning -->
-      <details style="margin-bottom:12px;">
-        <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);padding:4px 0;">Oracle reasoning steps</summary>
-        <div id="sim-reasoning" style="font-size:11px;color:var(--muted);padding:10px 0;line-height:1.8;border-top:1px solid var(--border);margin-top:8px;"></div>
-      </details>
-
-      <!-- Morning brief -->
-      <div style="background:rgba(0,0,0,.03);border-radius:8px;padding:12px 16px;border:1px solid var(--border);">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.06em;margin-bottom:6px;">MORNING BRIEF ENTRY</div>
-        <div id="sim-brief" style="font-size:12px;color:var(--text);font-family:monospace;"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- Settlement Oracle Panel -->
 <div class="card" id="oracle-panel" style="border-top:3px solid #f59e0b;">
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
@@ -790,7 +841,7 @@
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
     <div style="display:flex;flex-direction:column;gap:10px;">
       <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
-        Amount (USD)
+        Amount (USD) <span title="Dispute amount is the amount at stake if the merchant loses." style="cursor:help;">ⓘ</span>
         <input id="oracle-amount" type="number" value="245" step="1" min="1"
           style="padding:7px 10px;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
       </label>
@@ -847,6 +898,25 @@
   </div>
 
   <div id="oracle-result" style="display:none;border-top:1px solid var(--border);padding-top:16px;"></div>
+</div>
+
+<!-- Editable ROI Calculator -->
+<div class="card" id="roi-panel" style="border-top:3px solid #059669;">
+  <div style="font-size:15px;font-weight:600;margin-bottom:4px;">Merchant ROI Calculator</div>
+  <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Illustrative annual value using editable assumptions. Replace industry estimates with your own results.</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;">
+    <label class="roi-label">Annual GMV ($)<input class="grid-control roi-input" id="roi-gmv" type="number" min="0" value="500000"></label>
+    <label class="roi-label">Dispute rate (%)<input class="grid-control roi-input" id="roi-dispute-rate" type="number" min="0" step="0.1" value="0.5"></label>
+    <label class="roi-label">Average dispute ($)<input class="grid-control roi-input" id="roi-dispute-avg" type="number" min="0" value="80"></label>
+    <label class="roi-label">Current win rate (%)<input class="grid-control roi-input" id="roi-current-win" type="number" min="0" max="100" value="8.1"></label>
+    <label class="roi-label">Anchor estimate (%)<input class="grid-control roi-input" id="roi-anchor-win" type="number" min="0" max="100" value="45"></label>
+    <label class="roi-label">Abandoned checkout rate (%)<input class="grid-control roi-input" id="roi-abandon-rate" type="number" min="0" step="0.1" value="2"></label>
+    <label class="roi-label">Average order ($)<input class="grid-control roi-input" id="roi-aov" type="number" min="0" value="80"></label>
+    <label class="roi-label">Recovery rate (%)<input class="grid-control roi-input" id="roi-recovery-rate" type="number" min="0" max="100" value="20"></label>
+    <label class="roi-label">Review hours saved / day<input class="grid-control roi-input" id="roi-hours" type="number" min="0" step="0.1" value="0.5"></label>
+    <label class="roi-label">Hourly cost ($)<input class="grid-control roi-input" id="roi-hourly" type="number" min="0" value="50"></label>
+  </div>
+  <div id="roi-results" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:14px;"></div>
 </div>
 
 <!-- Integrations Section -->
@@ -1092,6 +1162,7 @@
       <path d="M8 24V8h8a6 6 0 0 1 0 12H8M16 20l6 4" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
     <div style="font-size:15px;font-weight:600;">Render Deployment</div>
+    <span style="font-size:10px;padding:2px 8px;border-radius:999px;background:rgba(70,227,183,.12);color:#087f5b;border:1px solid rgba(70,227,183,.35);">Auto-deploys on GitHub push</span>
     <span id="render-status-badge" style="margin-left:auto;font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;border:1px solid;display:none;"></span>
   </div>
 
@@ -1102,6 +1173,18 @@
       anchor-paypal.onrender.com ↗
     </a>
     <span id="render-service-region" style="font-size:11px;color:var(--muted);background:rgba(0,0,0,.05);padding:2px 8px;border-radius:4px;"></span>
+  </div>
+
+  <div style="margin:0 0 14px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+    <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:9px;">Deploy pipeline</div>
+    <div id="render-pipeline" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+      <div class="flow-step" data-deploy-step="0">GitHub push</div><div class="flow-step" data-deploy-step="1">Render build</div>
+      <div class="flow-step" data-deploy-step="2">Health check</div><div class="flow-step" data-deploy-step="3">Live</div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--muted);">
+      <span>Commit: <code id="render-current-commit">—</code></span><span>Last deploy: <span id="render-deploy-time">—</span></span>
+      <a href="https://dashboard.render.com" target="_blank" rel="noopener" style="color:var(--accent);">Open Render dashboard ↗</a>
+    </div>
   </div>
 
   <!-- Latest deploy card -->
@@ -1528,17 +1611,55 @@ function initGrids() {
       ],
     },
     rowSelection: 'multiple',
+    getRowStyle: params => {
+      if (params.data?.requires_attention) return { background: 'rgba(239,68,68,0.06)' };
+      if (params.data?.action_type === 'dispute_fought') return { background: 'rgba(16,185,129,0.04)' };
+      return null;
+    },
   };
 
   disputesGrid = agGrid.createGrid(
     document.getElementById('disputes-grid'),
-    { ...baseOptions, columnDefs: DISPUTE_COLS, rowData: [] }
+    { ...baseOptions, columnDefs: DISPUTE_COLS, rowData: [], onRowClicked: e => showDisputeDetail(e.data), onFirstDataRendered: e => e.api.sizeColumnsToFit() }
   );
 
   recoveriesGrid = agGrid.createGrid(
     document.getElementById('recoveries-grid'),
-    { ...baseOptions, columnDefs: RECOVERY_COLS, rowData: [] }
+    { ...baseOptions, columnDefs: RECOVERY_COLS, rowData: [], onFirstDataRendered: e => e.api.sizeColumnsToFit() }
   );
+}
+
+function filterGrid(value) {
+  if (disputesGrid) disputesGrid.setGridOption('quickFilterText', value);
+}
+
+function setGridView(view) {
+  if (!disputesGrid) return;
+  disputesGrid.setColumnsVisible(['reasoning', 'outcome', 'requires_attention'], view !== 'compact');
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function showDisputeDetail(row) {
+  const panel = document.getElementById('dispute-detail');
+  if (!panel || !row) return;
+  const calls = Array.isArray(row.paypal_api_calls) ? row.paypal_api_calls : [];
+  const evidence = Array.isArray(row.evidence_checklist) ? row.evidence_checklist : [];
+  document.getElementById('dispute-detail-content').innerHTML = `
+    <div style="font-size:14px;font-weight:700;margin-bottom:10px;">${escapeHtml(row.dispute_id || 'Dispute details')}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;font-size:12px;">
+      <div><strong>Decision reasoning</strong><div style="color:var(--muted);margin-top:4px;">${escapeHtml(row.reasoning || 'No reasoning recorded')}</div></div>
+      <div><strong>Evidence checklist</strong><div style="color:var(--muted);margin-top:4px;">${evidence.length ? evidence.map(escapeHtml).join('<br>') : 'No evidence checklist recorded'}</div></div>
+      <div><strong>PayPal API log</strong><div style="font-family:monospace;color:var(--muted);margin-top:4px;">${calls.length ? calls.map(escapeHtml).join('<br>') : 'No API call log recorded'}</div></div>
+    </div>`;
+  panel.style.display = 'block';
+}
+
+function closeDisputeDetail() {
+  const panel = document.getElementById('dispute-detail');
+  if (panel) panel.style.display = 'none';
 }
 
 // ── Load data ───────────────────────────────────────────────────────────────
@@ -1565,6 +1686,8 @@ async function loadAll() {
     updateStats(stats);
     disputesGrid.setGridOption('rowData', dRows);
     recoveriesGrid.setGridOption('rowData', rRows);
+    disputesGrid.sizeColumnsToFit();
+    recoveriesGrid.sizeColumnsToFit();
     _setPinnedSummaryRows(dRows, rRows);
 
     document.getElementById('tab-disputes-count').textContent   = dRows.length;
@@ -1600,6 +1723,8 @@ function loadDemo() {
   _lastDisputes = DEMO_DISPUTES;
   disputesGrid.setGridOption('rowData', DEMO_DISPUTES);
   recoveriesGrid.setGridOption('rowData', DEMO_RECOVERIES);
+  disputesGrid.sizeColumnsToFit();
+  recoveriesGrid.sizeColumnsToFit();
   _setPinnedSummaryRows(DEMO_DISPUTES, DEMO_RECOVERIES);
 
   const fought    = DEMO_DISPUTES.filter(d => d.action_type === 'dispute_fought');
@@ -1933,8 +2058,36 @@ function oracleUpdateFeeHint() {
   }
 }
 
+function roiCalculate() {
+  const val = id => Math.max(0, Number(document.getElementById(id).value) || 0);
+  const gmv = val('roi-gmv');
+  const disputeRate = val('roi-dispute-rate') / 100;
+  const avgDispute = val('roi-dispute-avg');
+  const currentWin = Math.min(100, val('roi-current-win')) / 100;
+  const anchorWin = Math.min(100, val('roi-anchor-win')) / 100;
+  const abandonRate = val('roi-abandon-rate') / 100;
+  const aov = val('roi-aov');
+  const recoveryRate = Math.min(100, val('roi-recovery-rate')) / 100;
+  const hours = val('roi-hours');
+  const hourly = val('roi-hourly');
+  const orders = aov ? gmv / aov : 0;
+  const disputes = orders * disputeRate;
+  const protectedRevenue = Math.max(0, anchorWin - currentWin) * disputes * avgDispute;
+  const recoveredRevenue = orders * abandonRate * aov * recoveryRate;
+  const timeSaved = hours * 365 * hourly;
+  const total = protectedRevenue + recoveredRevenue + timeSaved;
+  const money = n => '$' + n.toLocaleString('en-US', {maximumFractionDigits:0});
+  document.getElementById('roi-results').innerHTML = [
+    ['Estimated disputes / year', disputes.toLocaleString('en-US',{maximumFractionDigits:1}) + ' · count = orders × rate'],
+    ['Dispute value protected', money(protectedRevenue)],
+    ['Abandoned revenue recovered', money(recoveredRevenue)],
+    ['Review time saved', money(timeSaved)],
+    ['Illustrative annual value', money(total)],
+  ].map(([label,value],i) => `<div style="padding:12px;border:1px solid var(--border);border-radius:8px;background:${i===4?'rgba(5,150,105,.07)':'var(--surface)'}"><div style="font-size:10px;color:var(--muted);margin-bottom:4px;">${label}</div><div style="font-size:19px;font-weight:700;color:${i===4?'var(--green)':'var(--text)'}">${value}</div></div>`).join('');
+}
+
 async function oracleCalc() {
-  const amount    = parseFloat(document.getElementById('oracle-amount').value) || 245;
+  const amount    = parseFloat(document.getElementById('oracle-amount').value);
   const claimType = document.getElementById('oracle-claim').value;
   const tracking  = document.getElementById('oracle-tracking').checked;
   const delivery  = document.getElementById('oracle-delivery').checked;
@@ -1958,6 +2111,7 @@ async function oracleCalc() {
     });
     const r = await fetch('/api/oracle/calculate?' + params);
     const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `Calculation failed (${r.status})`);
     _applyOracleResult(d);
   } catch (e) {
     document.getElementById('oracle-result').innerHTML =
@@ -1973,9 +2127,9 @@ function _applyOracleResult(d) {
   const rec = d.recommendation || 'UNKNOWN';
   const recColors = {
     'FIGHT': { bg: 'rgba(0,196,140,.15)', color: '#00c48c', border: 'rgba(0,196,140,.3)' },
-    'ACCEPT': { bg: 'rgba(255,77,79,.15)', color: '#ff4d4f', border: 'rgba(255,77,79,.3)' },
-    'GATHER_EVIDENCE': { bg: 'rgba(245,158,11,.15)', color: '#f59e0b', border: 'rgba(245,158,11,.3)' },
-    'GATHER EVIDENCE': { bg: 'rgba(245,158,11,.15)', color: '#f59e0b', border: 'rgba(245,158,11,.3)' },
+    'ACCEPT': { bg: 'rgba(180,83,9,.12)', color: '#b45309', border: 'rgba(180,83,9,.3)' },
+    'GATHER_EVIDENCE': { bg: 'rgba(109,40,217,.12)', color: '#6d28d9', border: 'rgba(109,40,217,.3)' },
+    'GATHER EVIDENCE': { bg: 'rgba(109,40,217,.12)', color: '#6d28d9', border: 'rgba(109,40,217,.3)' },
   };
   const rc = recColors[rec] || { bg: 'rgba(0,0,0,.06)', color: 'var(--muted)', border: 'rgba(0,0,0,.12)' };
   const pct = n => (n * 100).toFixed(1) + '%';
@@ -1995,7 +2149,7 @@ function _applyOracleResult(d) {
           <div style="font-size:22px;font-weight:700;color:${d.ev_fight >= 0 ? '#00c48c' : '#ff4d4f'};">${dollar(d.ev_fight)}</div>
         </div>
         <div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:2px;">EV(accept)</div>
+          <div title="Incremental recovery value of accepting: no disputed funds are recovered." style="font-size:11px;color:var(--muted);margin-bottom:2px;cursor:help;">EV(accept) ⓘ</div>
           <div style="font-size:22px;font-weight:700;color:#ff4d4f;">${dollar(d.ev_accept)}</div>
         </div>
       </div>
@@ -2018,6 +2172,13 @@ function _applyOracleResult(d) {
 }
 
 // ── Live Dispute Simulator ───────────────────────────────────────────────────
+let _simRunCount = 0;
+function setCommerceStepActive(index) {
+  document.querySelectorAll('#dispute-flow .flow-step').forEach((step, i) => {
+    step.classList.toggle('active', i === index);
+  });
+}
+
 async function runScenario(key) {
   const result = document.getElementById('sim-result');
   const loading = document.getElementById('sim-loading');
@@ -2025,6 +2186,8 @@ async function runScenario(key) {
   result.style.display = 'block';
   loading.style.display = 'block';
   content.style.display = 'none';
+  loading.textContent = 'Running simulation…';
+  setCommerceStepActive(1);
 
   // Highlight selected button
   document.querySelectorAll('#scenario-buttons button').forEach(b => {
@@ -2047,6 +2210,7 @@ async function runScenario(key) {
       body: JSON.stringify({ scenario: key }),
     });
     const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`);
 
     document.getElementById('sim-label').textContent = d.scenario.label;
     document.getElementById('sim-narrative').textContent = d.scenario.narrative;
@@ -2056,6 +2220,9 @@ async function runScenario(key) {
     const recEl = document.getElementById('sim-rec');
     recEl.textContent = rec === 'FIGHT' ? '⚔️ FIGHT' : rec === 'ACCEPT' ? '✅ ACCEPT' : '🔍 GATHER EVIDENCE';
     recEl.style.color = rec === 'FIGHT' ? 'var(--green)' : rec === 'ACCEPT' ? 'var(--amber)' : 'var(--accent)';
+    const oracleCard = document.getElementById('sim-oracle-card');
+    oracleCard.style.borderColor = rec === 'FIGHT' ? 'var(--green)' : rec === 'ACCEPT' ? 'var(--amber)' : 'var(--purple)';
+    oracleCard.style.background = rec === 'FIGHT' ? 'rgba(5,150,105,.06)' : rec === 'ACCEPT' ? 'rgba(180,83,9,.06)' : 'rgba(109,40,217,.06)';
 
     const evFight = d.oracle.ev_fight;
     const evEl = document.getElementById('sim-ev-fight');
@@ -2074,26 +2241,59 @@ async function runScenario(key) {
     actionEl.textContent = actionMap[action] || action;
     actionEl.style.color = actionColors[action] || 'var(--text)';
     document.getElementById('sim-guardian-reason').textContent = d.guardian.reason;
+    const what = {
+      AUTO_FIGHT: 'In a live deployment, Guardian would submit the merchant evidence allowed by PayPal.',
+      AUTO_ACCEPT: 'In a live deployment, Guardian would accept the claim if PayPal still permits it.',
+      REQUEST_APPROVAL: 'Anchor pauses and asks the merchant to approve this borderline decision.',
+      GATHER_EVIDENCE: 'Anchor asks for the missing evidence before deciding whether to fight.',
+    };
+    document.getElementById('sim-what-happened').textContent = `What just happened: ${what[action] || 'The scenario was evaluated.'}`;
 
     // PayPal API calls
     const callsHtml = (d.simulated_paypal_calls || []).map(c =>
-      `<div><span style="color:${c.method==='POST'?'var(--green)':'var(--accent)'}">${c.method}</span> ${c.path}</div>`
+      `<div><span style="color:${c.method==='POST'?'var(--green)':'var(--accent)'}">${escapeHtml(c.method)}</span> ${escapeHtml(c.path)}</div>`
     ).join('');
     document.getElementById('sim-calls').innerHTML = callsHtml || '<span style="color:var(--muted)">No API calls</span>';
 
     // Reasoning
     const reasoningHtml = (d.oracle.reasoning || []).map((r,i) =>
-      `<div style="padding:2px 0;border-bottom:1px solid var(--border)">${i+1}. ${r}</div>`
+      `<div style="padding:2px 0;border-bottom:1px solid var(--border)">${i+1}. ${escapeHtml(r)}</div>`
     ).join('');
     document.getElementById('sim-reasoning').innerHTML = reasoningHtml;
 
     // Brief
     document.getElementById('sim-brief').textContent = d.morning_brief_entry?.brief_line || '';
 
+    const inputs = d.scenario.inputs || {};
+    const stage = 'simulated dispute stage (not fetched from PayPal)';
+    const actionCall = (d.simulated_paypal_calls || []).find(c => c.method === 'POST');
+    const evidenceList = [
+      `tracking ${inputs.has_tracking ? '✓' : '—'}`,
+      `delivery ${inputs.has_delivery ? '✓' : '—'}`,
+      `buyer message ${inputs.has_buyer_comm ? '✓' : '—'}`,
+      `item proof ${inputs.has_item_proof ? '✓' : '—'}`,
+    ].join(' · ');
+    const audit = [
+      `Demo webhook received: CUSTOMER.DISPUTE.CREATED · ${new Date(d.timestamp).toLocaleString()}`,
+      `Oracle calculated EV(fight) ${d.oracle.ev_fight >= 0 ? '+' : ''}$${d.oracle.ev_fight.toFixed(2)}, EV(accept) $${d.oracle.ev_accept.toFixed(2)}, P(win) ${(d.oracle.win_probability * 100).toFixed(1)}%`,
+      `Scenario evidence inputs (simulated): ${evidenceList} · multiplier ${Number(d.oracle.evidence_multiplier || 1).toFixed(2)}`,
+      `Break-even ${(d.oracle.break_even * 100).toFixed(1)}% · actual win estimate ${(d.oracle.win_probability * 100).toFixed(1)}%`,
+      'Guardian action gate: represented as a demo; live HATEOAS links are not queried by the simulator',
+      `Stage: ${stage}`,
+      `Simulated action: ${actionCall ? `${actionCall.method} ${actionCall.path}` : 'no PayPal POST action'}`,
+      'Result: simulation complete · no PayPal action was executed',
+    ];
+    document.getElementById('sim-audit').innerHTML = audit.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+
     loading.style.display = 'none';
     content.style.display = 'block';
+    _simRunCount += 1;
+    document.getElementById('sim-run-count').textContent = _simRunCount;
+    setCommerceStepActive(5);
+    result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (e) {
     loading.textContent = 'Simulation failed: ' + e.message;
+    loading.style.display = 'block';
   }
 }
 
@@ -2472,6 +2672,22 @@ async function renderRefreshStatus() {
 
 function _applyRenderStatus(d) {
   if (!d || !d.service) return;
+
+  const deploy = d.latest_deploy || {};
+  const currentCommit = d.current_commit || deploy.commit_id || '';
+  document.getElementById('render-current-commit').textContent = currentCommit ? currentCommit.slice(0, 12) : 'not available';
+  document.getElementById('render-deploy-time').textContent = deploy.finished_at || deploy.created_at || d.status_note || 'not available';
+  const status = deploy.status || '';
+  const activeStep = status === 'live' ? 3 : /failed|canceled|deactivated/.test(status) ? -1 : status ? 1 : -1;
+  document.querySelectorAll('#render-pipeline [data-deploy-step]').forEach((step, i) => {
+    step.classList.toggle('active', i === activeStep);
+    step.style.borderColor = status === 'live' && i <= 3 ? '#059669' : '';
+    step.style.background = status === 'live' && i <= 3 ? 'rgba(5,150,105,.06)' : '';
+  });
+  if (d.status_note && !status) {
+    const note = document.getElementById('render-deploy-time');
+    note.textContent = d.status_note;
+  }
 
   // Service row
   const urlEl = document.getElementById('render-service-url');
@@ -3057,6 +3273,16 @@ async function kernelTestScreenshot(btn) {
 document.addEventListener('DOMContentLoaded', () => {
   initGrids();
   loadAll();
+  document.querySelectorAll('#roi-panel .roi-input').forEach(input => input.addEventListener('input', roiCalculate));
+  roiCalculate();
+  document.querySelectorAll('#oracle-panel input, #oracle-panel select').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.id === 'oracle-highvol') oracleUpdateFeeHint();
+      oracleCalc();
+    });
+    if (input.type === 'number') input.addEventListener('input', oracleCalc);
+  });
+  oracleCalc();
   renderRefreshStatus();
   postmanRefresh();
   apimRefresh();
