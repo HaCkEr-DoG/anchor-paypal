@@ -1,18 +1,16 @@
 """
-Appeal Window Tracker — after a dispute ruling, track the remaining
-time to file an appeal and determine whether an appeal is worthwhile.
+Appeal Window Tracker — compute remaining time in dispute appeal windows
+and emit urgency-ranked action deadlines for all open disputes.
 
-Appeal rules:
-  PayPal:      10 days after ruling
-  Visa:        45 days after ruling
-  Mastercard:  45 days after ruling
-  Amex:        45 days after ruling
-  Discover:    45 days after ruling
+Covers:
+  - PayPal internal response deadlines (10 days)
+  - Visa/MC/Amex/Discover network appeal windows (45 days)
+  - Pre-arbitration windows (Visa/MC/Discover: 30 days after CB)
+  - Arbitration filing deadlines (45 days after pre-arb rejection)
+  - Stage-specific windows: response, appeal, pre-arb, arbitration
 
-An appeal is worth filing when:
-  1. The window has not expired
-  2. New evidence is available that was not in the original submission
-  3. The EV of winning the appeal exceeds the appeal cost
+Output: per-dispute deadline summary with urgency bands
+  CRITICAL (≤2 days), HIGH (3–5 days), MODERATE (6–14 days), LOW (>14 days)
 
 This is a pure oracle module — no I/O, no persistence.
 """
@@ -23,206 +21,237 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-
-class AppealOutcome(str, Enum):
-    WON_ORIGINAL    = "WON_ORIGINAL"    # Merchant won the first ruling
-    LOST_ORIGINAL   = "LOST_ORIGINAL"   # Merchant lost; appeal possible
-    PARTIAL_LOSS    = "PARTIAL_LOSS"    # Merchant got partial ruling
-    UNKNOWN         = "UNKNOWN"         # Ruling not yet issued
+DAY_SECS = 86400
 
 
-class AppealRecommendation(str, Enum):
-    APPEAL_NOW      = "APPEAL_NOW"      # Window open, EV positive, do it immediately
-    APPEAL_OPTIONAL = "APPEAL_OPTIONAL" # Marginal EV; merchant's call
-    DO_NOT_APPEAL   = "DO_NOT_APPEAL"   # Window closed or EV negative
-    WINDOW_EXPIRED  = "WINDOW_EXPIRED"  # Too late
+class Network(str, Enum):
+    PAYPAL   = "PAYPAL"
+    VISA     = "VISA"
+    MC       = "MC"
+    AMEX     = "AMEX"
+    DISCOVER = "DISCOVER"
 
 
-_APPEAL_WINDOW_DAYS: dict[str, int] = {
-    "PAYPAL":      10,
-    "VISA":        45,
-    "MASTERCARD":  45,
-    "AMEX":        45,
-    "DISCOVER":    45,
+class DisputeStage(str, Enum):
+    INQUIRY            = "INQUIRY"
+    CHARGEBACK         = "CHARGEBACK"
+    PRE_ARBITRATION    = "PRE_ARBITRATION"
+    ARBITRATION        = "ARBITRATION"
+    CLOSED             = "CLOSED"
+
+
+class UrgencyBand(str, Enum):
+    CRITICAL = "CRITICAL"   # ≤2 days
+    HIGH     = "HIGH"       # 3–5 days
+    MODERATE = "MODERATE"   # 6–14 days
+    LOW      = "LOW"        # >14 days
+    EXPIRED  = "EXPIRED"    # already past
+
+
+# ── Network-specific window sizes (days) ─────────────────────────────
+_RESPONSE_WINDOWS: dict[Network, int] = {
+    Network.PAYPAL:   10,
+    Network.VISA:     20,
+    Network.MC:       20,
+    Network.AMEX:     20,
+    Network.DISCOVER: 20,
 }
 
-_APPEAL_WIN_BASE: dict[str, float] = {
-    # Historical appeal success rates (merchant perspective)
-    "PAYPAL":      0.25,
-    "VISA":        0.35,
-    "MASTERCARD":  0.30,
-    "AMEX":        0.28,
-    "DISCOVER":    0.30,
+_APPEAL_WINDOWS: dict[Network, int] = {
+    Network.PAYPAL:   10,
+    Network.VISA:     45,
+    Network.MC:       45,
+    Network.AMEX:     45,
+    Network.DISCOVER: 45,
+}
+
+_PRE_ARB_WINDOWS: dict[Network, int] = {
+    Network.PAYPAL:   0,    # No pre-arb for PayPal
+    Network.VISA:     30,
+    Network.MC:       30,
+    Network.AMEX:     0,    # No pre-arb for Amex
+    Network.DISCOVER: 30,
+}
+
+_ARB_WINDOWS: dict[Network, int] = {
+    Network.PAYPAL:   0,    # No arbitration for PayPal
+    Network.VISA:     45,
+    Network.MC:       45,
+    Network.AMEX:     45,
+    Network.DISCOVER: 45,
 }
 
 
 @dataclass
-class AppealWindowInput:
-    """Input for appeal window tracking."""
+class DisputeWindowInput:
+    """Input for a single dispute's appeal window calculation."""
     dispute_id: str
-    network: str                 # PAYPAL / VISA / MASTERCARD / AMEX / DISCOVER
-    disputed_amount: float
-    ruling_outcome: AppealOutcome
+    network: Network
+    stage: DisputeStage
 
-    # Timing
-    days_since_ruling: int       # How many days since the ruling was issued
-    # (negative means ruling not yet issued)
+    # Epoch timestamps for stage-entry events
+    stage_opened_epoch: int               # When current stage started
+    now_epoch: int                        # Current timestamp (for testing)
 
-    # New evidence for appeal
-    has_new_evidence: bool = False
-    new_evidence_description: str = ""
-    original_evidence_quality: float = 0.5  # 0–1, quality of original submission
+    # Optional timestamps for other stages (used to compute remaining windows)
+    chargeback_opened_epoch: Optional[int] = None
+    pre_arb_opened_epoch: Optional[int] = None
 
-    # Costs
-    appeal_cost: float = 25.0
-    chargeback_fee: float = 20.0
-
-    # Context
-    claim_type: str = "INR"
-    is_in_hdr: bool = False
+    transaction_amount: float = 0.0
+    reason_code: str = ""
 
 
-def _days_remaining(network: str, days_since_ruling: int) -> int:
-    window = _APPEAL_WINDOW_DAYS.get(network.upper(), 45)
-    return max(0, window - days_since_ruling)
-
-
-def _appeal_win_probability(inp: AppealWindowInput) -> float:
-    base = _APPEAL_WIN_BASE.get(inp.network.upper(), 0.30)
-
-    # New evidence significantly boosts success
-    if inp.has_new_evidence:
-        base += 0.20
-    # Poor original evidence means more room to improve
-    if inp.original_evidence_quality < 0.4:
-        base += 0.10
-    # HDR pressure means PayPal is more sympathetic
-    if inp.is_in_hdr:
-        base += 0.05
-
-    return min(0.85, round(base, 2))
-
-
-def _ev_appeal(p_win: float, amount: float, appeal_cost: float) -> float:
-    return round(p_win * amount - appeal_cost, 2)
-
-
-def _recommendation(
-        days_remaining: int,
-        ev: float,
-        outcome: AppealOutcome,
-        has_new_evidence: bool) -> AppealRecommendation:
-
-    if outcome == AppealOutcome.WON_ORIGINAL:
-        return AppealRecommendation.DO_NOT_APPEAL
-
-    if days_remaining <= 0:
-        return AppealRecommendation.WINDOW_EXPIRED
-
-    if ev > 20 and has_new_evidence:
-        return AppealRecommendation.APPEAL_NOW
-    if ev > 0:
-        return AppealRecommendation.APPEAL_OPTIONAL
-    return AppealRecommendation.DO_NOT_APPEAL
+@dataclass
+class DeadlineItem:
+    """A single deadline with remaining time."""
+    label: str
+    deadline_epoch: int
+    days_remaining: float
+    urgency: UrgencyBand
+    action_required: str
 
 
 @dataclass
 class AppealWindowReport:
-    """Full appeal window analysis."""
+    """Full appeal window report for one dispute."""
     dispute_id: str
-    network: str
-    ruling_outcome: AppealOutcome
-    recommendation: AppealRecommendation
+    network: Network
+    stage: DisputeStage
+    now_epoch: int
 
-    # Window
-    appeal_window_days: int      # Total window
-    days_since_ruling: int
-    days_remaining: int
-    window_expired: bool
-    deadline_urgency: str        # CRITICAL / HIGH / MEDIUM / LOW
+    deadlines: list[DeadlineItem]           # All relevant deadlines, sorted soonest first
+    primary_deadline: Optional[DeadlineItem]  # Most urgent actionable deadline
+    any_window_expired: bool
+    can_still_appeal: bool
 
-    # EV
-    appeal_win_probability: float
-    ev_of_appealing: float
-    is_ev_positive: bool
-
-    # Guidance
-    appeal_rationale: str
-    required_steps: list[str]
     summary: str
 
 
-def track_appeal_window(inp: AppealWindowInput) -> AppealWindowReport:
-    """Analyze whether and when to file an appeal."""
-    days_rem = _days_remaining(inp.network, inp.days_since_ruling)
-    window = _APPEAL_WINDOW_DAYS.get(inp.network.upper(), 45)
-    expired = days_rem <= 0 or inp.ruling_outcome == AppealOutcome.WON_ORIGINAL
+def _urgency(days: float) -> UrgencyBand:
+    if days < 0:
+        return UrgencyBand.EXPIRED
+    if days <= 2:
+        return UrgencyBand.CRITICAL
+    if days <= 5:
+        return UrgencyBand.HIGH
+    if days <= 14:
+        return UrgencyBand.MODERATE
+    return UrgencyBand.LOW
 
-    p_win = _appeal_win_probability(inp)
-    ev = _ev_appeal(p_win, inp.disputed_amount, inp.appeal_cost)
-    rec = _recommendation(days_rem, ev, inp.ruling_outcome, inp.has_new_evidence)
 
-    # Urgency
-    if days_rem <= 1:
-        urgency = "CRITICAL"
-    elif days_rem <= 3:
-        urgency = "HIGH"
-    elif days_rem <= 7:
-        urgency = "MEDIUM"
-    else:
-        urgency = "LOW"
-
-    # Rationale
-    if rec == AppealRecommendation.APPEAL_NOW:
-        rationale = (
-            f"Appeal recommended: {days_rem}d remaining, "
-            f"EV=${ev:.2f}, new evidence available. "
-            f"Estimated win rate {p_win:.0%}."
-        )
-    elif rec == AppealRecommendation.APPEAL_OPTIONAL:
-        rationale = (
-            f"Appeal is marginal: EV=${ev:.2f} at {p_win:.0%} win rate. "
-            f"{days_rem}d remaining. Consider if dispute amount justifies appeal_cost."
-        )
-    elif rec == AppealRecommendation.WINDOW_EXPIRED:
-        rationale = f"Appeal window expired ({window}d limit). No action possible."
-    elif rec == AppealRecommendation.DO_NOT_APPEAL:
-        if inp.ruling_outcome == AppealOutcome.WON_ORIGINAL:
-            rationale = "Merchant won — no appeal needed."
-        else:
-            rationale = f"EV of appeal is negative (${ev:.2f}). Accept the ruling."
-    else:
-        rationale = "No appeal recommended."
-
-    # Required steps
-    steps: list[str] = []
-    if rec in (AppealRecommendation.APPEAL_NOW, AppealRecommendation.APPEAL_OPTIONAL):
-        steps.append(f"File appeal via {inp.network} dispute portal before {days_rem}d deadline")
-        if inp.has_new_evidence:
-            steps.append(f"Submit new evidence: {inp.new_evidence_description or 'specify evidence'}")
-        steps.append("Include original dispute ID and ruling reference number")
-        steps.append(f"Pay appeal filing fee (est. ${inp.appeal_cost:.0f})")
-
-    summary = (
-        f"Appeal {inp.dispute_id}: "
-        f"outcome={inp.ruling_outcome.value} | rec={rec.value} | "
-        f"days_rem={days_rem} | p_win={p_win:.0%} | ev=${ev:.2f}"
+def _make_deadline(label: str, opened_epoch: int, window_days: int,
+                   now_epoch: int, action: str) -> Optional[DeadlineItem]:
+    if window_days <= 0:
+        return None
+    deadline = opened_epoch + window_days * DAY_SECS
+    days_rem = (deadline - now_epoch) / DAY_SECS
+    return DeadlineItem(
+        label=label,
+        deadline_epoch=deadline,
+        days_remaining=round(days_rem, 2),
+        urgency=_urgency(days_rem),
+        action_required=action,
     )
+
+
+def track_appeal_windows(inp: DisputeWindowInput) -> AppealWindowReport:
+    """Compute all appeal deadlines for a dispute and rank by urgency."""
+    deadlines: list[DeadlineItem] = []
+
+    if inp.stage == DisputeStage.INQUIRY:
+        d = _make_deadline(
+            "Inquiry response",
+            inp.stage_opened_epoch,
+            _RESPONSE_WINDOWS[inp.network],
+            inp.now_epoch,
+            "Respond to inquiry or escalates to chargeback",
+        )
+        if d:
+            deadlines.append(d)
+
+    elif inp.stage == DisputeStage.CHARGEBACK:
+        d = _make_deadline(
+            "Chargeback response",
+            inp.stage_opened_epoch,
+            _RESPONSE_WINDOWS[inp.network],
+            inp.now_epoch,
+            "Submit evidence to contest chargeback",
+        )
+        if d:
+            deadlines.append(d)
+
+        # Appeal window (starts at same time for most networks)
+        d2 = _make_deadline(
+            "Chargeback appeal",
+            inp.stage_opened_epoch,
+            _APPEAL_WINDOWS[inp.network],
+            inp.now_epoch,
+            "File appeal to escalate to pre-arbitration",
+        )
+        if d2:
+            deadlines.append(d2)
+
+    elif inp.stage == DisputeStage.PRE_ARBITRATION:
+        base = inp.pre_arb_opened_epoch or inp.stage_opened_epoch
+        d = _make_deadline(
+            "Pre-arbitration response",
+            base,
+            _PRE_ARB_WINDOWS[inp.network],
+            inp.now_epoch,
+            "Respond to pre-arb or accept liability",
+        )
+        if d:
+            deadlines.append(d)
+
+        # Arbitration filing window (after pre-arb rejection)
+        d2 = _make_deadline(
+            "Arbitration filing",
+            base,
+            _ARB_WINDOWS[inp.network],
+            inp.now_epoch,
+            "File for arbitration to escalate dispute",
+        )
+        if d2:
+            deadlines.append(d2)
+
+    elif inp.stage == DisputeStage.ARBITRATION:
+        d = _make_deadline(
+            "Arbitration response",
+            inp.stage_opened_epoch,
+            45,   # Standard 45-day arb window for all networks
+            inp.now_epoch,
+            "Submit final evidence to arbitration panel",
+        )
+        if d:
+            deadlines.append(d)
+
+    # Sort by days_remaining ascending (soonest first, expired last)
+    deadlines.sort(key=lambda x: x.days_remaining if x.days_remaining >= 0 else 999_999)
+
+    any_expired = any(d.urgency == UrgencyBand.EXPIRED for d in deadlines)
+    can_appeal  = any(d.urgency != UrgencyBand.EXPIRED for d in deadlines)
+    primary     = deadlines[0] if deadlines else None
+
+    if primary:
+        summary = (
+            f"Dispute {inp.dispute_id} [{inp.network.value}/{inp.stage.value}]: "
+            f"primary deadline '{primary.label}' in {primary.days_remaining:.1f}d "
+            f"({primary.urgency.value})"
+        )
+    else:
+        summary = (
+            f"Dispute {inp.dispute_id} [{inp.network.value}/{inp.stage.value}]: "
+            f"no active deadlines (stage={inp.stage.value})"
+        )
 
     return AppealWindowReport(
         dispute_id=inp.dispute_id,
         network=inp.network,
-        ruling_outcome=inp.ruling_outcome,
-        recommendation=rec,
-        appeal_window_days=window,
-        days_since_ruling=inp.days_since_ruling,
-        days_remaining=days_rem,
-        window_expired=expired,
-        deadline_urgency=urgency,
-        appeal_win_probability=p_win,
-        ev_of_appealing=ev,
-        is_ev_positive=ev > 0,
-        appeal_rationale=rationale,
-        required_steps=steps,
+        stage=inp.stage,
+        now_epoch=inp.now_epoch,
+        deadlines=deadlines,
+        primary_deadline=primary,
+        any_window_expired=any_expired,
+        can_still_appeal=can_appeal,
         summary=summary,
     )
