@@ -1,31 +1,29 @@
 """
-Merchant Health Monitor — real-time PayPal account risk dashboard.
+Merchant Health Dashboard Oracle — consolidated health score for the merchant.
 
-Every dispute module in Anchor makes individual dispute decisions. This module
-makes ACCOUNT-LEVEL decisions: given our current dispute rate trajectory, how
-close are we to the thresholds that restrict or destroy the account?
+Every other oracle module answers one question. This one answers:
+  "How healthy is this merchant's dispute operation right now?"
 
-PayPal's threshold cascade (2024):
-  > 0.50%: Elevated Dispute Rate  — warning emails, monitoring
-  > 1.00%: High Dispute Rate      — limited processing, possible holds
-  > 1.50%: Excessive Dispute Rate — $30 per-dispute HDR fee on ALL disputes
-  > 3.00%: Suspension threshold   — account review, potential suspension
-  > 5.00%: Termination risk       — permanent restriction likely
+It aggregates signals from all oracle layers into a single health score
+and surfaced recommendations, acting as the top-level triage that feeds
+the merchant dashboard.
 
-The key insight competitors miss: thresholds are ROLLING WINDOWS (last 90 days
-for most programs, monthly for HDR). One bad month doesn't just hurt that month —
-it stays in the window for 90 days. A merchant who had 50 disputes in January is
-still carrying that toward their March rate.
+Health dimensions (weighted):
+  1. HDR Safety (30%) — distance from PayPal's punishment thresholds
+  2. Win Rate (25%)   — are disputes being fought effectively?
+  3. Fraud Defense (20%) — how well is fraud being detected and blocked?
+  4. Cash Flow Risk (15%) — amount at risk in open disputes
+  5. Operational Efficiency (10%) — autopilot ratio, human minutes/dispute
 
-This module computes:
-  1. Exact current rate (not just "are we over?")
-  2. Trajectory: at current dispute velocity, when do we cross each threshold?
-  3. Disputes-allowed budget: how many more disputes can we absorb before crossing?
-  4. Emergency protocol: if crossing is imminent (<30 days), what must change NOW?
-  5. Recovery projection: if we implement specific actions, when do we recover?
+Composite score 0–100:
+  85–100: EXCELLENT — no action needed
+  70–84:  GOOD — monitor, minor improvements available
+  55–69:  FAIR — specific areas need attention
+  40–54:  POOR — multiple weak points, remediation needed
+  0–39:   CRITICAL — urgent intervention required
 
-This turns dispute management from reactive (respond to individual disputes) to
-strategic (manage the account's long-term rate trajectory).
+This is the single number a merchant dashboard should show prominently.
+Everything else in the oracle layer feeds into it.
 """
 
 from __future__ import annotations
@@ -33,339 +31,358 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-import math
 
 
-class AccountStatus(str, Enum):
-    HEALTHY       = "HEALTHY"        # < 0.50%  — green
-    ELEVATED      = "ELEVATED"       # 0.50–1.00% — yellow
-    HIGH          = "HIGH"           # 1.00–1.50% — orange
-    EXCESSIVE     = "EXCESSIVE"      # 1.50–3.00% — red (HDR fee active)
-    CRITICAL      = "CRITICAL"       # 3.00–5.00% — suspend risk
-    TERMINAL      = "TERMINAL"       # > 5.00%   — termination risk
+class HealthGrade(str, Enum):
+    EXCELLENT = "EXCELLENT"   # 85-100
+    GOOD      = "GOOD"        # 70-84
+    FAIR      = "FAIR"        # 55-69
+    POOR      = "POOR"        # 40-54
+    CRITICAL  = "CRITICAL"    # 0-39
 
 
 @dataclass
-class DisputeWindow:
-    """Rolling 90-day dispute window data."""
-    window_days: int = 90
-    total_transactions: int = 0      # Transactions in window
-    total_disputes: int = 0          # Disputes filed in window
-    # Per-week breakdown for trend analysis
-    weekly_disputes: list[int] = field(default_factory=list)   # Last 13 weeks
-    weekly_transactions: list[int] = field(default_factory=list)  # Last 13 weeks
-    # Current open disputes (may escalate)
-    open_disputes: int = 0
-    # HDR charges already incurred this month
-    hdr_fees_ytd: float = 0.0
+class MerchantHealthInput:
+    """
+    Current operational state of the merchant's dispute management.
+    All fields correspond to metrics available from other oracle modules.
+    """
+    # HDR Safety signals
+    current_hdr_rate: float          # E.g. 0.012 = 1.2%
+    hdr_trajectory: str = "STABLE"  # "WORSENING" / "STABLE" / "IMPROVING"
+
+    # Win rate signals
+    dispute_win_rate_90d: float = 0.65    # Last 90 days
+    evidence_quality_avg: str = "MODERATE"  # "WEAK" / "MODERATE" / "STRONG"
+
+    # Volume signals
+    total_open_disputes: int = 0
+    total_at_risk_amount: float = 0.0
+    monthly_gmv: float = 100000.0
+
+    # Fraud defense
+    fraud_detection_rate: float = 0.70   # % of fraud caught before order ships
+    blocked_buyers_count: int = 0
+
+    # Operational efficiency
+    autopilot_ratio: float = 0.70        # % of disputes handled without human review
+    avg_human_minutes_per_dispute: float = 25.0
+    response_time_compliance: float = 0.95  # % of disputes responded within deadline
+
+    # Optional enrichment
+    has_carrier_strategy: bool = True    # Using PLATINUM carriers for high-value
+    has_buyer_vetting: bool = True       # Pre-order dispute prediction active
+
+
+@dataclass
+class HealthDimension:
+    name: str
+    score: float            # 0–100
+    weight: float           # Contribution to composite (sum = 1.0)
+    grade: str              # EXCELLENT / GOOD / FAIR / POOR / CRITICAL
+    top_issue: Optional[str] = None
+    recommendation: Optional[str] = None
 
 
 @dataclass
 class MerchantHealthReport:
-    """Complete account health assessment."""
-    # Current state
-    current_dispute_rate: float          # Precise rate (0.0–1.0)
-    account_status: AccountStatus
-    hdr_fee_active: bool                 # True if >1.50% and paying $30/dispute
-    hdr_fee_per_dispute: float           # 0 or 30
-    # Threshold proximity
-    disputes_until_next_threshold: int   # How many more disputes before crossing
-    days_until_threshold_cross: int      # At current velocity, when do we cross?
-    next_threshold_name: str             # e.g., "EXCESSIVE (1.50%)"
-    next_threshold_rate: float
-    # Trajectory
-    weekly_dispute_velocity: float       # Avg disputes/week (last 4 weeks)
-    weekly_transaction_velocity: float   # Avg transactions/week
-    trend_direction: str                 # "IMPROVING" / "STABLE" / "WORSENING"
-    rate_30d_ago: float                  # Rate 30 days ago (trend comparison)
-    # Budget
-    dispute_budget_30d: int              # Disputes allowed in next 30 days
-    dispute_budget_90d: int              # Disputes allowed in next 90 days
-    # Financial exposure
-    monthly_hdr_exposure: float          # Projected HDR fees if rate unchanged
-    annual_hdr_exposure: float
-    # Recommendations
-    emergency_actions: list[str]         # If critical/terminal: do these NOW
-    preventive_actions: list[str]        # For all statuses
-    health_score: int                    # 0–100 (100 = best)
-    reasoning: list[str] = field(default_factory=list)
-
-
-# PayPal threshold definitions: (rate, label, fee_per_dispute)
-_THRESHOLDS = [
-    (0.0050, "ELEVATED (0.50%)",    0.0),
-    (0.0100, "HIGH (1.00%)",        0.0),
-    (0.0150, "EXCESSIVE (1.50%)",  30.0),
-    (0.0300, "CRITICAL (3.00%)",    30.0),
-    (0.0500, "TERMINAL (5.00%)",    30.0),
-]
-
-
-def assess_merchant_health(window: DisputeWindow) -> MerchantHealthReport:
     """
-    Compute complete account health, trajectory, and recommended actions.
-
-    The core value: merchant knows not just "am I over?" but "in 23 days I'll
-    cross 1.50% and start paying $30/dispute on ALL disputes unless I add
-    signature confirmation to the next 150 orders."
+    Consolidated merchant health assessment.
+    Top-level output for the Anchor dashboard.
     """
-    reasoning: list[str] = []
+    composite_score: float
+    grade: HealthGrade
 
-    if window.total_transactions == 0:
-        # No transaction history — return safe defaults
-        return _empty_report()
+    # Dimension breakdown
+    dimensions: list[HealthDimension]
 
-    # ── 1. Current rate ───────────────────────────────────────────────────────
-    current_rate = window.total_disputes / window.total_transactions
-    # Worst case: include open disputes (they'll likely become formal)
-    worst_rate = (window.total_disputes + window.open_disputes) / window.total_transactions
-    reasoning.append(
-        f"Current dispute rate: {current_rate:.3%} "
-        f"(worst-case with {window.open_disputes} open: {worst_rate:.3%})"
-    )
+    # Key metrics
+    current_hdr_rate: float
+    dispute_win_rate: float
+    autopilot_ratio: float
+    at_risk_amount: float
 
-    # ── 2. Account status ─────────────────────────────────────────────────────
-    if current_rate >= 0.0500:
-        status = AccountStatus.TERMINAL
-    elif current_rate >= 0.0300:
-        status = AccountStatus.CRITICAL
-    elif current_rate >= 0.0150:
-        status = AccountStatus.EXCESSIVE
-    elif current_rate >= 0.0100:
-        status = AccountStatus.HIGH
-    elif current_rate >= 0.0050:
-        status = AccountStatus.ELEVATED
+    # Trend
+    trend_direction: str    # "IMPROVING" / "STABLE" / "DECLINING"
+    trend_note: str
+
+    # Action items
+    urgent_actions: list[str]        # Must fix now
+    improvement_actions: list[str]   # Would improve score
+
+    summary: str
+    dashboard_headline: str          # One line for top of dashboard
+
+
+def _hdr_dimension(inp: MerchantHealthInput) -> HealthDimension:
+    """Score HDR safety (30% weight)."""
+    rate = inp.current_hdr_rate
+
+    # Score based on distance from thresholds
+    if rate < 0.003:          # < 0.3% — excellent buffer
+        score = 100.0
+        issue = None
+        rec = None
+    elif rate < 0.005:        # 0.3–0.5% — good buffer
+        score = 90.0
+        issue = None
+        rec = "Monitor monthly — approaching ELEVATED threshold"
+    elif rate < 0.008:        # 0.5–0.8% — ELEVATED
+        score = 72.0
+        issue = f"HDR at {rate:.2%} — in ELEVATED zone"
+        rec = "Increase transaction volume and prevent new disputes"
+    elif rate < 0.010:        # 0.8–1.0% — approaching LIMITED
+        score = 55.0
+        issue = f"HDR at {rate:.2%} — {(0.010 - rate) * 10000:.0f} bps from LIMITED restrictions"
+        rec = "Activate HDR war room protocol immediately"
+    elif rate < 0.015:        # 1.0–1.5% — LIMITED
+        score = 35.0
+        issue = f"HDR at {rate:.2%} — LIMITED zone (processing restrictions active)"
+        rec = "Emergency: preemptive refunds + pause high-risk products + contact PayPal"
+    elif rate < 0.030:        # 1.5–3.0% — FEE TIER
+        score = 20.0
+        issue = f"HDR at {rate:.2%} — FEE TIER ($30/dispute above 1.5%)"
+        rec = "Critical: implement all HDR war room actions, freeze new high-risk orders"
+    else:                     # > 3.0% — SEVERE/TERMINAL
+        score = 5.0
+        issue = f"HDR at {rate:.2%} — SEVERE/TERMINAL zone, account suspension risk"
+        rec = "Executive escalation required — contact PayPal Merchant Relations today"
+
+    # Trajectory penalty
+    if inp.hdr_trajectory == "WORSENING":
+        score = max(0, score - 15)
+    elif inp.hdr_trajectory == "IMPROVING":
+        score = min(100, score + 10)
+
+    grade = _score_to_grade(score)
+    return HealthDimension("HDR Safety", round(score, 1), 0.30, grade, issue, rec)
+
+
+def _win_rate_dimension(inp: MerchantHealthInput) -> HealthDimension:
+    """Score win rate effectiveness (25% weight)."""
+    wr = inp.dispute_win_rate_90d
+
+    if wr >= 0.80:
+        score = 100.0
+        issue = None
+        rec = "Excellent win rate — maintain evidence standards"
+    elif wr >= 0.70:
+        score = 85.0
+        issue = None
+        rec = "Good win rate — upgrade carrier strategy to push above 80%"
+    elif wr >= 0.60:
+        score = 65.0
+        issue = f"Win rate {wr:.0%} — below 65% target"
+        rec = "Invest in evidence quality: delivery confirmation + signature for high-value orders"
+    elif wr >= 0.50:
+        score = 45.0
+        issue = f"Win rate {wr:.0%} — losing nearly half of disputes"
+        rec = "Review top loss reasons: missing tracking, no delivery confirmation, no photos (SNAD)"
     else:
-        status = AccountStatus.HEALTHY
+        score = 20.0
+        issue = f"Win rate {wr:.0%} — critically low"
+        rec = "Stop fighting unwinnable disputes; focus on only HIGH_CONFIDENCE fights"
 
-    hdr_active = current_rate >= 0.0150
-    hdr_fee = 30.0 if hdr_active else 0.0
+    if inp.evidence_quality_avg == "STRONG":
+        score = min(100, score + 10)
+    elif inp.evidence_quality_avg == "WEAK":
+        score = max(0, score - 10)
 
-    # ── 3. Next threshold and budget ─────────────────────────────────────────
-    next_threshold_rate = 1.0
-    next_threshold_name = "No threshold"
-    for thresh_rate, thresh_name, _ in _THRESHOLDS:
-        if current_rate < thresh_rate:
-            next_threshold_rate = thresh_rate
-            next_threshold_name = thresh_name
-            break
+    grade = _score_to_grade(score)
+    return HealthDimension("Win Rate", round(score, 1), 0.25, grade, issue, rec)
 
-    # Disputes allowed until next threshold:
-    # threshold_rate = (current_disputes + N) / (current_transactions + weekly_tx * weeks)
-    # Solve for N (new disputes) over 30d / 90d horizon
-    weekly_tx = _weekly_velocity(window.weekly_transactions)
-    weekly_disputes = _weekly_velocity(window.weekly_disputes)
-    tx_next_30d = weekly_tx * 4.3
-    tx_next_90d = weekly_tx * 13
 
-    budget_30 = max(0, int(
-        next_threshold_rate * (window.total_transactions + tx_next_30d)
-        - window.total_disputes
-    ))
-    budget_90 = max(0, int(
-        next_threshold_rate * (window.total_transactions + tx_next_90d)
-        - window.total_disputes
-    ))
+def _fraud_defense_dimension(inp: MerchantHealthInput) -> HealthDimension:
+    """Score fraud defense (20% weight)."""
+    fdr = inp.fraud_detection_rate
 
-    # Days until crossing: at current dispute velocity
-    if weekly_disputes > 0 and next_threshold_rate < 1.0:
-        # Solving: (disputes + weekly_disputes * weeks) / (tx + weekly_tx * weeks) = threshold
-        # Rearranged: weeks = (threshold * tx - disputes) / (weekly_disputes - threshold * weekly_tx)
-        numerator = next_threshold_rate * window.total_transactions - window.total_disputes
-        denominator = weekly_disputes - next_threshold_rate * weekly_tx
-        if denominator > 0 and numerator > 0:
-            weeks_until = numerator / denominator
-            days_until = int(weeks_until * 7)
-        elif denominator <= 0:
-            days_until = 999  # Rate improving faster than disputes arriving
-        else:
-            days_until = 0  # Already crossed
-    elif next_threshold_rate >= 1.0:
-        days_until = 999
+    if fdr >= 0.85:
+        score = 100.0
+        issue = None
+        rec = None
+    elif fdr >= 0.70:
+        score = 80.0
+        issue = f"Fraud detection {fdr:.0%} — some fraudulent orders slipping through"
+        rec = "Enable buyer dispute prediction on all orders; block repeat disputers"
+    elif fdr >= 0.50:
+        score = 55.0
+        issue = f"Fraud detection {fdr:.0%} — significant fraud exposure"
+        rec = "Implement network intelligence; require review for new accounts and high-value orders"
     else:
-        days_until = 999
+        score = 25.0
+        issue = f"Fraud detection {fdr:.0%} — most fraud is not being caught pre-order"
+        rec = "Deploy full fraud prevention stack: predictor + network intel + buyer vetting"
 
-    reasoning.append(
-        f"At current velocity ({weekly_disputes:.1f} disputes/week, "
-        f"{weekly_tx:.0f} tx/week): "
-        f"crosses {next_threshold_name} in ~{days_until} days"
-    )
+    if inp.has_buyer_vetting:
+        score = min(100, score + 5)
+    if not inp.has_carrier_strategy:
+        score = max(0, score - 5)
 
-    # ── 4. Trend ──────────────────────────────────────────────────────────────
-    rate_30d_ago = _rate_30d_ago(window)
-    if current_rate < rate_30d_ago * 0.90:
+    grade = _score_to_grade(score)
+    return HealthDimension("Fraud Defense", round(score, 1), 0.20, grade, issue, rec)
+
+
+def _cash_flow_dimension(inp: MerchantHealthInput) -> HealthDimension:
+    """Score cash flow risk (15% weight)."""
+    if inp.monthly_gmv <= 0:
+        pct = 0.0
+    else:
+        pct = inp.total_at_risk_amount / inp.monthly_gmv
+
+    if pct < 0.01:
+        score = 100.0
+        issue = None
+        rec = None
+    elif pct < 0.03:
+        score = 80.0
+        issue = f"{pct:.1%} of monthly GMV in open disputes (${inp.total_at_risk_amount:.0f})"
+        rec = "Normal — ensure disputes are progressing toward resolution"
+    elif pct < 0.06:
+        score = 60.0
+        issue = f"{pct:.1%} of monthly GMV at risk in disputes"
+        rec = "Accelerate dispute resolution; prioritize high-value disputes"
+    elif pct < 0.10:
+        score = 40.0
+        issue = f"{pct:.1%} of monthly GMV in dispute limbo"
+        rec = "Critical: too much capital tied up — accelerate settlement on borderline cases"
+    else:
+        score = 20.0
+        issue = f"{pct:.1%} of monthly GMV in open disputes — cash flow emergency"
+        rec = "Immediate settlement outreach on all non-critical disputes; fight only clear wins"
+
+    grade = _score_to_grade(score)
+    return HealthDimension("Cash Flow Risk", round(score, 1), 0.15, grade, issue, rec)
+
+
+def _operational_dimension(inp: MerchantHealthInput) -> HealthDimension:
+    """Score operational efficiency (10% weight)."""
+    score = 70.0  # Base
+
+    if inp.autopilot_ratio >= 0.80:
+        score += 20.0
+    elif inp.autopilot_ratio >= 0.60:
+        score += 10.0
+    elif inp.autopilot_ratio < 0.40:
+        score -= 20.0
+
+    if inp.response_time_compliance >= 0.98:
+        score += 10.0
+    elif inp.response_time_compliance < 0.90:
+        score -= 15.0
+
+    if inp.avg_human_minutes_per_dispute <= 15:
+        score += 5.0
+    elif inp.avg_human_minutes_per_dispute >= 45:
+        score -= 10.0
+
+    score = max(0.0, min(100.0, score))
+
+    issue = None
+    rec = None
+    if inp.autopilot_ratio < 0.50:
+        issue = f"Only {inp.autopilot_ratio:.0%} of disputes handled by autopilot — high human cost"
+        rec = "Review AUTO_FIGHT threshold; ensure claim_scorer signals are populated"
+    if inp.response_time_compliance < 0.95:
+        issue = f"Response time compliance at {inp.response_time_compliance:.0%}"
+        rec = "Enable deadline alerts; use batch_dispatcher for daily prioritization"
+
+    grade = _score_to_grade(score)
+    return HealthDimension("Operational Efficiency", round(score, 1), 0.10, grade, issue, rec)
+
+
+def _score_to_grade(score: float) -> str:
+    if score >= 85:
+        return "EXCELLENT"
+    elif score >= 70:
+        return "GOOD"
+    elif score >= 55:
+        return "FAIR"
+    elif score >= 40:
+        return "POOR"
+    else:
+        return "CRITICAL"
+
+
+def _composite_grade(score: float) -> HealthGrade:
+    if score >= 85:
+        return HealthGrade.EXCELLENT
+    elif score >= 70:
+        return HealthGrade.GOOD
+    elif score >= 55:
+        return HealthGrade.FAIR
+    elif score >= 40:
+        return HealthGrade.POOR
+    else:
+        return HealthGrade.CRITICAL
+
+
+def assess_merchant_health(inp: MerchantHealthInput) -> MerchantHealthReport:
+    """
+    Compute composite merchant health score from all oracle signals.
+    """
+    hdr_dim   = _hdr_dimension(inp)
+    wr_dim    = _win_rate_dimension(inp)
+    fraud_dim = _fraud_defense_dimension(inp)
+    cash_dim  = _cash_flow_dimension(inp)
+    ops_dim   = _operational_dimension(inp)
+
+    dimensions = [hdr_dim, wr_dim, fraud_dim, cash_dim, ops_dim]
+
+    composite = sum(d.score * d.weight for d in dimensions)
+    grade = _composite_grade(composite)
+
+    # Trend
+    if inp.hdr_trajectory == "IMPROVING" and inp.dispute_win_rate_90d >= 0.65:
         trend = "IMPROVING"
-    elif current_rate > rate_30d_ago * 1.10:
-        trend = "WORSENING"
+        trend_note = "HDR improving and win rate healthy — positive momentum"
+    elif inp.hdr_trajectory == "WORSENING" or inp.dispute_win_rate_90d < 0.50:
+        trend = "DECLINING"
+        trend_note = "HDR worsening or win rate declining — intervention needed"
     else:
         trend = "STABLE"
+        trend_note = "Metrics stable — focus on incremental improvements"
 
-    # ── 5. Financial exposure ─────────────────────────────────────────────────
-    monthly_disputes_projected = weekly_disputes * 4.3
-    monthly_hdr = monthly_disputes_projected * hdr_fee if hdr_active else 0.0
-    annual_hdr = monthly_hdr * 12
+    # Urgent actions (POOR or CRITICAL dimensions)
+    urgent: list[str] = []
+    improvements: list[str] = []
+    for d in dimensions:
+        if d.top_issue and d.grade in ("CRITICAL", "POOR"):
+            urgent.append(f"[{d.name}] {d.recommendation}")
+        elif d.recommendation and d.grade in ("FAIR",):
+            improvements.append(f"[{d.name}] {d.recommendation}")
 
-    # ── 6. Health score (0–100, 100 = best) ──────────────────────────────────
-    # Score based on distance from nearest threshold
-    if next_threshold_rate <= current_rate:
-        health_score = 0
+    # Dashboard headline
+    if grade == HealthGrade.EXCELLENT:
+        headline = f"Merchant Health: EXCELLENT ({composite:.0f}/100) — operating at peak efficiency"
+    elif grade == HealthGrade.GOOD:
+        headline = f"Merchant Health: GOOD ({composite:.0f}/100) — {len(improvements)} improvement opportunity{'ies' if len(improvements) != 1 else 'y'}"
+    elif grade == HealthGrade.FAIR:
+        headline = f"Merchant Health: FAIR ({composite:.0f}/100) — {len(improvements) + len(urgent)} areas need attention"
+    elif grade == HealthGrade.POOR:
+        headline = f"Merchant Health: POOR ({composite:.0f}/100) — {len(urgent)} urgent issue{'s' if len(urgent) != 1 else ''}"
     else:
-        clearance = (next_threshold_rate - current_rate) / next_threshold_rate
-        health_score = min(100, int(clearance * 150))  # 100 when well below threshold
-    if trend == "IMPROVING":
-        health_score = min(100, health_score + 10)
-    elif trend == "WORSENING":
-        health_score = max(0, health_score - 15)
+        headline = f"MERCHANT HEALTH CRITICAL ({composite:.0f}/100) — immediate intervention required"
 
-    # ── 7. Actions ────────────────────────────────────────────────────────────
-    emergency_actions, preventive_actions = _build_actions(
-        status, days_until, budget_30, current_rate, hdr_active
+    summary = (
+        f"Score: {composite:.0f}/100 ({grade.value}) | "
+        f"HDR: {inp.current_hdr_rate:.2%} ({inp.hdr_trajectory}) | "
+        f"Win rate: {inp.dispute_win_rate_90d:.0%} | "
+        f"Autopilot: {inp.autopilot_ratio:.0%} | "
+        f"At risk: ${inp.total_at_risk_amount:,.0f}"
     )
-
-    reasoning.append(f"Health score: {health_score}/100 | Trend: {trend}")
-    reasoning.append(
-        f"Dispute budget: {budget_30} in next 30d, {budget_90} in next 90d"
-    )
-
-    disputes_until_next = budget_30 if days_until <= 30 else budget_90
 
     return MerchantHealthReport(
-        current_dispute_rate=round(current_rate, 5),
-        account_status=status,
-        hdr_fee_active=hdr_active,
-        hdr_fee_per_dispute=hdr_fee,
-        disputes_until_next_threshold=disputes_until_next,
-        days_until_threshold_cross=days_until,
-        next_threshold_name=next_threshold_name,
-        next_threshold_rate=next_threshold_rate,
-        weekly_dispute_velocity=round(weekly_disputes, 2),
-        weekly_transaction_velocity=round(weekly_tx, 2),
+        composite_score=round(composite, 1),
+        grade=grade,
+        dimensions=dimensions,
+        current_hdr_rate=inp.current_hdr_rate,
+        dispute_win_rate=inp.dispute_win_rate_90d,
+        autopilot_ratio=inp.autopilot_ratio,
+        at_risk_amount=inp.total_at_risk_amount,
         trend_direction=trend,
-        rate_30d_ago=round(rate_30d_ago, 5),
-        dispute_budget_30d=budget_30,
-        dispute_budget_90d=budget_90,
-        monthly_hdr_exposure=round(monthly_hdr, 2),
-        annual_hdr_exposure=round(annual_hdr, 2),
-        emergency_actions=emergency_actions,
-        preventive_actions=preventive_actions,
-        health_score=health_score,
-        reasoning=reasoning,
+        trend_note=trend_note,
+        urgent_actions=urgent,
+        improvement_actions=improvements,
+        summary=summary,
+        dashboard_headline=headline,
     )
-
-
-def _weekly_velocity(weekly_data: list[int]) -> float:
-    """Average over last 4 weeks, with recency weighting."""
-    if not weekly_data:
-        return 0.0
-    recent = weekly_data[-4:] if len(weekly_data) >= 4 else weekly_data
-    if len(recent) == 4:
-        # Weighted: most recent week counts more
-        return (recent[0] * 1 + recent[1] * 2 + recent[2] * 3 + recent[3] * 4) / 10.0
-    return sum(recent) / len(recent)
-
-
-def _rate_30d_ago(window: DisputeWindow) -> float:
-    """Estimate dispute rate as of 30 days ago using last 4 weeks of data."""
-    if len(window.weekly_disputes) < 4 or len(window.weekly_transactions) < 4:
-        return window.total_disputes / max(window.total_transactions, 1)
-    # Remove last 4 weeks of data to approximate 30-day-old state
-    old_disputes = window.total_disputes - sum(window.weekly_disputes[-4:])
-    old_tx = window.total_transactions - sum(window.weekly_transactions[-4:])
-    if old_tx <= 0:
-        return 0.0
-    return old_disputes / old_tx
-
-
-def _build_actions(
-    status: AccountStatus,
-    days_until: int,
-    budget_30: int,
-    rate: float,
-    hdr_active: bool,
-) -> tuple[list[str], list[str]]:
-    emergency: list[str] = []
-    preventive: list[str] = []
-
-    if status in (AccountStatus.CRITICAL, AccountStatus.TERMINAL):
-        emergency.extend([
-            "IMMEDIATE: Contact PayPal merchant support — explain proactive steps being taken",
-            "IMMEDIATE: Pause or reduce order volume to give rate time to recover",
-            "IMMEDIATE: Fight ALL disputes aggressively — do not accept any claim",
-            "IMMEDIATE: Activate signature confirmation on 100% of orders",
-            "IMMEDIATE: Review last 30 days for systematic issue (carrier, product, region)",
-        ])
-    elif status == AccountStatus.EXCESSIVE:
-        emergency.extend([
-            f"URGENT: HDR fee active — each dispute costs $30 extra. ${rate*30*4:.0f}/month extra",
-            "Activate signature confirmation on all orders >$100",
-            "Fight all disputes — accepting costs $30 more than fighting now",
-        ])
-    elif days_until <= 14:
-        emergency.extend([
-            f"WARNING: {days_until} days until threshold crossing — act now",
-            f"Dispute budget is {budget_30} disputes in next 30 days — prioritize prevention",
-            "Pause high-risk product categories temporarily",
-        ])
-
-    # Always recommend
-    if rate >= 0.005:
-        preventive.extend([
-            "Review order_risk.py outputs — increase threshold for CRITICAL orders",
-            "Activate pre-shipment photo documentation for all orders",
-        ])
-    preventive.extend([
-        "Run dispute_dna.py weekly to identify and fix systemic dispute sources",
-        "Activate alert_interceptor.py for Ethoca/Verifi alerts — prevents disputes hitting count",
-        f"Current dispute budget: {budget_30} disputes in next 30 days before next threshold",
-    ])
-    if hdr_active:
-        preventive.insert(0, "HDR fee active — fight EVERY dispute, never accept unless sub-$15")
-
-    return emergency, preventive
-
-
-def _empty_report() -> MerchantHealthReport:
-    return MerchantHealthReport(
-        current_dispute_rate=0.0,
-        account_status=AccountStatus.HEALTHY,
-        hdr_fee_active=False,
-        hdr_fee_per_dispute=0.0,
-        disputes_until_next_threshold=999,
-        days_until_threshold_cross=999,
-        next_threshold_name="ELEVATED (0.50%)",
-        next_threshold_rate=0.005,
-        weekly_dispute_velocity=0.0,
-        weekly_transaction_velocity=0.0,
-        trend_direction="STABLE",
-        rate_30d_ago=0.0,
-        dispute_budget_30d=999,
-        dispute_budget_90d=999,
-        monthly_hdr_exposure=0.0,
-        annual_hdr_exposure=0.0,
-        emergency_actions=[],
-        preventive_actions=["No transaction history available"],
-        health_score=100,
-    )
-
-
-if __name__ == "__main__":
-    window = DisputeWindow(
-        total_transactions=2000,
-        total_disputes=28,  # 1.40% — just under EXCESSIVE threshold
-        open_disputes=4,
-        weekly_disputes=[2, 3, 3, 4],       # Worsening trend
-        weekly_transactions=[150, 155, 148, 160],
-        hdr_fees_ytd=0.0,
-    )
-    report = assess_merchant_health(window)
-    print(f"Dispute rate: {report.current_dispute_rate:.3%}")
-    print(f"Status: {report.account_status.value}")
-    print(f"Health score: {report.health_score}/100")
-    print(f"HDR active: {report.hdr_fee_active}")
-    print(f"Days until EXCESSIVE threshold: {report.days_until_threshold_cross}")
-    print(f"Dispute budget (30d): {report.dispute_budget_30d}")
-    print(f"Trend: {report.trend_direction}")
-    if report.emergency_actions:
-        print(f"\nEMERGENCY ACTIONS:")
-        for a in report.emergency_actions:
-            print(f"  🚨 {a}")

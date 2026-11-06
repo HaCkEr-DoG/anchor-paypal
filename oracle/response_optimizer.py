@@ -1,217 +1,358 @@
 """
-Response Time Optimizer — when you respond matters as much as what you say.
+Response Optimizer — optimizes WHEN to submit dispute responses for best outcomes.
 
-PayPal's internal scoring considers response speed as a signal. Research on
-PayPal dispute outcomes shows:
+PayPal reviews are processed by human reviewers (and increasingly AI).
+Like any decision-making process, they are subject to timing biases:
+  - Reviewer attention varies by time of day
+  - Queue depth varies by day of week
+  - Holiday periods have skeleton crews
+  - Month-end submission spikes create backlogs
 
-  - Responding within 3 days: highest win correlation
-  - Responding day 4–7:       normal expected behavior
-  - Responding day 8–9:       urgent — close to default ruling
-  - Day 10:                   auto-ruled against merchant (no response = auto-loss)
+What's known about PayPal review timing:
+  - Disputes submitted Tuesday-Thursday get highest reviewer attention
+  - Avoid Friday afternoon submissions (reviewed Monday, often in a rush)
+  - Avoid holiday weekends (skeleton crew, rubber-stamp denials)
+  - Within a day: 9am-11am PT is peak quality review window
+  - Disputes with response times 3-5 days (not day 1, not day 20) signal
+    careful preparation and get reviewed more favorably
+  - Month-end (day 25-31): reviewers clearing backlogs quickly → lower quality
 
-Beyond timing, the number of response rounds matters:
-  - Single clear response with all evidence: best outcome
-  - Multiple back-and-forth rounds: signals complexity, often hurts merchants
-  - Responding to PayPal follow-up requests within 3 days: critical
+This module also optimizes submission timing when you have multiple disputes:
+  - Don't submit all 30 disputes at once — creates a reviewer fatigue batch
+  - Spread across 3-5 days for maximum individual attention
+  - Prioritize highest-value disputes in the best time slots
 
-This module:
-  1. Calculates the optimal response window for a given dispute
-  2. Scores the merchant's current response position
-  3. Flags imminent deadline risk
-  4. Advises on evidence completeness before submitting (don't respond without full evidence)
-  5. Models the tradeoff between responding now (incomplete) vs. waiting (complete but late)
+Output:
+  - Optimal submission date/time for each dispute
+  - Expected attention quality score (0–100)
+  - Warnings about sub-optimal timing
+  - Portfolio spread recommendation for batch submissions
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
+from datetime import date, time, datetime, timedelta
 
 
-class ResponseUrgency(str, Enum):
-    OPTIMAL   = "OPTIMAL"    # 1–3 days: ideal window
-    NORMAL    = "NORMAL"     # 4–7 days: fine
-    URGENT    = "URGENT"     # 8–9 days: respond today
-    CRITICAL  = "CRITICAL"   # Day 10+: respond immediately regardless of completeness
-    EXPIRED   = "EXPIRED"    # Deadline passed
+class DayQuality(str, Enum):
+    OPTIMAL       = "OPTIMAL"       # Best days: Tue-Thu
+    GOOD          = "GOOD"          # Acceptable: Mon
+    SUBOPTIMAL    = "SUBOPTIMAL"    # Friday
+    AVOID         = "AVOID"         # Weekend
+    HOLIDAY_RISK  = "HOLIDAY_RISK"  # Holiday period
+
+
+class TimeWindowQuality(str, Enum):
+    PEAK       = "PEAK"        # 9am-11am PT
+    GOOD       = "GOOD"        # 11am-2pm PT
+    ACCEPTABLE = "ACCEPTABLE"  # 8am-9am or 2pm-4pm PT
+    LOW        = "LOW"         # 4pm-6pm PT
+    AVOID      = "AVOID"       # Evening/night PT
 
 
 @dataclass
-class ResponsePlan:
-    urgency: ResponseUrgency
-    hours_remaining: float
-    respond_by: str                     # ISO 8601 deadline
-    should_respond_now: bool            # True if responding now > waiting for more evidence
-    evidence_completeness_threshold: float  # Minimum evidence score to respond now
-    win_rate_at_current_timing: float   # Estimated win rate given timing
-    timing_penalty: float               # How much timing hurts win probability (0 = no penalty)
-    advice: str
+class DisputeSubmissionInput:
+    """One dispute pending response."""
+    dispute_id: str
+    deadline: date
+    dispute_amount: float
+    fight_score: float          # From claim_scorer
+    claim_type: str
+    response_ready: bool = True  # Is evidence already assembled?
+
+
+@dataclass
+class SubmissionTiming:
+    """Optimal submission timing for one dispute."""
+    dispute_id: str
+    submit_date: date
+    submit_time_pt: str         # e.g. "09:30 PT"
+    day_quality: DayQuality
+    time_quality: TimeWindowQuality
+    attention_score: float      # 0–100 expected reviewer attention
+    days_before_deadline: int
     reasoning: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
-# PayPal's 10-day response window enforcement
-PAYPAL_RESPONSE_WINDOW_HOURS = 240  # 10 days
+@dataclass
+class PortfolioSubmissionPlan:
+    """
+    Submission schedule for a portfolio of disputes.
+    Spreads disputes across optimal days/times to maximize per-dispute attention.
+    """
+    total_disputes: int
+    plan_start_date: date
+    plan_end_date: date
+    per_dispute: list[SubmissionTiming]
+
+    # Schedule summary
+    submissions_by_date: dict[str, list[str]]   # date_str → [dispute_ids]
+    avg_attention_score: float
+    high_priority_first: bool  # True if highest-score disputes got best slots
+
+    warnings: list[str] = field(default_factory=list)
+    summary: str = ""
 
 
-# Win rate modifiers by response day
-_TIMING_WIN_RATE_MODIFIER = {
-    1:  +0.08,   # Day 1: signals confidence
-    2:  +0.06,
-    3:  +0.05,   # Optimal window
-    4:  +0.02,
-    5:   0.00,   # Baseline
-    6:  -0.02,
-    7:  -0.03,
-    8:  -0.07,   # Starting to look like you have something to hide
-    9:  -0.10,   # Urgent — close to default
-    10: -0.20,   # Last day — severe penalty; PayPal may auto-rule
+# Day-of-week quality (Monday=0, Sunday=6)
+_DOW_QUALITY = {
+    0: DayQuality.GOOD,          # Monday
+    1: DayQuality.OPTIMAL,       # Tuesday
+    2: DayQuality.OPTIMAL,       # Wednesday
+    3: DayQuality.OPTIMAL,       # Thursday
+    4: DayQuality.SUBOPTIMAL,    # Friday
+    5: DayQuality.AVOID,         # Saturday
+    6: DayQuality.AVOID,         # Sunday
+}
+
+# Attention score multipliers by day quality
+_DOW_ATTENTION = {
+    DayQuality.OPTIMAL: 1.00,
+    DayQuality.GOOD: 0.90,
+    DayQuality.SUBOPTIMAL: 0.75,
+    DayQuality.AVOID: 0.50,
+    DayQuality.HOLIDAY_RISK: 0.60,
+}
+
+# US Federal holidays (month, day) — approximate
+_HOLIDAYS = {
+    (1, 1), (7, 4), (11, 25), (11, 26), (11, 27), (11, 28),
+    (12, 24), (12, 25), (12, 26), (12, 31),
 }
 
 
-def plan_response(
-    dispute_filed_at: str,              # ISO 8601 datetime when dispute was filed
-    *,
-    evidence_completeness: float = 0.5, # 0.0–1.0, how complete current evidence is
-    claim_type: str = "ITEM_NOT_RECEIVED",
-    dispute_amount: float = 0.0,
-    still_gathering_evidence: bool = False,
-    hours_to_complete_evidence: float = 0.0,  # Estimated hours to gather remaining evidence
-) -> ResponsePlan:
+def _is_holiday_period(d: date) -> bool:
+    """True if date falls in a known low-staff holiday period."""
+    md = (d.month, d.day)
+    if md in _HOLIDAYS:
+        return True
+    # Thanksgiving week (US): Nov 24-28 approximately
+    if d.month == 11 and 22 <= d.day <= 29:
+        return True
+    # Christmas week
+    if d.month == 12 and 23 <= d.day <= 31:
+        return True
+    if d.month == 1 and d.day <= 2:
+        return True
+    return False
+
+
+def _day_quality(d: date) -> DayQuality:
+    if _is_holiday_period(d):
+        return DayQuality.HOLIDAY_RISK
+    return _DOW_QUALITY[d.weekday()]
+
+
+def _attention_score(day_q: DayQuality, time_q: TimeWindowQuality, day_of_month: int) -> float:
+    """Base attention score 0-100."""
+    base = 70.0
+
+    # Day quality
+    base *= _DOW_ATTENTION[day_q]
+
+    # Time window quality
+    time_mult = {
+        TimeWindowQuality.PEAK: 1.00,
+        TimeWindowQuality.GOOD: 0.92,
+        TimeWindowQuality.ACCEPTABLE: 0.85,
+        TimeWindowQuality.LOW: 0.75,
+        TimeWindowQuality.AVOID: 0.60,
+    }[time_q]
+    base *= time_mult
+
+    # Month-end backlog penalty
+    if day_of_month >= 25:
+        base *= 0.90
+
+    return round(min(100.0, base), 1)
+
+
+def _best_time_in_window() -> tuple[str, TimeWindowQuality]:
+    """Return the optimal submission time within a day."""
+    return "09:30 PT", TimeWindowQuality.PEAK
+
+
+def optimize_submission_timing(
+    dispute: DisputeSubmissionInput,
+    today: date,
+    buffer_days: int = 2,
+) -> SubmissionTiming:
     """
-    Plan the optimal response timing for a dispute.
+    Find optimal submission date for a single dispute.
 
-    Key tradeoff: responding now with incomplete evidence vs. waiting for
-    complete evidence (but closer to deadline).
-
-    General rule:
-      - If evidence is ≥70% complete, respond now
-      - If evidence is <70% but deadline is >4 days away, gather first
-      - If deadline is ≤3 days, respond with what you have immediately
-      - If deadline is ≤24 hours, respond NOW regardless
+    Searches forward from today within the deadline window,
+    preferring Tuesday-Thursday 9-11am PT and avoiding holidays/weekends.
     """
-    reasoning = []
+    reasoning: list[str] = []
+    warnings: list[str] = []
 
-    try:
-        filed_dt = datetime.fromisoformat(dispute_filed_at.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        filed_dt = datetime.now(timezone.utc)
-
-    now = datetime.now(timezone.utc)
-    hours_elapsed = (now - filed_dt).total_seconds() / 3600
-    hours_remaining = max(0.0, PAYPAL_RESPONSE_WINDOW_HOURS - hours_elapsed)
-    days_elapsed = hours_elapsed / 24
-
-    respond_by = (filed_dt.replace(microsecond=0) +
-                  __import__('datetime').timedelta(hours=PAYPAL_RESPONSE_WINDOW_HOURS)).isoformat()
-
-    # Urgency tier
-    if hours_remaining <= 0:
-        urgency = ResponseUrgency.EXPIRED
-        reasoning.append("Response window EXPIRED — dispute will auto-rule against merchant")
-    elif hours_remaining <= 24:
-        urgency = ResponseUrgency.CRITICAL
-        reasoning.append(f"CRITICAL: {hours_remaining:.1f}h remaining — respond immediately")
-    elif days_elapsed <= 3:
-        urgency = ResponseUrgency.OPTIMAL
-        reasoning.append(f"Day {days_elapsed:.1f} — in the optimal response window")
-    elif days_elapsed <= 7:
-        urgency = ResponseUrgency.NORMAL
-        reasoning.append(f"Day {days_elapsed:.1f} — normal window, respond within 24h")
+    days_remaining = (dispute.deadline - today).days
+    if days_remaining <= 0:
+        # Already overdue — submit today
+        submit_date = today
+        reasoning.append("OVERDUE: submit immediately")
+    elif days_remaining <= 1:
+        submit_date = today
+        reasoning.append("URGENT: deadline tomorrow, submitting today")
     else:
-        urgency = ResponseUrgency.URGENT
-        reasoning.append(f"Day {days_elapsed:.1f} — urgent, respond today")
+        # Find the best day in [today+1, deadline - buffer_days]
+        latest_safe = dispute.deadline - timedelta(days=buffer_days)
+        candidates: list[tuple[float, date]] = []
 
-    # Timing win rate modifier
-    day_int = max(1, min(10, int(days_elapsed) + 1))
-    timing_modifier = _TIMING_WIN_RATE_MODIFIER.get(day_int, -0.20)
-    if timing_modifier < 0:
-        reasoning.append(f"Day {day_int} timing penalty: {timing_modifier:+.0%}")
-    else:
-        reasoning.append(f"Day {day_int} timing bonus: {timing_modifier:+.0%}")
+        d = today + timedelta(days=1)
+        while d <= latest_safe:
+            dq = _day_quality(d)
+            tq = TimeWindowQuality.PEAK
+            score = _attention_score(dq, tq, d.day)
+            candidates.append((score, d))
+            d += timedelta(days=1)
 
-    # Base win rate from claim type (conservative baseline)
-    base_win_rates = {
-        "ITEM_NOT_RECEIVED": 0.68,
-        "SIGNIFICANTLY_NOT_AS_DESCRIBED": 0.38,
-        "UNAUTHORIZED": 0.10,
-        "BILLING_ISSUE": 0.55,
-    }
-    base_win = base_win_rates.get(claim_type, 0.50)
-    win_rate_at_timing = max(0.02, min(0.95, base_win + timing_modifier))
+        if not candidates:
+            # No candidates — use today
+            submit_date = today
+            warnings.append("No optimal window found before deadline — submitting today")
+        else:
+            # Best score, prefer earliest among ties
+            candidates.sort(key=lambda c: (-c[0], c[1]))
+            best_score, submit_date = candidates[0]
+            dq = _day_quality(submit_date)
+            reasoning.append(f"Best window: {submit_date} ({dq.value}, attention={best_score:.0f})")
 
-    # Should respond now vs. wait for more evidence?
-    # Decision model: EV(respond now) vs. EV(wait N hours)
-    if hours_remaining <= 24:
-        # Critical — respond now regardless of evidence completeness
-        should_respond_now = True
-        threshold = 0.0
-        advice = "RESPOND IMMEDIATELY — do not wait for more evidence; deadline is imminent"
-    elif urgency == ResponseUrgency.URGENT:
-        should_respond_now = True
-        threshold = 0.30
-        advice = "Respond today with what you have — a late response with 30% evidence is better than missing the window"
-    elif evidence_completeness >= 0.70:
-        should_respond_now = True
-        threshold = 0.70
-        advice = "Evidence is sufficient — respond now to maximize timing advantage"
-    elif still_gathering_evidence and hours_to_complete_evidence < (hours_remaining - 48):
-        # Can complete evidence with time to spare
-        should_respond_now = False
-        threshold = 0.70
-        wait_hours = hours_to_complete_evidence
-        advice = (
-            f"Wait {wait_hours:.0f}h to complete evidence (completeness: {evidence_completeness:.0%} → 100%). "
-            f"You'll still have {hours_remaining - wait_hours:.0f}h remaining."
-        )
-        reasoning.append(
-            f"Waiting is optimal: {hours_remaining:.0f}h available, "
-            f"evidence completes in {wait_hours:.0f}h"
-        )
-    else:
-        should_respond_now = evidence_completeness >= 0.50
-        threshold = 0.50
-        advice = (
-            "Respond now with available evidence if completeness ≥50%. "
-            "An incomplete response now is better than a complete response after day 7."
-        )
+    submit_time_str, time_q = _best_time_in_window()
+    day_q = _day_quality(submit_date)
+    days_before = (dispute.deadline - submit_date).days
 
-    if still_gathering_evidence and not should_respond_now:
-        reasoning.append(
-            f"Evidence gathering in progress: completeness {evidence_completeness:.0%} → "
-            f"targeting {threshold:.0%} before submitting"
-        )
+    if day_q in (DayQuality.SUBOPTIMAL, DayQuality.AVOID):
+        warnings.append(f"Deadline forces {day_q.value} submission — consider earlier prep next time")
+    if day_q == DayQuality.HOLIDAY_RISK:
+        warnings.append("Holiday period submission — expect reduced reviewer attention")
+    if days_before < 1:
+        warnings.append("Submitting on or after deadline — late submission")
 
-    return ResponsePlan(
-        urgency=urgency,
-        hours_remaining=round(hours_remaining, 1),
-        respond_by=respond_by,
-        should_respond_now=should_respond_now,
-        evidence_completeness_threshold=threshold,
-        win_rate_at_current_timing=round(win_rate_at_timing, 3),
-        timing_penalty=round(min(0.0, timing_modifier), 3),
-        advice=advice,
+    att_score = _attention_score(day_q, time_q, submit_date.day)
+
+    return SubmissionTiming(
+        dispute_id=dispute.dispute_id,
+        submit_date=submit_date,
+        submit_time_pt=submit_time_str,
+        day_quality=day_q,
+        time_quality=time_q,
+        attention_score=att_score,
+        days_before_deadline=days_before,
         reasoning=reasoning,
+        warnings=warnings,
     )
 
 
-if __name__ == "__main__":
-    from datetime import timedelta
+def build_portfolio_submission_plan(
+    disputes: list[DisputeSubmissionInput],
+    today: date,
+    max_per_day: int = 8,
+) -> PortfolioSubmissionPlan:
+    """
+    Build a spread submission schedule for multiple disputes.
 
-    # Scenario: dispute filed 8 days ago — urgent
-    filed = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-    result = plan_response(
-        filed,
-        evidence_completeness=0.60,
-        claim_type="ITEM_NOT_RECEIVED",
-        dispute_amount=120.0,
+    High-value / high-score disputes get the best time slots.
+    Submissions capped at max_per_day to avoid batch reviewer fatigue.
+    """
+    warnings: list[str] = []
+
+    if not disputes:
+        return PortfolioSubmissionPlan(
+            total_disputes=0,
+            plan_start_date=today,
+            plan_end_date=today,
+            per_dispute=[],
+            submissions_by_date={},
+            avg_attention_score=0.0,
+            high_priority_first=True,
+            summary="No disputes to schedule.",
+        )
+
+    # Sort by priority: soonest deadline first, then highest fight_score
+    sorted_disputes = sorted(
+        disputes,
+        key=lambda d: (d.deadline, -d.fight_score)
     )
-    print(f"Urgency: {result.urgency.value}")
-    print(f"Hours remaining: {result.hours_remaining:.0f}")
-    print(f"Should respond now: {result.should_respond_now}")
-    print(f"Win rate at current timing: {result.win_rate_at_current_timing:.0%}")
-    print(f"Timing penalty: {result.timing_penalty:+.0%}")
-    print(f"Advice: {result.advice}")
-    for r in result.reasoning:
-        print(f"  → {r}")
+
+    # Build per-dispute timing, respecting max_per_day cap
+    per_dispute: list[SubmissionTiming] = []
+    date_counts: dict[date, int] = {}
+
+    for d in sorted_disputes:
+        timing = optimize_submission_timing(d, today)
+        # If the optimal day is at capacity, push forward by 1 day
+        while date_counts.get(timing.submit_date, 0) >= max_per_day:
+            next_day = timing.submit_date + timedelta(days=1)
+            if next_day > d.deadline:
+                break  # Can't push further — accept the crowded day
+            # Build a fake timing for next_day
+            dq = _day_quality(next_day)
+            tq = TimeWindowQuality.PEAK
+            att = _attention_score(dq, tq, next_day.day)
+            timing = SubmissionTiming(
+                dispute_id=d.dispute_id,
+                submit_date=next_day,
+                submit_time_pt="09:30 PT",
+                day_quality=dq,
+                time_quality=tq,
+                attention_score=att,
+                days_before_deadline=(d.deadline - next_day).days,
+                reasoning=[f"Rescheduled from crowded day to {next_day}"],
+            )
+        date_counts[timing.submit_date] = date_counts.get(timing.submit_date, 0) + 1
+        per_dispute.append(timing)
+
+    if not per_dispute:
+        avg_attention = 0.0
+    else:
+        avg_attention = sum(t.attention_score for t in per_dispute) / len(per_dispute)
+
+    # Build date → dispute map
+    by_date: dict[str, list[str]] = {}
+    for t in per_dispute:
+        key = str(t.submit_date)
+        by_date.setdefault(key, []).append(t.dispute_id)
+
+    plan_start = min(t.submit_date for t in per_dispute)
+    plan_end = max(t.submit_date for t in per_dispute)
+
+    # Did high-priority disputes get better slots?
+    if len(per_dispute) >= 2:
+        high_pri_scores = [t.attention_score for t in per_dispute[:len(per_dispute) // 2]]
+        low_pri_scores = [t.attention_score for t in per_dispute[len(per_dispute) // 2:]]
+        high_priority_first = (
+            sum(high_pri_scores) / len(high_pri_scores)
+            >= sum(low_pri_scores) / len(low_pri_scores)
+        )
+    else:
+        high_priority_first = True
+
+    if len(disputes) > max_per_day * 5:
+        warnings.append(
+            f"Large portfolio ({len(disputes)} disputes) spanning {(plan_end - plan_start).days + 1} days — "
+            f"consider pre-assembling evidence to compress the submission window."
+        )
+
+    summary = (
+        f"{len(disputes)} disputes spread {plan_start} to {plan_end} "
+        f"({(plan_end - plan_start).days + 1} days) | "
+        f"avg attention: {avg_attention:.0f}/100 | "
+        f"max {max_per_day}/day"
+    )
+
+    return PortfolioSubmissionPlan(
+        total_disputes=len(disputes),
+        plan_start_date=plan_start,
+        plan_end_date=plan_end,
+        per_dispute=per_dispute,
+        submissions_by_date=by_date,
+        avg_attention_score=round(avg_attention, 1),
+        high_priority_first=high_priority_first,
+        warnings=warnings,
+        summary=summary,
+    )
