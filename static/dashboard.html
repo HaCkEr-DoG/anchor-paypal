@@ -11,19 +11,19 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #0c0c0e;
-      --surface: #111114;
-      --surface-elevated: #17171b;
-      --border: #22222a;
-      --text: #f0ede8;
-      --muted: #6b6b78;
-      --muted-light: #9898a8;
-      --accent: #0070e0;
-      --green: #34d399;
-      --red: #f87171;
-      --yellow: #fbbf24;
-      --amber: #f59e0b;
-      --purple: #a78bfa;
+      --bg: #f5f5f9;
+      --surface: #ffffff;
+      --surface-elevated: #ffffff;
+      --border: #e2e2eb;
+      --text: #111118;
+      --muted: #6b6b80;
+      --muted-light: #8888a0;
+      --accent: #0060c7;
+      --green: #059669;
+      --red: #dc2626;
+      --yellow: #c97e00;
+      --amber: #b45309;
+      --purple: #6d28d9;
     }
 
     body {
@@ -51,7 +51,7 @@
       font-size: 11px;
       padding: 3px 9px;
       border-radius: 4px;
-      background: rgba(255,255,255,0.05);
+      background: rgba(0,0,0,0.04);
       color: var(--muted-light);
       border: 1px solid var(--border);
       font-weight: 500;
@@ -85,7 +85,7 @@
       border: 1px solid var(--border);
       border-radius: 16px;
       padding: 22px 24px;
-      box-shadow: 0 1px 3px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.2);
+      box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 8px 28px rgba(0,0,0,.08);
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -112,24 +112,24 @@
       font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 4px;
       text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0;
     }
-    .hero-chip.purple { background: rgba(167,139,250,.15); color: var(--purple); border: 1px solid rgba(167,139,250,.2); }
-    .hero-chip.amber  { background: rgba(245,158,11,.15);  color: var(--amber);  border: 1px solid rgba(245,158,11,.2); }
-    .hero-chip.green  { background: rgba(52,211,153,.15);  color: var(--green);  border: 1px solid rgba(52,211,153,.2); }
+    .hero-chip.purple { background: rgba(109,40,217,.1); color: var(--purple); border: 1px solid rgba(109,40,217,.2); }
+    .hero-chip.amber  { background: rgba(180,83,9,.1);   color: var(--amber);  border: 1px solid rgba(180,83,9,.2); }
+    .hero-chip.green  { background: rgba(5,150,105,.1);  color: var(--green);  border: 1px solid rgba(5,150,105,.2); }
     .hero-breakdown { display: flex; flex-direction: column; gap: 7px; }
     .hero-breakdown-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); font-weight: 500; }
     .hero-pill {
       font-size: 9px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
       text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0;
     }
-    .hero-pill.green  { background: rgba(52,211,153,.15); color: var(--green); }
-    .hero-pill.yellow { background: rgba(251,191,36,.15); color: var(--yellow); }
-    .hero-pill.muted  { background: rgba(255,255,255,.07); color: var(--muted-light); }
+    .hero-pill.green  { background: rgba(5,150,105,.1); color: var(--green); }
+    .hero-pill.yellow { background: rgba(201,126,0,.1); color: var(--yellow); }
+    .hero-pill.muted  { background: rgba(0,0,0,.06); color: var(--muted-light); }
     .hero-spark-wrap { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; }
     .hero-spark-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; font-weight: 500; }
     .spark-bars-svg { width: 100%; height: 56px; }
     .spark-line-svg  { width: 100%; height: 48px; }
     .hero-highlight {
-      background: rgba(52,211,153,.06); border: 1px solid rgba(52,211,153,.15);
+      background: rgba(5,150,105,.06); border: 1px solid rgba(5,150,105,.18);
       border-radius: 10px; padding: 12px 16px; margin-top: auto;
     }
     .hero-highlight-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; font-weight: 600; }
@@ -140,9 +140,9 @@
     .ring-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
     .ring-legend-val { font-weight: 600; color: var(--text); font-size: 13px; margin-left: auto; }
     .oracle-formula-box {
-      background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.12);
+      background: rgba(180,83,9,.05); border: 1px solid rgba(180,83,9,.15);
       border-radius: 8px; padding: 10px 12px;
-      font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--muted-light); line-height: 1.6;
+      font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--muted); line-height: 1.6;
     }
     .oracle-link {
       display: inline-block; font-size: 12px; color: var(--amber); text-decoration: none;
@@ -181,10 +181,10 @@
       font-size: 11px;
       padding: 1px 6px;
       border-radius: 4px;
-      background: rgba(255,255,255,.05);
+      background: rgba(0,0,0,.05);
       color: var(--muted);
     }
-    .tab.active .tab-count { background: rgba(255,255,255,.1); color: var(--muted-light); }
+    .tab.active .tab-count { background: rgba(0,0,0,.08); color: var(--muted-light); }
 
     /* ── Grid container ── */
     .grid-wrap {
@@ -209,7 +209,7 @@
       transition: background .15s, color .15s;
       font-weight: 500;
     }
-    .refresh-btn:hover { background: rgba(255,255,255,.04); color: var(--text); }
+    .refresh-btn:hover { background: rgba(0,0,0,.04); color: var(--text); }
 
     /* ── Integration card panels ── */
     .card {
@@ -240,8 +240,8 @@
       height: 420px;
       width: 100%;
       --ag-background-color: var(--surface);
-      --ag-odd-row-background-color: #191919;
-      --ag-header-background-color: #1e1e1e;
+      --ag-odd-row-background-color: #fafafa;
+      --ag-header-background-color: #f4f4f7;
       --ag-border-color: var(--border);
       --ag-row-border-color: var(--border);
       --ag-font-size: 13px;
@@ -249,7 +249,7 @@
       --ag-secondary-foreground-color: var(--muted);
       --ag-header-foreground-color: var(--muted);
       --ag-selected-row-background-color: rgba(0,112,224,0.12);
-      --ag-row-hover-color: rgba(255,255,255,0.03);
+      --ag-row-hover-color: rgba(0,0,0,0.03);
       --ag-cell-horizontal-border: 1px solid transparent;
       --ag-header-column-resize-handle-color: var(--border);
     }
@@ -269,10 +269,10 @@
       text-transform: uppercase;
       letter-spacing: .3px;
     }
-    .action-fought    { background: rgba(0,196,140,.12); color: #00c48c; border: 1px solid rgba(0,196,140,.25); }
-    .action-accepted  { background: rgba(245,166,35,.12); color: #f5a623;  border: 1px solid rgba(245,166,35,.25); }
-    .action-pending   { background: rgba(139,92,246,.12); color: #8b5cf6;  border: 1px solid rgba(139,92,246,.25); }
-    .action-recovery  { background: rgba(0,112,224,.12);  color: #0070e0;  border: 1px solid rgba(0,112,224,.25); }
+    .action-fought    { background: rgba(5,150,105,.1);  color: #047857; border: 1px solid rgba(5,150,105,.25); }
+    .action-accepted  { background: rgba(180,83,9,.1);   color: #b45309; border: 1px solid rgba(180,83,9,.25); }
+    .action-pending   { background: rgba(109,40,217,.1); color: #6d28d9; border: 1px solid rgba(109,40,217,.25); }
+    .action-recovery  { background: rgba(0,96,199,.1);   color: #0060c7; border: 1px solid rgba(0,96,199,.25); }
 
     .cell-attention {
       display: inline-block;
@@ -319,7 +319,7 @@
     .tl-header {
       display: flex;
       border-bottom: 1px solid var(--border);
-      background: #1e1e1e;
+      background: var(--surface-elevated);
     }
     .tl-row-label-header {
       width: 220px; min-width: 220px;
@@ -358,7 +358,7 @@
       height: 44px;
     }
     .tl-row:last-child { border-bottom: none; }
-    .tl-row:hover { background: rgba(255,255,255,.025); }
+    .tl-row:hover { background: rgba(0,0,0,.025); }
     .tl-row-label {
       width: 220px; min-width: 220px;
       border-right: 1px solid var(--border);
@@ -416,12 +416,12 @@
       cursor: default;
       transition: filter .15s;
       z-index: 1;
-      box-shadow: 0 1px 4px rgba(0,0,0,.4);
+      box-shadow: 0 1px 4px rgba(0,0,0,.12);
     }
     .tl-bar:hover { filter: brightness(1.15); }
-    .tl-bar-fought   { background: rgba(0,196,140,.25); color: #00c48c; border: 1px solid rgba(0,196,140,.4); }
-    .tl-bar-accepted { background: rgba(245,166,35,.2);  color: #f5a623; border: 1px solid rgba(245,166,35,.4); }
-    .tl-bar-pending  { background: rgba(139,92,246,.2);  color: #8b5cf6; border: 1px solid rgba(139,92,246,.4); }
+    .tl-bar-fought   { background: rgba(5,150,105,.18);  color: #047857; border: 1px solid rgba(5,150,105,.35); }
+    .tl-bar-accepted { background: rgba(180,83,9,.15);   color: #92400e; border: 1px solid rgba(180,83,9,.35); }
+    .tl-bar-pending  { background: rgba(109,40,217,.15); color: #5b21b6; border: 1px solid rgba(109,40,217,.35); }
     /* Milestone diamond */
     .tl-milestone {
       position: absolute;
@@ -436,7 +436,7 @@
     /* Tooltip */
     .tl-tooltip {
       position: fixed;
-      background: #2a2a2a;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 10px 14px;
@@ -530,7 +530,7 @@
   <div class="hero-card" style="align-items:center;">
     <div class="hero-card-label" style="align-self:flex-start;">Fight Rate</div>
     <svg id="ring-chart-svg" viewBox="0 0 110 110" width="100" height="100">
-      <circle cx="55" cy="55" r="42" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="11"/>
+      <circle cx="55" cy="55" r="42" fill="none" stroke="rgba(0,0,0,.08)" stroke-width="11"/>
       <circle cx="55" cy="55" r="42" fill="none" stroke="var(--green)" stroke-width="11"
         stroke-dasharray="264" stroke-dashoffset="264"
         stroke-linecap="round" transform="rotate(-90 55 55)" id="ring-arc-fought"/>
@@ -625,7 +625,7 @@
         <button class="refresh-btn" onclick="agExportCsv('disputes')" title="Export disputes as CSV">⬇ CSV</button>
       </div>
     </div>
-    <div id="disputes-grid" class="ag-theme-custom ag-theme-alpine-dark"></div>
+    <div id="disputes-grid" class="ag-theme-custom ag-theme-alpine"></div>
   </div>
 </div>
 
@@ -642,7 +642,7 @@
         <button class="refresh-btn" onclick="agExportCsv('recoveries')" title="Export recoveries as CSV">⬇ CSV</button>
       </div>
     </div>
-    <div id="recoveries-grid" class="ag-theme-custom ag-theme-alpine-dark"></div>
+    <div id="recoveries-grid" class="ag-theme-custom ag-theme-alpine"></div>
   </div>
 </div>
 
@@ -709,12 +709,12 @@
       <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
         Amount (USD)
         <input id="oracle-amount" type="number" value="245" step="1" min="1"
-          style="padding:7px 10px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
+          style="padding:7px 10px;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
       </label>
       <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
         Claim Type
         <select id="oracle-claim"
-          style="padding:7px 10px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+          style="padding:7px 10px;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
           <option value="ITEM_NOT_RECEIVED">Item Not Received</option>
           <option value="SIGNIFICANTLY_NOT_AS_DESCRIBED">Significantly Not As Described</option>
           <option value="UNAUTHORIZED">Unauthorized Transaction</option>
@@ -746,7 +746,7 @@
       <label style="font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:4px;">
         Deadline (hours)
         <input id="oracle-deadline" type="number" value="72" step="1" min="1"
-          style="padding:7px 10px;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
+          style="padding:7px 10px;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
       </label>
       <button onclick="oracleCalc()"
         style="margin-top:auto;padding:10px 20px;border-radius:8px;border:none;background:#f59e0b;color:#0d0d0d;font-size:14px;cursor:pointer;font-weight:700;letter-spacing:.3px;">
@@ -773,9 +773,9 @@
 
   <div id="apimatic-stats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
 
-  <div id="apimatic-features" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
+  <div id="apimatic-features" style="background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
 
-  <div id="apimatic-preview" style="display:none;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;"></div>
+  <div id="apimatic-preview" style="display:none;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:8px;padding:14px;"></div>
 
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <button onclick="apimShowSample(this)" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer;">Preview sample lookup</button>
@@ -783,7 +783,7 @@
 
   <div style="margin-top:12px;font-size:11px;color:var(--muted);">
     Powered by <a href="https://apimatic.io" target="_blank" rel="noopener" style="color:#0070e0;text-decoration:none;">APIMatic</a>
-    · Context Plugin · Transformer API · <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">APIMATIC_API_KEY</code> to regenerate live
+    · Context Plugin · Transformer API · <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">APIMATIC_API_KEY</code> to regenerate live
   </div>
 </div>
 
@@ -799,7 +799,7 @@
     <div>
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:5px;">Dispute action</label>
       <select id="am-action"
-        style="background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;">
+        style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;">
         <option value="accept">accept</option>
         <option value="provide_evidence" selected>provide_evidence</option>
         <option value="send_message">send_message</option>
@@ -812,11 +812,11 @@
       </select>
     </div>
     <button onclick="lookupApiMatic()"
-      style="padding:8px 18px;background:#1a1a2e;color:var(--accent);border:1px solid rgba(0,112,224,.4);border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">
+      style="padding:8px 18px;background:rgba(0,96,199,.08);color:var(--accent);border:1px solid rgba(0,96,199,.3);border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">
       Lookup →
     </button>
     <button onclick="loadApiMaticContext()"
-      style="padding:8px 18px;background:#1a1a1a;color:var(--muted);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">
+      style="padding:8px 18px;background:var(--surface-elevated);color:var(--muted);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">
       View full context
     </button>
   </div>
@@ -841,7 +841,7 @@
 
   <div style="margin-top:12px;font-size:11px;color:var(--muted);">
     Powered by <a href="https://apimatic.io" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">APIMatic</a>
-    — deterministic API context from OpenAPI specs · set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">APIMATIC_API_KEY</code> to regenerate from live PayPal spec
+    — deterministic API context from OpenAPI specs · set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">APIMATIC_API_KEY</code> to regenerate from live PayPal spec
   </div>
 </div>
 
@@ -856,9 +856,9 @@
 
   <div id="channel3-stats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
 
-  <div id="channel3-features" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
+  <div id="channel3-features" style="background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
 
-  <div id="channel3-preview" style="display:none;background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;"></div>
+  <div id="channel3-preview" style="display:none;background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:8px;padding:14px;"></div>
 
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <button onclick="channel3ShowHow(this)" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer;">How it works</button>
@@ -866,7 +866,7 @@
 
   <div style="margin-top:12px;font-size:11px;color:var(--muted);">
     Powered by <a href="https://trychannel3.com" target="_blank" rel="noopener" style="color:#00c48c;text-decoration:none;">Channel3</a>
-    · Product Graph · <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">CHANNEL3_API_KEY</code> to enable live lookups
+    · Product Graph · <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">CHANNEL3_API_KEY</code> to enable live lookups
   </div>
 </div>
 
@@ -881,13 +881,13 @@
     <div style="flex:1;min-width:200px;">
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:5px;">Item description</label>
       <input id="c3-item" type="text" value="Nike Air Max 90"
-        style="width:100%;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;"
+        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;"
         placeholder="e.g. Sony WH-1000XM5 headphones" />
     </div>
     <div style="width:120px;">
       <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:5px;">Amount (USD)</label>
       <input id="c3-amount" type="number" value="89.99"
-        style="width:100%;background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;" />
+        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px;outline:none;" />
     </div>
     <button onclick="runChannel3()"
       style="padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
@@ -912,7 +912,7 @@
 
   <div style="margin-top:12px;font-size:11px;color:var(--muted);">
     Powered by <a href="https://trychannel3.com" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">Channel3</a>
-    — 100M+ product graph · set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">CHANNEL3_API_KEY</code> in Render env vars to enable live lookups
+    — 100M+ product graph · set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">CHANNEL3_API_KEY</code> in Render env vars to enable live lookups
   </div>
 </div>
 
@@ -927,9 +927,9 @@
 
   <div id="postman-stats" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px;"></div>
 
-  <div id="postman-groups" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
+  <div id="postman-groups" style="background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;"></div>
 
-  <div id="postman-features" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;display:none;"></div>
+  <div id="postman-features" style="background:rgba(0,0,0,.03);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;display:none;"></div>
 
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <a href="/api/postman/collection" download="anchor-postman-collection.json"
@@ -939,7 +939,7 @@
 
   <div style="margin-top:12px;font-size:11px;color:var(--muted);">
     Powered by <a href="https://postman.com" target="_blank" rel="noopener" style="color:#FF6C37;text-decoration:none;">Postman</a>
-    · Collection v2.1 · <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POSTMAN_API_KEY</code> to publish to workspace
+    · Collection v2.1 · <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">POSTMAN_API_KEY</code> to publish to workspace
   </div>
 </div>
 
@@ -972,7 +972,7 @@
 
   <div id="pm-result" style="display:none;margin-bottom:12px;"></div>
 
-  <div style="background:rgba(255,255,255,.04);border-radius:6px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.6;">
+  <div style="background:rgba(0,0,0,.03);border-radius:6px;padding:12px 14px;font-size:12px;color:var(--muted);line-height:1.6;">
     <strong style="color:var(--text);font-size:12px;">Endpoints covered:</strong>
     <span style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">
       <span style="background:rgba(255,108,55,.12);color:#FF6C37;border-radius:4px;padding:1px 7px;font-size:11px;">GET /health</span>
@@ -988,7 +988,7 @@
 
   <div style="margin-top:12px;font-size:11px;color:var(--muted);">
     Powered by <a href="https://postman.com" target="_blank" rel="noopener" style="color:#FF6C37;text-decoration:none;">Postman</a>
-    — Collection v2.1 · set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POSTMAN_API_KEY</code> in Render env vars to enable one-click publish
+    — Collection v2.1 · set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">POSTMAN_API_KEY</code> in Render env vars to enable one-click publish
   </div>
 </div>
 
@@ -1010,16 +1010,16 @@
        style="color:var(--accent);font-size:13px;font-weight:500;text-decoration:none;">
       anchor-paypal.onrender.com ↗
     </a>
-    <span id="render-service-region" style="font-size:11px;color:var(--muted);background:rgba(255,255,255,.06);padding:2px 8px;border-radius:4px;"></span>
+    <span id="render-service-region" style="font-size:11px;color:var(--muted);background:rgba(0,0,0,.05);padding:2px 8px;border-radius:4px;"></span>
   </div>
 
   <!-- Latest deploy card -->
-  <div id="render-latest" style="display:none;background:rgba(255,255,255,.04);border-radius:7px;padding:12px 14px;margin-bottom:12px;">
+  <div id="render-latest" style="display:none;background:rgba(0,0,0,.03);border-radius:7px;padding:12px 14px;margin-bottom:12px;">
     <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">Latest Deploy</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
       <span id="render-latest-dot" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
       <span id="render-latest-label" style="font-size:13px;font-weight:600;"></span>
-      <code id="render-latest-commit" style="font-size:11px;background:rgba(255,255,255,.08);padding:1px 6px;border-radius:4px;"></code>
+      <code id="render-latest-commit" style="font-size:11px;background:rgba(0,0,0,.06);padding:1px 6px;border-radius:4px;"></code>
       <span id="render-latest-msg" style="font-size:12px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
       <span id="render-latest-age" style="font-size:11px;color:var(--muted);white-space:nowrap;"></span>
       <span id="render-latest-dur" style="font-size:11px;color:var(--muted);white-space:nowrap;"></span>
@@ -1050,7 +1050,7 @@
 
   <div style="font-size:11px;color:var(--muted);">
     Powered by <a href="https://render.com" target="_blank" rel="noopener" style="color:#46E3B7;text-decoration:none;">Render</a>
-    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">RENDER_API_KEY</code> + <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">RENDER_SERVICE_ID</code> to enable live status &amp; deploy triggers
+    — set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">RENDER_API_KEY</code> + <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">RENDER_SERVICE_ID</code> to enable live status &amp; deploy triggers
   </div>
 </div>
 
@@ -1110,7 +1110,7 @@
 
   <div style="font-size:11px;color:var(--muted);">
     Powered by <a href="https://astropods.com" target="_blank" rel="noopener" style="color:#6366F1;text-decoration:none;">Astropods</a>
-    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_URL</code> + <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_API_KEY</code> to route live LLM calls
+    — set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_URL</code> + <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">ASTRO_GATEWAY_API_KEY</code> to route live LLM calls
   </div>
 </div>
 
@@ -1132,8 +1132,8 @@
 
   <p style="font-size:13px;color:var(--muted);margin:0 0 14px;">
     AG Grid powers the Disputes and Recoveries tables. The backend serves rows in AG Grid's
-    exact <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">rowData + columnDefs</code> format via
-    <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">/api/aggrid/data</code>,
+    exact <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">rowData + columnDefs</code> format via
+    <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">/api/aggrid/data</code>,
     so any AG Grid component (React, Vue, Angular, vanilla JS) loads Anchor's data with zero transformation.
   </p>
 
@@ -1207,7 +1207,7 @@
 
   <div style="font-size:11px;color:var(--muted);">
     Powered by <a href="https://bryntum.com/products/scheduler/" target="_blank" rel="noopener" style="color:#ff5722;text-decoration:none;">Bryntum Scheduler 6.0.7</a>
-    — install with <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">npm install @bryntum/scheduler</code>
+    — install with <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">npm install @bryntum/scheduler</code>
   </div>
 </div>
 
@@ -1245,7 +1245,7 @@
 
   <div style="font-size:11px;color:var(--muted);">
     Powered by <a href="https://developer.paypal.com" target="_blank" rel="noopener" style="color:#009cde;text-decoration:none;">PayPal REST API v1/v2</a>
-    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">PAYPAL_CLIENT_ID</code> + <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">PAYPAL_CLIENT_SECRET</code>
+    — set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">PAYPAL_CLIENT_ID</code> + <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">PAYPAL_CLIENT_SECRET</code>
   </div>
 </div>
 
@@ -1294,7 +1294,7 @@
 
   <div style="font-size:11px;color:var(--muted);">
     Powered by <a href="https://kernel.sh" target="_blank" rel="noopener" style="color:#0ea5e9;text-decoration:none;">Kernel</a>
-    — set <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">KERNEL_API_KEY</code> to capture live carrier screenshots
+    — set <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">KERNEL_API_KEY</code> to capture live carrier screenshots
   </div>
 </div>
 
@@ -1602,7 +1602,7 @@ function updateHeroCards(s) {
     : [0, 50, 120, 90, 180, 220, 310, 460, 559];
   drawSparkLine('spark-line-recovery', recAmounts, 'var(--purple)');
   const winPcts = foughtDisputes.map(d => Math.round((d.win_probability || 0) * 100));
-  drawSparkLine('spark-line-wins', winPcts.length ? winPcts : [60,65,72,68,75,80,84,88,92,88], 'rgba(255,255,255,0.7)');
+  drawSparkLine('spark-line-wins', winPcts.length ? winPcts : [60,65,72,68,75,80,84,88,92,88], 'rgba(55,65,81,0.6)');
 }
 
 // ── Bryntum-style Timeline ──────────────────────────────────────────────────
@@ -1820,7 +1820,7 @@ function _applyOracleResult(d) {
     'GATHER_EVIDENCE': { bg: 'rgba(245,158,11,.15)', color: '#f59e0b', border: 'rgba(245,158,11,.3)' },
     'GATHER EVIDENCE': { bg: 'rgba(245,158,11,.15)', color: '#f59e0b', border: 'rgba(245,158,11,.3)' },
   };
-  const rc = recColors[rec] || { bg: 'rgba(255,255,255,.08)', color: '#e8e8e8', border: 'rgba(255,255,255,.2)' };
+  const rc = recColors[rec] || { bg: 'rgba(0,0,0,.06)', color: 'var(--muted)', border: 'rgba(0,0,0,.12)' };
   const pct = n => (n * 100).toFixed(1) + '%';
   const dollar = n => (n >= 0 ? '+' : '') + '$' + Math.abs(n).toFixed(2);
   const winPct = Math.min(100, Math.round(d.win_probability * 100));
@@ -1848,7 +1848,7 @@ function _applyOracleResult(d) {
         <span>Win probability: <strong style="color:var(--text);">${pct(d.win_probability)}</strong></span>
         <span>Break-even: <strong style="color:var(--text);">${pct(d.break_even_probability)}</strong></span>
       </div>
-      <div style="height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;">
+      <div style="height:8px;border-radius:999px;background:rgba(0,0,0,.06);overflow:hidden;">
         <div style="height:100%;border-radius:999px;background:#f59e0b;width:${winPct}%;transition:width .4s;"></div>
       </div>
     </div>
@@ -1900,7 +1900,7 @@ function _applyApimStatus(d) {
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         ${feats.map(f => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+          <tr style="border-bottom:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:var(--text);font-weight:500;width:28%;">${f.name}</td>
             <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
           </tr>`).join('')}
@@ -1922,7 +1922,7 @@ async function apimShowSample(btn) {
       <pre style="font-size:10px;color:#0070e0;background:rgba(0,112,224,.07);border-radius:6px;padding:10px;overflow-x:auto;white-space:pre-wrap;">${JSON.stringify(d, null, 2)}</pre>
       <div style="font-size:11px;color:var(--muted);margin-top:6px;">
         Guardian calls
-        <code style="background:rgba(255,255,255,.07);padding:2px 6px;border-radius:3px;color:var(--text);">GET /api/apimatic/lookup/{action}</code>
+        <code style="background:rgba(0,0,0,.06);padding:2px 6px;border-radius:3px;color:var(--text);">GET /api/apimatic/lookup/{action}</code>
         before every PayPal API call.
       </div>`;
   } catch (e) {
@@ -2018,7 +2018,7 @@ function _applyChannel3Status(d) {
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         ${feats.map(f => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+          <tr style="border-bottom:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:var(--text);font-weight:500;width:30%;">${f.name}</td>
             <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
           </tr>`).join('')}
@@ -2036,19 +2036,19 @@ function channel3ShowHow(btn) {
     <div style="font-size:12px;color:var(--text);line-height:1.8;">
       <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
         <span style="color:#00c48c;font-weight:700;min-width:20px;">1.</span>
-        <span>Dispute arrives → Guardian reads item name from <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">disputed_transactions[].items[].name</code></span>
+        <span>Dispute arrives → Guardian reads item name from <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">disputed_transactions[].items[].name</code></span>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
         <span style="color:#00c48c;font-weight:700;min-width:20px;">2.</span>
-        <span>Calls <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POST /v1/search</code> on Channel3 with item name → gets canonical product data</span>
+        <span>Calls <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">POST /v1/search</code> on Channel3 with item name → gets canonical product data</span>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;">
         <span style="color:#00c48c;font-weight:700;min-width:20px;">3.</span>
-        <span>Formats brand, category, catalog price, description, and image URLs as <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">ITEM_DESCRIPTION</code> evidence</span>
+        <span>Formats brand, category, catalog price, description, and image URLs as <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">ITEM_DESCRIPTION</code> evidence</span>
       </div>
       <div style="display:flex;gap:8px;align-items:flex-start;">
         <span style="color:#00c48c;font-weight:700;min-width:20px;">4.</span>
-        <span>Submits to PayPal's <code style="background:rgba(255,255,255,.07);padding:1px 4px;border-radius:3px;">POST /v1/customer/disputes/{id}/provide-evidence</code> alongside tracking + communication evidence</span>
+        <span>Submits to PayPal's <code style="background:rgba(0,0,0,.06);padding:1px 4px;border-radius:3px;">POST /v1/customer/disputes/{id}/provide-evidence</code> alongside tracking + communication evidence</span>
       </div>
     </div>`;
 }
@@ -2170,7 +2170,7 @@ function postmanShowFeatures(btn) {
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         ${feats.map(f => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+          <tr style="border-bottom:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:var(--text);font-weight:500;width:28%;">${f.name}</td>
             <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
           </tr>`).join('')}
@@ -2279,10 +2279,10 @@ function _applyRenderStatus(d) {
   if (rows.length) {
     const container = document.getElementById('render-history-rows');
     container.innerHTML = rows.map(dep => `
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:rgba(255,255,255,.03);">
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:rgba(0,0,0,.03);">
         <span style="width:7px;height:7px;border-radius:50%;background:${dep.color};flex-shrink:0;"></span>
         <span style="font-size:12px;font-weight:600;color:${dep.color};min-width:90px;">${dep.label}</span>
-        <code style="font-size:10px;background:rgba(255,255,255,.07);padding:1px 5px;border-radius:3px;flex-shrink:0;">${dep.commit_id || ''}</code>
+        <code style="font-size:10px;background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;flex-shrink:0;">${dep.commit_id || ''}</code>
         <span style="font-size:11px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${dep.commit_msg || ''}</span>
         <span style="font-size:11px;color:var(--muted);white-space:nowrap;">${dep.age || ''}</span>
       </div>
@@ -2386,10 +2386,10 @@ function _applyAstroStatus(d) {
       const ctx = m.context_tokens ? `${(m.context_tokens/1000).toFixed(0)}k ctx` : '';
       const inp = m.input_per_million_usd  ? `$${m.input_per_million_usd}/M in` : '';
       const out = m.output_per_million_usd ? `$${m.output_per_million_usd}/M out` : '';
-      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:rgba(255,255,255,.03);">
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:5px;background:rgba(0,0,0,.03);">
         <span style="width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0;"></span>
         <code style="font-size:12px;color:${col};min-width:160px;">${m.id}</code>
-        <span style="font-size:10px;color:var(--muted);background:rgba(255,255,255,.06);padding:1px 6px;border-radius:3px;flex-shrink:0;">${m.maker || ''}</span>
+        <span style="font-size:10px;color:var(--muted);background:rgba(0,0,0,.05);padding:1px 6px;border-radius:3px;flex-shrink:0;">${m.maker || ''}</span>
         ${ctx ? `<span style="font-size:10px;color:var(--muted);">${ctx}</span>` : ''}
         <span style="margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap;">${[inp,out].filter(Boolean).join(' · ')}</span>
       </div>`;
@@ -2495,7 +2495,7 @@ function _applyAggridStatus(d) {
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         ${feats.map(f => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+          <tr style="border-bottom:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:var(--text);font-weight:500;width:38%;">${f.name}</td>
             <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
           </tr>`).join('')}
@@ -2521,7 +2521,7 @@ async function aggridPreviewData(btn) {
       }</pre>
       <div style="font-size:11px;color:var(--muted);margin-top:6px;">
         Feed to AG Grid:
-        <code style="background:rgba(255,255,255,.07);padding:2px 6px;border-radius:3px;color:var(--text);">
+        <code style="background:rgba(0,0,0,.06);padding:2px 6px;border-radius:3px;color:var(--text);">
           createGrid(el, &#123; columnDefs: data.columnDefs, rowData: data.rowData &#125;)
         </code>
       </div>`;
@@ -2566,7 +2566,7 @@ function _applyBryntumStatus(d) {
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Features Used</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         ${feats.map(f => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+          <tr style="border-bottom:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:var(--text);font-weight:500;width:40%;">${f.name}</td>
             <td style="padding:5px 0;color:var(--muted);">${f.detail}</td>
           </tr>`).join('')}
@@ -2613,7 +2613,7 @@ async function bryntumLoadData(btn) {
       }</pre>
       <div style="font-size:11px;color:var(--muted);margin-top:6px;">
         Feed to Bryntum Scheduler:
-        <code style="background:rgba(255,255,255,.07);padding:2px 6px;border-radius:3px;color:var(--text);">
+        <code style="background:rgba(0,0,0,.06);padding:2px 6px;border-radius:3px;color:var(--text);">
           crudManager: &#123; transport: &#123; load: &#123; url: '/api/bryntum/data' &#125; &#125; &#125;
         </code>
       </div>`;
@@ -2659,7 +2659,7 @@ function _applyPaypalStatus(d) {
     { label: 'Webhooks',        value: src.webhooks        ?? '—', color: '#6366f1' },
   ];
   document.getElementById('paypal-stats').innerHTML = stats.map(s => `
-    <div style="background:rgba(255,255,255,.04);border-radius:8px;padding:10px;text-align:center;">
+    <div style="background:rgba(0,0,0,.03);border-radius:8px;padding:10px;text-align:center;">
       <div style="font-size:22px;font-weight:700;color:${s.color};">${s.value}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:2px;">${s.label}</div>
     </div>`).join('');
@@ -2680,7 +2680,7 @@ function _applyPaypalStatus(d) {
           <th style="padding:4px 0;text-align:right;">Due</th>
         </tr>
         ${items.map(x => `
-          <tr style="border-top:1px solid rgba(255,255,255,.06);">
+          <tr style="border-top:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:#009cde;font-family:monospace;">${x.dispute_id}</td>
             <td style="padding:5px 0;color:var(--muted);">${x.reason.replace(/_/g,' ')}</td>
             <td style="padding:5px 0;text-align:right;color:var(--text);font-weight:600;">${x.amount}</td>
@@ -2753,7 +2753,7 @@ function _applyKernelStatus(d) {
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px;">Capabilities</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         ${caps.map(c => `
-          <tr style="border-bottom:1px solid rgba(255,255,255,.06);">
+          <tr style="border-bottom:1px solid rgba(0,0,0,.06);">
             <td style="padding:5px 0;color:var(--text);font-weight:500;">${c.name}</td>
             <td style="padding:5px 0;color:var(--muted);text-align:right;">${c.detail}</td>
           </tr>`).join('')}
