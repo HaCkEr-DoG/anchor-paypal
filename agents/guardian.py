@@ -39,15 +39,19 @@ MERCHANT_ID = os.environ.get("MERCHANT_ID", "default")
 
 class Guardian:
 
-    def __init__(self, config: GuardianConfig | None = None):
+    def __init__(self, config: GuardianConfig | None = None, merchant_id: str | None = None):
         self.config = config
-        self.paypal_base = "https://api.sandbox.paypal.com"
+        self.merchant_id = merchant_id
+        _env = os.environ.get("PAYPAL_ENV", "sandbox")
+        self.paypal_base = (
+            "https://api.paypal.com" if _env == "live" else "https://api.sandbox.paypal.com"
+        )
         self._token: str | None = None
         self._token_expires_at: float = 0
 
     async def _ensure_config(self):
         if self.config is None:
-            self.config = await load_config(MERCHANT_ID)
+            self.config = await load_config(self.merchant_id or MERCHANT_ID)
 
     # -------------------------------------------------------------------------
     # Dispute routing — called by watcher.py instead of classifier directly

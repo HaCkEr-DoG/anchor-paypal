@@ -40,10 +40,28 @@ _scheduler = AsyncIOScheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global APPROVAL_TOKEN_SECRET
+    from zoneinfo import ZoneInfo
+    from agents.config import load_config as _load_config
+    APPROVAL_TOKEN_SECRET = await _load_or_create_approval_secret()
+    _merchant_id = os.environ.get("MERCHANT_ID", "default")
+    _brief_hour = 8
+    _brief_tz = "UTC"
+    try:
+        _cfg = await _load_config(_merchant_id)
+        _brief_hour = _cfg.morning_brief_hour
+        _brief_tz = _cfg.morning_brief_timezone
+    except Exception:
+        pass
     _scheduler.add_job(_run_recovery_check, "cron", minute="*/15", id="recovery")
-    _scheduler.add_job(_send_morning_brief, "cron", hour=8, minute=0, id="brief")
+    _scheduler.add_job(
+        _send_morning_brief, "cron",
+        hour=_brief_hour, minute=0,
+        id="brief",
+        timezone=ZoneInfo(_brief_tz),
+    )
     _scheduler.start()
-    print("[Watcher] Scheduler started — recovery every 15 min, brief at 08:00 UTC")
+    print(f"[Watcher] Scheduler started — recovery every 15 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
     yield
     _scheduler.shutdown()
 
@@ -57,9 +75,44 @@ _DASHBOARD_HTML = (
     pathlib.Path(__file__).parent.parent / "static" / "dashboard.html"
 ).read_text()
 
-# Secret for signing approval tokens — set via APPROVAL_TOKEN_SECRET env var.
-# Render auto-generates this; for local dev set it in .env.
-APPROVAL_TOKEN_SECRET = os.environ.get("APPROVAL_TOKEN_SECRET", secrets.token_hex(32))
+# Approval token secret — loaded/persisted from Elasticsearch in lifespan so it
+# survives Render restarts. APPROVAL_TOKEN_SECRET env var always wins.
+APPROVAL_TOKEN_SECRET: str = ""  # Populated during lifespan startup
+
+
+async def _load_or_create_approval_secret() -> str:
+    """Load from ES so approval links survive restarts; fall back to ephemeral if ES absent."""
+    env_secret = os.environ.get("APPROVAL_TOKEN_SECRET")
+    if env_secret:
+        return env_secret
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+    if not es_url or not es_key:
+        print("[Watcher] No ES — approval secret is ephemeral (links expire on restart)")
+        return secrets.token_hex(32)
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(
+                f"{es_url}/anchor-config/_doc/_approval_secret",
+                headers={"Authorization": f"ApiKey {es_key}"},
+            )
+            if r.status_code == 200:
+                stored = r.json().get("_source", {}).get("secret", "")
+                if stored:
+                    print("[Watcher] Loaded persistent approval secret from Elasticsearch")
+                    return stored
+            new_secret = secrets.token_hex(32)
+            await c.put(
+                f"{es_url}/anchor-config/_doc/_approval_secret",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json={"secret": new_secret, "created_at": datetime.now(timezone.utc).isoformat()},
+            )
+            print("[Watcher] Generated and stored persistent approval secret in Elasticsearch")
+            return new_secret
+    except Exception as exc:
+        print(f"[Watcher] Could not persist approval secret ({exc}) — using ephemeral key")
+        return secrets.token_hex(32)
 
 # API key for internal cron/admin endpoints. Set API_SECRET in Render env vars.
 # If unset in dev the check is skipped; warn loudly so it isn't forgotten.
@@ -79,16 +132,35 @@ def _require_api_key(request: Request) -> None:
 
 # ---------------------------------------------------------------------------
 # Idempotency store — prevents duplicate processing on PayPal's 25 retries.
-# In-memory for single-instance; swap for Redis/ES on multi-instance deploy.
-# Stores event_id → processed_at timestamp; entries expire after 4 days.
+# Primary: ES op_type=create (atomic, survives restarts, multi-instance safe).
+# Fallback: in-memory dict when ES is unavailable.
 # ---------------------------------------------------------------------------
 _processed_events: dict[str, float] = {}
 _DEDUP_TTL_SECONDS = 4 * 24 * 3600  # 4 days > PayPal's 3-day retry window
 
 
-def _is_duplicate(event_id: str) -> bool:
+async def _is_duplicate(event_id: str) -> bool:
+    """ES-backed atomic dedup; falls back to memory when ES is unavailable."""
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+    if es_url and es_key:
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as c:
+                r = await c.put(
+                    f"{es_url}/anchor-dedup/_doc/{event_id}?op_type=create",
+                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                    json={"event_id": event_id, "processed_at": datetime.now(timezone.utc).isoformat()},
+                )
+            if r.status_code == 409:
+                return True   # Document already exists — duplicate
+            if r.status_code in (200, 201):
+                return False  # Created atomically — first time we've seen it
+            print(f"[Watcher] ES dedup unexpected {r.status_code} — falling back to memory")
+        except Exception as exc:
+            print(f"[Watcher] ES dedup unavailable ({exc}) — falling back to memory")
+    # Memory fallback
     now = time.monotonic()
-    # Evict expired entries
     expired = [k for k, v in _processed_events.items() if now - v > _DEDUP_TTL_SECONDS]
     for k in expired:
         del _processed_events[k]
@@ -103,30 +175,49 @@ async def health():
     return {"status": "ok"}
 
 
+@app.post("/webhooks/paypal/{merchant_id}")
+async def handle_webhook_for_merchant(
+    merchant_id: str, request: Request, background: BackgroundTasks
+):
+    """Per-merchant webhook URL — register this in PayPal: POST /webhooks/paypal/{your-merchant-id}"""
+    await _process_webhook(merchant_id, request, background)
+    return JSONResponse({"status": "received"}, status_code=200)
+
+
 @app.post("/webhooks/paypal")
 async def handle_webhook(request: Request, background: BackgroundTasks):
     """
-    PayPal sends events here. We verify the signature immediately
-    (synchronous), then deduplicate and process in background so PayPal
-    gets a fast 200. PayPal retries 25× over 3 days — dedup is mandatory.
+    Legacy single-tenant webhook URL — backward-compatible; requires MERCHANT_ID env var.
+    PayPal sends events here, verifies signature immediately, deduplicates, then
+    dispatches to background tasks. PayPal retries 25× over 3 days — dedup is mandatory.
     """
+    merchant_id = os.environ.get("MERCHANT_ID", "")
+    if not merchant_id:
+        raise HTTPException(
+            503,
+            "Set MERCHANT_ID env var or use the per-merchant URL: POST /webhooks/paypal/{merchant_id}",
+        )
+    await _process_webhook(merchant_id, request, background)
+    return JSONResponse({"status": "received"}, status_code=200)
+
+
+async def _process_webhook(merchant_id: str, request: Request, background: BackgroundTasks):
+    """Core webhook processing shared by both endpoint variants."""
     body = await request.body()
     headers = dict(request.headers)
 
-    # Verify webhook authenticity before processing anything
     await _verify_paypal_signature(body, headers)
 
     event = json.loads(body)
     event_id = event.get("id", "")
     event_type = event.get("event_type", "")
 
-    # Deduplicate — return 200 immediately on repeat so PayPal stops retrying
-    if event_id and _is_duplicate(event_id):
+    if event_id and await _is_duplicate(event_id):
         print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored")
-        return JSONResponse({"status": "duplicate"}, status_code=200)
+        return
 
     if event_type == "CUSTOMER.DISPUTE.CREATED":
-        background.add_task(_handle_dispute_created, event)
+        background.add_task(_handle_dispute_created, event, merchant_id)
 
     elif event_type == "CUSTOMER.DISPUTE.UPDATED":
         background.add_task(_handle_dispute_updated, event)
@@ -138,13 +229,10 @@ async def handle_webhook(request: Request, background: BackgroundTasks):
         background.add_task(_handle_invoice_event, event)
 
     elif event_type == "CHECKOUT.ORDER.APPROVED":
-        background.add_task(_handle_order_approved, event)
+        background.add_task(_handle_order_approved, event, merchant_id)
 
     elif event_type == "PAYMENT.CAPTURE.COMPLETED":
         background.add_task(_handle_capture, event)
-
-    # Always return 200 immediately — PayPal retries on anything else
-    return JSONResponse({"status": "received"}, status_code=200)
 
 
 async def _verify_paypal_signature(body: bytes, headers: dict):
@@ -190,7 +278,7 @@ async def _get_access_token() -> str:
     return await get_client().get_token()
 
 
-async def _handle_dispute_created(event: dict):
+async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     """
     Main dispute pipeline entry point.
     Runs entirely without human intervention:
@@ -227,7 +315,7 @@ async def _handle_dispute_created(event: dict):
     print(f"[Watcher] New dispute {dispute_id}: ${dispute_amount} ({reason})")
 
     # Route through Guardian — applies pre-auth thresholds before acting
-    guardian = Guardian()
+    guardian = Guardian(merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"))
     await guardian.handle_dispute(
         dispute_id=dispute_id,
         dispute_amount=dispute_amount,
@@ -270,14 +358,14 @@ async def _handle_invoice_event(event: dict):
         await collector.check_overdue(invoice_id, resource)
 
 
-async def _handle_order_approved(event: dict):
+async def _handle_order_approved(event: dict, merchant_id: str = ""):
     """
     Buyer authorized the PayPal payment but merchant hasn't captured yet.
     Store in Elasticsearch; Recovery Agent will follow up if capture never arrives.
     """
-    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    mid = merchant_id or os.environ.get("MERCHANT_ID", "default")
     recovery = RecoveryAgent()
-    await recovery.store_approved_order(event, merchant_id)
+    await recovery.store_approved_order(event, mid)
 
 
 async def _handle_capture(event: dict):

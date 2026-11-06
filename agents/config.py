@@ -41,6 +41,7 @@ class GuardianConfig:
     notify_on_auto_action: bool = True    # Send Slack message for every autonomous action
     morning_brief_enabled: bool = True
     morning_brief_hour: int = 8           # 8 AM merchant local time
+    morning_brief_timezone: str = "UTC"   # IANA timezone, e.g. "America/New_York"
 
     # Merchant profile (used by Oracle for win rate priors)
     account_age_days: int = 730
@@ -80,6 +81,64 @@ DEFAULT_CONFIG = GuardianConfig(
 )
 
 
+async def detect_fee_tier(merchant_id: str) -> bool:
+    """
+    Auto-detect PayPal US high-volume fee tier eligibility by querying ES.
+    Criteria: amount-based dispute ratio ≥1.5% AND >100 sales in previous
+    3 full calendar months.  Returns False (standard tier) if ES is absent
+    or the data is insufficient — the merchant can override via config.
+    """
+    from datetime import datetime, timezone, timedelta
+    es_url = os.environ.get("ELASTICSEARCH_URL")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+    if not es_url or not es_key:
+        return False
+
+    now = datetime.now(timezone.utc)
+    # Three complete calendar months back
+    first_of_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    window_end = first_of_this_month
+    window_start = (first_of_this_month - timedelta(days=92)).replace(day=1)
+
+    import httpx
+    query = {
+        "query": {
+            "bool": {
+                "must": [
+                    {"term": {"merchant_id": merchant_id}},
+                    {"range": {"timestamp": {
+                        "gte": window_start.isoformat(),
+                        "lt": window_end.isoformat(),
+                    }}},
+                ]
+            }
+        },
+        "aggs": {
+            "captures": {"filter": {"term": {"event_type": "capture"}}},
+            "eligible_disputes": {"filter": {"term": {"event_type": "eligible_dispute"}}},
+        },
+        "size": 0,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.post(
+                f"{es_url}/anchor-events/_search",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=query,
+            )
+        aggs = r.json().get("aggregations", {})
+        capture_count = aggs.get("captures", {}).get("doc_count", 0)
+        dispute_count = aggs.get("eligible_disputes", {}).get("doc_count", 0)
+        if capture_count > 100 and capture_count > 0:
+            ratio = dispute_count / capture_count
+            if ratio >= 0.015:
+                print(f"[Config] High-volume tier detected: {dispute_count}/{capture_count} = {ratio:.1%}")
+                return True
+    except Exception as exc:
+        print(f"[Config] Fee-tier detection failed ({exc}) — defaulting to standard tier")
+    return False
+
+
 async def load_config(merchant_id: str) -> GuardianConfig:
     """
     Load config from Elasticsearch. Falls back to env-var defaults.
@@ -100,11 +159,18 @@ async def load_config(merchant_id: str) -> GuardianConfig:
                 timeout=3.0,
             )
             if r.status_code == 200:
-                return GuardianConfig.from_dict(r.json().get("_source", {}))
-            print(f"[Config] ES returned {r.status_code} for merchant {merchant_id} — using defaults")
+                cfg = GuardianConfig.from_dict(r.json().get("_source", {}))
+            else:
+                print(f"[Config] ES returned {r.status_code} for merchant {merchant_id} — using defaults")
+                cfg = DEFAULT_CONFIG
     except Exception as exc:
         print(f"[Config] ES unreachable for merchant {merchant_id} ({exc}) — using defaults; autonomous thresholds may not reflect merchant settings")
-    return DEFAULT_CONFIG
+        cfg = DEFAULT_CONFIG
+
+    # Auto-detect fee tier unless the merchant explicitly set it
+    if not cfg.high_volume_fee_tier:
+        cfg.high_volume_fee_tier = await detect_fee_tier(merchant_id)
+    return cfg
 
 
 async def save_config(config: GuardianConfig) -> bool:
