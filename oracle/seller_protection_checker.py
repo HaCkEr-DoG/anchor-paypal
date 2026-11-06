@@ -1,38 +1,31 @@
 """
-Seller Protection Checker — determine PayPal Seller Protection eligibility.
+Seller Protection Eligibility Checker — determine whether a PayPal dispute
+qualifies for Seller Protection (SP) and what the coverage implications are.
 
-PayPal Seller Protection (SP) shields merchants from liability for certain
-dispute types when the merchant meets specific requirements. SP is NOT
-automatic — the merchant must actively claim it and meet all criteria.
+PayPal Seller Protection program:
+  - Covers merchants against chargebacks and reversals in qualifying disputes
+  - Waives the $20 chargeback fee when SP applies
+  - Covers INR (Item Not Received) and Unauthorized transactions
+  - NEVER covers SNAD (Significantly Not As Described) disputes
 
-SP Coverage:
-  - Item Not Received (INR): Covered if shipped to confirmed address with
-    proof of shipment/delivery + signature for ≥$750
-  - Unauthorized Transaction: Covered if order placed with verified PayPal
-    account to confirmed address
-  - SNAD: NOT covered by Seller Protection
+SP eligibility requirements:
+  1. Transaction on PayPal (not card network-initiated)
+  2. Tangible item (not digital goods, services, or intangible items)
+  3. Shipped to the address on the PayPal transaction
+  4. Proof of shipment provided (tracking number)
+  5. For amounts ≥ $750: signature confirmation required
+  6. Dispute type is INR or Unauthorized (NOT SNAD)
+  7. Transaction not marked as "No Seller Protection" at time of sale
+  8. Single transaction (not partial payment)
 
-SP Requirements (all must be met):
-  1. Item shipped to confirmed shipping address on the transaction
-  2. Proof of shipment or delivery (tracking number)
-  3. For tangible goods:
-     - Signature confirmation required for orders ≥ $750
-  4. Single physical item shipped (not digital goods for UNAUTHORIZED claims)
-  5. Transaction date within 180 days of claim
-  6. Merchant account in good standing
-  7. No prior chargebacks for same transaction
+Enhanced Seller Protection (for UNAUTHORIZED only):
+  - Additional requirements: 2FA verification, no account breach
 
-SP Gaps (reasons SP might not apply):
-  - Shipped to unconfirmed address
-  - No tracking / no proof of shipment
-  - Signature missing for ≥$750 orders
-  - Digital goods dispute (UNAUTHORIZED)
-  - Item is in excluded categories:
-    * Vehicles, real estate, gold, platinum, precious metals
-    * Custom items (made-to-order)
-    * Industrial machinery / items
-    * Payments for professional services
-    * License key / in-game currency
+SP limitations:
+  - Does not apply to custom or made-to-order items in SNAD context
+  - Does not cover digital downloads
+  - Does not cover services (coaching, consulting, etc.)
+  - Ticket re-sellers: additional requirements apply
 
 This is a pure oracle module — no I/O, no persistence.
 """
@@ -44,260 +37,285 @@ from enum import Enum
 from typing import Optional
 
 
-class SPEligibility(str, Enum):
-    ELIGIBLE         = "ELIGIBLE"      # Fully covered
-    LIKELY_ELIGIBLE  = "LIKELY_ELIGIBLE"  # Meets most criteria, minor gaps
-    INELIGIBLE       = "INELIGIBLE"    # Fails hard requirements
-    NOT_APPLICABLE   = "NOT_APPLICABLE"  # Claim type not covered (SNAD)
-    PARTIAL          = "PARTIAL"       # Some conditions unmet; partial protection
+class SPEligibilityStatus(str, Enum):
+    FULLY_ELIGIBLE     = "FULLY_ELIGIBLE"     # All requirements met
+    CONDITIONALLY_ELIGIBLE = "CONDITIONALLY_ELIGIBLE"  # Met with caveats
+    INELIGIBLE         = "INELIGIBLE"         # Does not qualify
+    UNKNOWN            = "UNKNOWN"            # Cannot determine without more info
 
 
-class SPGapSeverity(str, Enum):
-    HARD_FAIL = "HARD_FAIL"      # Disqualifies SP entirely
-    SOFT_GAP  = "SOFT_GAP"       # Weakens case but doesn't disqualify
-    WARNING   = "WARNING"        # Should be fixed for future orders
+class SPCoverageType(str, Enum):
+    INR_COVERAGE          = "INR_COVERAGE"           # Item Not Received
+    UNAUTHORIZED_COVERAGE = "UNAUTHORIZED_COVERAGE"  # Unauthorized transaction
+    NO_COVERAGE           = "NO_COVERAGE"            # SNAD or ineligible type
+    ENHANCED_COVERAGE     = "ENHANCED_COVERAGE"      # Unauthorized + 2FA
 
 
-class ExcludedCategory(str, Enum):
-    VEHICLE           = "VEHICLE"
-    REAL_ESTATE       = "REAL_ESTATE"
-    PRECIOUS_METALS   = "PRECIOUS_METALS"
-    CUSTOM_MADE       = "CUSTOM_MADE"
-    INDUSTRIAL        = "INDUSTRIAL"
-    SERVICES          = "SERVICES"
-    DIGITAL_LICENSE   = "DIGITAL_LICENSE"
-    IN_GAME_CURRENCY  = "IN_GAME_CURRENCY"
-    NONE              = "NONE"
+class SPEligibilityGapType(str, Enum):
+    WRONG_DISPUTE_TYPE        = "WRONG_DISPUTE_TYPE"
+    MISSING_TRACKING          = "MISSING_TRACKING"
+    MISSING_SIGNATURE         = "MISSING_SIGNATURE"      # Required for ≥ $750
+    WRONG_SHIP_ADDRESS        = "WRONG_SHIP_ADDRESS"
+    DIGITAL_GOODS             = "DIGITAL_GOODS"
+    INTANGIBLE_ITEM           = "INTANGIBLE_ITEM"
+    NO_SP_FLAG_AT_SALE        = "NO_SP_FLAG_AT_SALE"
+    PARTIAL_PAYMENT           = "PARTIAL_PAYMENT"
+    TICKET_RESELLER_RULES     = "TICKET_RESELLER_RULES"
+    CUSTOM_ITEM               = "CUSTOM_ITEM"
 
 
 @dataclass
-class SPInput:
+class SPEligibilityGap:
+    """One gap in Seller Protection eligibility."""
+    gap_type: SPEligibilityGapType
+    is_blocking: bool           # True = disqualifies SP outright
+    description: str
+    remediation: str            # What could fix this (if anything)
+
+
+@dataclass
+class SellerProtectionInput:
     """Input for Seller Protection eligibility check."""
     dispute_id: str
-    claim_type: str               # INR / UNAUTHORIZED / SNAD
+    claim_type: str              # INR / SNAD / UNAUTHORIZED / DUPLICATE
 
-    # Order facts
-    order_amount: float
-    is_physical_item: bool = True
-    item_category: ExcludedCategory = ExcludedCategory.NONE
+    # Transaction characteristics
+    transaction_amount: float
+    item_is_tangible: bool = True
+    item_is_digital: bool = False
+    item_is_service: bool = False
+    item_is_custom: bool = False
+    item_is_ticket: bool = False      # Event ticket (special rules)
 
-    # Shipping / delivery
-    shipped_to_confirmed_address: bool = False
+    # Shipping evidence
     has_tracking_number: bool = False
-    tracking_shows_delivered: bool = False
+    tracking_carrier: str = ""
+    shipped_to_paypal_address: bool = True  # Delivery address matches PayPal transaction
+
+    # Signature confirmation (required ≥ $750)
     has_signature_confirmation: bool = False
 
-    # Account standing
-    merchant_account_in_good_standing: bool = True
-    transaction_within_180_days: bool = True
+    # Transaction flags
+    transaction_marked_no_sp: bool = False   # "No Seller Protection" at sale time
+    is_partial_payment: bool = False         # Part of a split/installment payment
 
-    # Prior disputes
-    prior_chargeback_same_transaction: bool = False
+    # Enhanced SP (unauthorized only)
+    buyer_account_verified_2fa: bool = False  # Buyer used 2FA at time of transaction
+    no_account_breach_detected: bool = True   # No sign of account takeover
 
-    # For UNAUTHORIZED
-    buyer_has_verified_paypal_account: bool = True
-
-
-@dataclass
-class SPGap:
-    """One gap in Seller Protection eligibility."""
-    requirement: str
-    severity: SPGapSeverity
-    description: str
-    fix: str              # What merchant can do (retroactive or for future)
+    # Miscellaneous
+    is_physical_goods: Optional[bool] = None  # Override for edge cases
 
 
 @dataclass
-class SPReport:
-    """
-    Seller Protection eligibility assessment.
-    """
+class SellerProtectionReport:
+    """Seller Protection eligibility report."""
     dispute_id: str
-    claim_type: str
-    eligibility: SPEligibility
 
-    # Score (0-100)
-    sp_score: float
+    # Core determination
+    eligibility_status: SPEligibilityStatus
+    coverage_type: SPCoverageType
 
-    # Gaps
-    gaps: list[SPGap]
-    hard_fail_count: int
-    soft_gap_count: int
+    # Detail
+    gaps: list[SPEligibilityGap]
+    blocking_gaps: int
+    fixable_gaps: int              # Gaps that could be remediated
 
-    # Specific checks
-    signature_required: bool          # Is signature required for this order?
-    signature_missing: bool
-    address_confirmed: bool
-    tracking_present: bool
+    # Financial impact
+    chargeback_fee_waived: bool    # True if SP means $20 fee is waived
+    fee_savings: float             # Amount saved by SP
 
     # Guidance
-    sp_text_to_cite: str              # Text to include in dispute response
-    action_items: list[str]
+    sp_recommendation: str
+    missing_evidence: list[str]    # Specific evidence items to gather
+    signature_required: bool       # True if ≥ $750 → signature required
+
     summary: str
 
 
-def _signature_required(amount: float) -> bool:
-    return amount >= 750.0
+def _check_dispute_type(inp: SellerProtectionInput) -> Optional[SPEligibilityGap]:
+    ct = inp.claim_type.upper()
+    if ct == "SNAD":
+        return SPEligibilityGap(
+            gap_type=SPEligibilityGapType.WRONG_DISPUTE_TYPE,
+            is_blocking=True,
+            description="SNAD disputes are NEVER covered by Seller Protection",
+            remediation="No remediation — SNAD is excluded from SP by policy",
+        )
+    if ct not in ("INR", "UNAUTHORIZED", "DUPLICATE"):
+        return SPEligibilityGap(
+            gap_type=SPEligibilityGapType.WRONG_DISPUTE_TYPE,
+            is_blocking=True,
+            description=f"Claim type '{inp.claim_type}' is not covered by Seller Protection",
+            remediation="Verify claim type classification with PayPal",
+        )
+    return None
 
 
-def _check_gaps(inp: SPInput) -> list[SPGap]:
-    gaps: list[SPGap] = []
-
-    # Hard fail: SNAD
-    if inp.claim_type == "SNAD":
-        gaps.append(SPGap(
-            requirement="Claim type coverage",
-            severity=SPGapSeverity.HARD_FAIL,
-            description="Seller Protection does NOT cover Significantly Not As Described claims",
-            fix="Cannot claim SP for SNAD — focus on product accuracy evidence instead",
+def _check_item_type(inp: SellerProtectionInput) -> list[SPEligibilityGap]:
+    gaps = []
+    if inp.item_is_digital:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.DIGITAL_GOODS,
+            is_blocking=True,
+            description="Digital goods are excluded from Seller Protection",
+            remediation="No remediation — digital goods policy exclusion",
         ))
-        return gaps  # No point checking further
-
-    # Hard fail: excluded category
-    if inp.item_category != ExcludedCategory.NONE:
-        gaps.append(SPGap(
-            requirement="Item category",
-            severity=SPGapSeverity.HARD_FAIL,
-            description=f"Item category {inp.item_category.value} is excluded from Seller Protection",
-            fix="Consult PayPal's excluded categories list for future transactions",
+    if inp.item_is_service:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.INTANGIBLE_ITEM,
+            is_blocking=True,
+            description="Services (intangible) are excluded from Seller Protection",
+            remediation="No remediation — service transactions not eligible",
         ))
-
-    # Hard fail: prior chargeback same transaction
-    if inp.prior_chargeback_same_transaction:
-        gaps.append(SPGap(
-            requirement="No prior chargeback",
-            severity=SPGapSeverity.HARD_FAIL,
-            description="Prior chargeback already filed for this transaction",
-            fix="Cannot claim SP if a chargeback already exists for this transaction",
+    if inp.item_is_ticket:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.TICKET_RESELLER_RULES,
+            is_blocking=False,
+            description="Event ticket transactions have additional SP requirements",
+            remediation="Provide proof of ticket transfer and buyer authorization",
         ))
+    return gaps
 
-    # Hard fail: transaction age
-    if not inp.transaction_within_180_days:
-        gaps.append(SPGap(
-            requirement="Transaction within 180 days",
-            severity=SPGapSeverity.HARD_FAIL,
-            description="Transaction is older than 180 days — SP window expired",
-            fix="Expedite dispute responses; SP expires 180 days from transaction",
-        ))
 
-    # Hard fail: digital goods for UNAUTHORIZED
-    if not inp.is_physical_item and inp.claim_type == "UNAUTHORIZED":
-        gaps.append(SPGap(
-            requirement="Physical item",
-            severity=SPGapSeverity.HARD_FAIL,
-            description="Seller Protection for UNAUTHORIZED does not cover digital goods",
-            fix="Collect device/IP evidence for digital goods disputes — SP does not apply",
-        ))
+def _check_shipping(inp: SellerProtectionInput) -> list[SPEligibilityGap]:
+    gaps = []
+    ct = inp.claim_type.upper()
 
-    # Soft gap: unconfirmed address
-    if not inp.shipped_to_confirmed_address:
-        gaps.append(SPGap(
-            requirement="Confirmed shipping address",
-            severity=SPGapSeverity.SOFT_GAP,
-            description="Item not shipped to PayPal-confirmed address on file",
-            fix="Always ship to the confirmed address shown on the PayPal transaction",
+    # Tracking is required for INR disputes
+    if ct == "INR" and not inp.has_tracking_number:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.MISSING_TRACKING,
+            is_blocking=True,
+            description="INR dispute requires proof of shipment (tracking number)",
+            remediation="Obtain and upload carrier tracking confirmation",
         ))
 
-    # Soft gap: no tracking
-    if not inp.has_tracking_number:
-        gaps.append(SPGap(
-            requirement="Proof of shipment",
-            severity=SPGapSeverity.SOFT_GAP,
-            description="No tracking number — cannot prove shipment",
-            fix="Always use a trackable shipping method and retain the tracking number",
+    # Delivery must be to PayPal address
+    if not inp.shipped_to_paypal_address:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.WRONG_SHIP_ADDRESS,
+            is_blocking=True,
+            description="Item was not shipped to the address on the PayPal transaction",
+            remediation="No remediation — address mismatch disqualifies SP",
         ))
 
-    # Signature required but missing
-    sig_required = _signature_required(inp.order_amount)
-    if sig_required and not inp.has_signature_confirmation:
-        gaps.append(SPGap(
-            requirement="Signature confirmation (≥$750)",
-            severity=SPGapSeverity.SOFT_GAP,
-            description=f"Order is ${inp.order_amount:.2f} — signature confirmation required for Seller Protection",
-            fix="Retroactively request signature confirmation from carrier; require for all future ≥$750 orders",
+    # Signature required for ≥ $750
+    if inp.transaction_amount >= 750.0 and not inp.has_signature_confirmation:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.MISSING_SIGNATURE,
+            is_blocking=True,
+            description=(f"Transaction ${inp.transaction_amount:.2f} ≥ $750 requires "
+                         "signature confirmation for SP coverage"),
+            remediation="Obtain signature confirmation from carrier records",
         ))
 
     return gaps
 
 
-def check_seller_protection(inp: SPInput) -> SPReport:
+def _check_sale_flags(inp: SellerProtectionInput) -> list[SPEligibilityGap]:
+    gaps = []
+    if inp.transaction_marked_no_sp:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.NO_SP_FLAG_AT_SALE,
+            is_blocking=True,
+            description="Transaction was flagged 'No Seller Protection' at time of sale",
+            remediation="No remediation — flag was set by PayPal at transaction time",
+        ))
+    if inp.is_partial_payment:
+        gaps.append(SPEligibilityGap(
+            gap_type=SPEligibilityGapType.PARTIAL_PAYMENT,
+            is_blocking=True,
+            description="Partial/installment payments are excluded from Seller Protection",
+            remediation="Confirm with PayPal whether full transaction is eligible",
+        ))
+    return gaps
+
+
+def check_seller_protection(inp: SellerProtectionInput) -> SellerProtectionReport:
     """
-    Assess Seller Protection eligibility for a dispute.
+    Determine Seller Protection eligibility for a dispute.
     """
-    gaps = _check_gaps(inp)
-    hard_fails = [g for g in gaps if g.severity == SPGapSeverity.HARD_FAIL]
-    soft_gaps = [g for g in gaps if g.severity == SPGapSeverity.SOFT_GAP]
+    all_gaps: list[SPEligibilityGap] = []
 
-    # Eligibility
-    if inp.claim_type == "SNAD":
-        eligibility = SPEligibility.NOT_APPLICABLE
-    elif hard_fails:
-        eligibility = SPEligibility.INELIGIBLE
-    elif soft_gaps:
-        # Partial if some soft gaps, likely eligible if minor ones
-        critical_soft = [g for g in soft_gaps if "tracking" in g.requirement.lower() or "signature" in g.requirement.lower()]
-        eligibility = SPEligibility.PARTIAL if critical_soft else SPEligibility.LIKELY_ELIGIBLE
+    # 1. Dispute type check
+    type_gap = _check_dispute_type(inp)
+    if type_gap:
+        all_gaps.append(type_gap)
+
+    # 2. Item type checks
+    all_gaps.extend(_check_item_type(inp))
+
+    # 3. Shipping/delivery checks (only relevant if not already disqualified by type)
+    ct = inp.claim_type.upper()
+    if ct != "SNAD":
+        all_gaps.extend(_check_shipping(inp))
+
+    # 4. Sale-time flags
+    all_gaps.extend(_check_sale_flags(inp))
+
+    blocking = sum(1 for g in all_gaps if g.is_blocking)
+    fixable  = sum(1 for g in all_gaps
+                   if not g.is_blocking and "No remediation" not in g.remediation)
+
+    signature_required = inp.transaction_amount >= 750.0
+
+    # Determine eligibility status
+    if blocking > 0:
+        status = SPEligibilityStatus.INELIGIBLE
+    elif len(all_gaps) > 0:
+        status = SPEligibilityStatus.CONDITIONALLY_ELIGIBLE
     else:
-        eligibility = SPEligibility.ELIGIBLE
+        status = SPEligibilityStatus.FULLY_ELIGIBLE
 
-    # Score
-    score = 100.0
-    score -= len(hard_fails) * 40
-    score -= len(soft_gaps) * 15
-    score = max(0.0, min(100.0, score))
-
-    sig_required = _signature_required(inp.order_amount)
-    sig_missing = sig_required and not inp.has_signature_confirmation
-
-    # SP text
-    if eligibility == SPEligibility.ELIGIBLE:
-        sp_text = (
-            f"This transaction qualifies for PayPal Seller Protection as an "
-            f"{'Item Not Received' if inp.claim_type == 'INR' else 'Unauthorized Transaction'} claim. "
-            f"The item was shipped to the confirmed address with tracking "
-            f"{'and signature confirmation ' if inp.has_signature_confirmation else ''}"
-            f"as required by PayPal's Seller Protection policy."
-        )
-    elif eligibility == SPEligibility.LIKELY_ELIGIBLE:
-        sp_text = (
-            f"This transaction is likely covered by PayPal Seller Protection. "
-            f"Shipment was made to the confirmed address with tracking number provided."
-        )
-    elif eligibility == SPEligibility.NOT_APPLICABLE:
-        sp_text = "Seller Protection does not apply to Significantly Not As Described claims."
+    # Determine coverage type
+    if status == SPEligibilityStatus.INELIGIBLE:
+        coverage = SPCoverageType.NO_COVERAGE
+    elif ct == "UNAUTHORIZED":
+        if inp.buyer_account_verified_2fa and inp.no_account_breach_detected:
+            coverage = SPCoverageType.ENHANCED_COVERAGE
+        else:
+            coverage = SPCoverageType.UNAUTHORIZED_COVERAGE
     else:
-        sp_text = ""
+        coverage = SPCoverageType.INR_COVERAGE
 
-    # Action items
-    actions: list[str] = []
-    if sig_missing and eligibility in (SPEligibility.PARTIAL, SPEligibility.LIKELY_ELIGIBLE):
-        actions.append(f"Contact carrier to obtain retrospective delivery confirmation for ${inp.order_amount:.2f} order")
-    if not inp.shipped_to_confirmed_address:
-        actions.append("For future orders: always ship to the PayPal-confirmed address")
-    if not inp.has_tracking_number:
-        actions.append("For future orders: always use a trackable carrier and save the tracking number")
-    if eligibility == SPEligibility.ELIGIBLE:
-        actions.append("Include SP eligibility text in your dispute response to PayPal")
+    # Fee impact
+    cb_waived = status in (SPEligibilityStatus.FULLY_ELIGIBLE,
+                            SPEligibilityStatus.CONDITIONALLY_ELIGIBLE)
+    fee_savings = 20.0 if cb_waived else 0.0
+
+    # Build missing evidence list
+    missing_evidence: list[str] = []
+    for g in all_gaps:
+        if "No remediation" not in g.remediation:
+            missing_evidence.append(g.remediation)
+
+    if status == SPEligibilityStatus.FULLY_ELIGIBLE:
+        recommendation = "SP coverage confirmed — $20 chargeback fee will be waived if merchant loses"
+    elif status == SPEligibilityStatus.CONDITIONALLY_ELIGIBLE:
+        recommendation = "SP likely applies — resolve minor gaps to ensure coverage"
+    else:
+        reason = all_gaps[0].description if all_gaps else "Unknown disqualification"
+        recommendation = f"SP does not apply — {reason}"
 
     summary = (
-        f"SP {inp.dispute_id}: {inp.claim_type} | eligibility={eligibility.value} | "
-        f"score={score:.0f} | hard_fails={len(hard_fails)} | soft_gaps={len(soft_gaps)} | "
-        f"sig_required={sig_required} sig_missing={sig_missing}"
+        f"SP {inp.dispute_id}: "
+        f"status={status.value} | coverage={coverage.value} | "
+        f"blocking_gaps={blocking} | fee_savings=${fee_savings:.0f} | "
+        f"sig_required={signature_required}"
     )
 
-    return SPReport(
+    return SellerProtectionReport(
         dispute_id=inp.dispute_id,
-        claim_type=inp.claim_type,
-        eligibility=eligibility,
-        sp_score=round(score, 1),
-        gaps=gaps,
-        hard_fail_count=len(hard_fails),
-        soft_gap_count=len(soft_gaps),
-        signature_required=sig_required,
-        signature_missing=sig_missing,
-        address_confirmed=inp.shipped_to_confirmed_address,
-        tracking_present=inp.has_tracking_number,
-        sp_text_to_cite=sp_text,
-        action_items=actions,
+        eligibility_status=status,
+        coverage_type=coverage,
+        gaps=all_gaps,
+        blocking_gaps=blocking,
+        fixable_gaps=fixable,
+        chargeback_fee_waived=cb_waived,
+        fee_savings=fee_savings,
+        sp_recommendation=recommendation,
+        missing_evidence=missing_evidence,
+        signature_required=signature_required,
         summary=summary,
     )
