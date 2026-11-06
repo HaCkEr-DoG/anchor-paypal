@@ -43,6 +43,9 @@ class GuardianConfig:
     morning_brief_hour: int = 8           # 8 AM merchant local time
     morning_brief_timezone: str = "UTC"   # IANA timezone, e.g. "America/New_York"
 
+    # PayPal integration (per-merchant, set during onboarding)
+    paypal_webhook_id: str = ""  # Merchant's own PayPal webhook registration ID
+
     # Merchant profile (used by Oracle for win rate priors)
     account_age_days: int = 730
     hourly_rate: float = 50.0

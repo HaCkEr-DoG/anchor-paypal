@@ -289,7 +289,12 @@ class RecoveryAgent:
             if send_r.status_code not in (200, 202):
                 print(f"[Recovery] Invoice send failed: {send_r.status_code}")
 
-        return f"https://www.sandbox.paypal.com/invoice/payerView/details/{invoice_id}"
+        _inv_host = (
+            "www.paypal.com"
+            if os.environ.get("PAYPAL_ENV", "sandbox") == "live"
+            else "www.sandbox.paypal.com"
+        )
+        return f"https://{_inv_host}/invoice/payerView/details/{invoice_id}"
 
     # ── Notification ────────────────────────────────────────────────────────
 

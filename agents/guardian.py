@@ -39,9 +39,15 @@ MERCHANT_ID = os.environ.get("MERCHANT_ID", "default")
 
 class Guardian:
 
-    def __init__(self, config: GuardianConfig | None = None, merchant_id: str | None = None):
+    def __init__(
+        self,
+        config: GuardianConfig | None = None,
+        merchant_id: str | None = None,
+        approval_secret: str = "",
+    ):
         self.config = config
         self.merchant_id = merchant_id
+        self.approval_secret = approval_secret
         _env = os.environ.get("PAYPAL_ENV", "sandbox")
         self.paypal_base = (
             "https://api.paypal.com" if _env == "live" else "https://api.sandbox.paypal.com"
@@ -214,7 +220,7 @@ class Guardian:
             reasoning=f"Auto-accepted: {reason}",
             requires_attention=False,
         )
-        await log_action(MERCHANT_ID, action)
+        await log_action(self.merchant_id or MERCHANT_ID, action)
 
         if self.config.notify_on_auto_action:
             await self._notify(
@@ -262,7 +268,7 @@ class Guardian:
             reasoning="INQUIRY stage: buyer message sent before chargeback escalation",
             requires_attention=True,  # merchant should monitor for buyer reply
         )
-        await log_action(MERCHANT_ID, action)
+        await log_action(self.merchant_id or MERCHANT_ID, action)
 
         if self.config.notify_on_auto_action:
             await self._notify(
@@ -323,7 +329,7 @@ class Guardian:
             reasoning=(f"Evidence submitted after approval; model win estimate {win_prob:.0%}" if result else f"Evidence unavailable or insufficient; review needed ({win_prob:.0%} model win estimate)"),
             requires_attention=result is None,
         )
-        await log_action(MERCHANT_ID, action)
+        await log_action(self.merchant_id or MERCHANT_ID, action)
 
         if self.config.notify_on_auto_action:
             if result:
@@ -339,12 +345,14 @@ class Guardian:
                 )
 
     def _make_approval_token(self, dispute_id: str, action: str) -> str:
-        """Generate a time-limited HMAC token bound to this dispute + action."""
-        secret = os.environ.get("APPROVAL_TOKEN_SECRET", "")
+        """Generate a time-limited HMAC token bound to this dispute + merchant + action."""
+        # Prefer the ES-persisted secret passed at construction time over raw env var
+        secret = self.approval_secret or os.environ.get("APPROVAL_TOKEN_SECRET", "")
         if not secret:
             return ""
+        mid = self.merchant_id or MERCHANT_ID
         expiry = int(time.time()) + 48 * 3600
-        payload = f"{dispute_id}:{MERCHANT_ID}:{action}:{expiry}"
+        payload = f"{dispute_id}:{mid}:{action}:{expiry}"
         sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         return f"{expiry}.{sig}"
 
@@ -365,11 +373,12 @@ class Guardian:
             reasoning=" | ".join(decision.reasoning) if decision else "manual review needed",
             requires_attention=True,
         )
-        await log_action(MERCHANT_ID, action)
+        mid = self.merchant_id or MERCHANT_ID
+        await log_action(mid, action)
 
         token = self._make_approval_token(dispute_id, "fight")
         base_url = os.environ.get("RENDER_EXTERNAL_URL", "https://anchor-api.onrender.com")
-        approve_url = f"{base_url}/approve/{dispute_id}?token={token}"
+        approve_url = f"{base_url}/approve/{dispute_id}?token={token}&mid={mid}"
 
         msg = (
             f"🔔 Decision needed: ${amount:.2f} dispute `{dispute_id}`\n"

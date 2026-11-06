@@ -206,7 +206,7 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
     body = await request.body()
     headers = dict(request.headers)
 
-    await _verify_paypal_signature(body, headers)
+    await _verify_paypal_signature(body, headers, merchant_id=merchant_id)
 
     event = json.loads(body)
     event_id = event.get("id", "")
@@ -220,7 +220,7 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
         background.add_task(_handle_dispute_created, event, merchant_id)
 
     elif event_type == "CUSTOMER.DISPUTE.UPDATED":
-        background.add_task(_handle_dispute_updated, event)
+        background.add_task(_handle_dispute_updated, event, merchant_id)
 
     elif event_type in (
         "INVOICING.INVOICE.UPDATED",
@@ -232,15 +232,17 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
         background.add_task(_handle_order_approved, event, merchant_id)
 
     elif event_type == "PAYMENT.CAPTURE.COMPLETED":
-        background.add_task(_handle_capture, event)
+        background.add_task(_handle_capture, event, merchant_id)
 
 
-async def _verify_paypal_signature(body: bytes, headers: dict):
+async def _verify_paypal_signature(body: bytes, headers: dict, merchant_id: str = ""):
     """
     PayPal WEBHOOK-SIG verification.
     PayPal sends: PayPal-Transmission-Id, PayPal-Cert-Url, PayPal-Transmission-Time,
                   PayPal-Transmission-Sig, PayPal-Auth-Algo
     We must verify before trusting any payload — this prevents replay attacks.
+    Uses per-merchant paypal_webhook_id from config when available, falls back
+    to the PAYPAL_WEBHOOK_ID env var.
     """
     import httpx
 
@@ -252,9 +254,19 @@ async def _verify_paypal_signature(body: bytes, headers: dict):
 
     if not all([transmission_id, timestamp, cert_url, actual_sig]):
         raise HTTPException(400, "Missing PayPal signature headers")
-    if not os.environ.get("PAYPAL_WEBHOOK_ID"):
-        # Fail closed. A missing webhook ID is a configuration error, never a
-        # reason to accept an unverified event in demo mode.
+
+    # Resolve per-merchant webhook ID: config takes priority over global env var
+    webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    if merchant_id:
+        try:
+            from agents.config import load_config as _load_config
+            _cfg = await _load_config(merchant_id)
+            if _cfg.paypal_webhook_id:
+                webhook_id = _cfg.paypal_webhook_id
+        except Exception:
+            pass
+    if not webhook_id:
+        # Fail closed — missing webhook ID is a config error, never accept unverified events
         raise HTTPException(503, "PAYPAL_WEBHOOK_ID is not configured")
 
     from agents.paypal_client import get_client
@@ -266,6 +278,7 @@ async def _verify_paypal_signature(body: bytes, headers: dict):
             transmission_sig=actual_sig,
             transmission_time=timestamp,
             webhook_event=json.loads(body),
+            webhook_id_override=webhook_id,
         )
     except Exception as e:
         raise HTTPException(503, f"PayPal signature verification unavailable: {e}") from e
@@ -307,6 +320,7 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
         amount=dispute_amount,
         reason=reason,
         timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+        merchant_id=merchant_id,
     )
     seller_transaction_id = resource.get("disputed_transactions", [{}])[0].get(
         "seller_transaction_id"
@@ -315,7 +329,10 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     print(f"[Watcher] New dispute {dispute_id}: ${dispute_amount} ({reason})")
 
     # Route through Guardian — applies pre-auth thresholds before acting
-    guardian = Guardian(merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"))
+    guardian = Guardian(
+        merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"),
+        approval_secret=APPROVAL_TOKEN_SECRET,
+    )
     await guardian.handle_dispute(
         dispute_id=dispute_id,
         dispute_amount=dispute_amount,
@@ -325,7 +342,7 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     )
 
 
-async def _handle_dispute_updated(event: dict):
+async def _handle_dispute_updated(event: dict, merchant_id: str = ""):
     resource = event.get("resource", {})
     dispute_id = resource.get("dispute_id")
     status = resource.get("status")
@@ -341,6 +358,7 @@ async def _handle_dispute_updated(event: dict):
             event_id=f"claim-{dispute_id}", event_type="eligible_dispute", amount=amount,
             reason=resource.get("reason", ""),
             timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+            merchant_id=merchant_id,
         )
     print(f"[Watcher] Dispute {dispute_id} updated → {status}")
     # Update Bryntum board state, notify if resolved in seller's favor
@@ -368,7 +386,7 @@ async def _handle_order_approved(event: dict, merchant_id: str = ""):
     await recovery.store_approved_order(event, mid)
 
 
-async def _handle_capture(event: dict):
+async def _handle_capture(event: dict, merchant_id: str = ""):
     """New payment — baseline data for future dispute risk scoring."""
     resource = event.get("resource", {})
     amount = resource.get("amount", {})
@@ -384,12 +402,14 @@ async def _handle_capture(event: dict):
         amount=value,
         reason="",
         timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+        merchant_id=merchant_id,
     )
     print(f"[Watcher] Capture {resource.get('id')} — indexing for dispute baseline")
 
 
 async def _record_merchant_metric_event(
-    event_id: str, event_type: str, amount: float, reason: str, timestamp: str
+    event_id: str, event_type: str, amount: float, reason: str, timestamp: str,
+    merchant_id: str = "",
 ) -> None:
     """Persist the minimal merchant-scoped aggregates used by the fee-tier estimate."""
     es_url = os.environ.get("ELASTICSEARCH_URL")
@@ -400,7 +420,7 @@ async def _record_merchant_metric_event(
     payload = {
         "event_id": event_id,
         "event_type": event_type,
-        "merchant_id": os.environ.get("MERCHANT_ID", "default"),
+        "merchant_id": merchant_id or os.environ.get("MERCHANT_ID", "default"),
         "amount": amount,
         "reason": reason,
         "timestamp": timestamp,
@@ -473,7 +493,9 @@ async def approve_dispute(
       - Replay attacks (token expires)
       - Unauthorized approvals (HMAC requires the server secret)
     """
-    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    # mid is embedded in the approval URL by Guardian; fall back to env var for
+    # single-tenant deployments where the URL was generated before this change.
+    merchant_id = request.query_params.get("mid") or os.environ.get("MERCHANT_ID", "default")
 
     token = request.query_params.get("token")
     if not token:

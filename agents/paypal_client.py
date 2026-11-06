@@ -232,10 +232,13 @@ class PayPalClient:
         transmission_sig: str,
         transmission_time: str,
         webhook_event: dict,
+        webhook_id_override: str = "",
     ) -> bool:
         """
         POST /v1/notifications/verify-webhook-signature
         Returns True if PayPal confirms the signature is valid.
+        webhook_id_override lets callers pass a per-merchant webhook ID;
+        falls back to the PAYPAL_WEBHOOK_ID env var.
         """
         payload = {
             "auth_algo": auth_algo,
@@ -243,7 +246,7 @@ class PayPalClient:
             "transmission_id": transmission_id,
             "transmission_sig": transmission_sig,
             "transmission_time": transmission_time,
-            "webhook_id": os.environ.get("PAYPAL_WEBHOOK_ID", ""),
+            "webhook_id": webhook_id_override or os.environ.get("PAYPAL_WEBHOOK_ID", ""),
             "webhook_event": webhook_event,
         }
         r = await self._request("POST", f"{self.base}/v1/notifications/verify-webhook-signature", json=payload)
