@@ -30,6 +30,7 @@ from oracle.decision import (
     Evidence,
 )
 from oracle.adversarial import AdversarialReport, analyze as adversarial_analyze
+from oracle.paypal_rubric import RubricScore
 
 
 @dataclass
@@ -86,6 +87,8 @@ def score(
     oracle_win_prob_boost: float = 0.0,     # pre-computed from fraud_detector.win_probability_boost
     # Adversarial signals
     adversarial_report: Optional[AdversarialReport] = None,
+    # PayPal rubric alignment
+    rubric_score: Optional[RubricScore] = None,  # from oracle.paypal_rubric.score_rubric
     # Carrier timing
     carrier_timing_risk: str = "",          # from carrier.delivery_timing_risk
     # Historical calibration
@@ -163,6 +166,30 @@ def score(
             for sig in adversarial_report.signals:
                 if sig.severity in ("high", "critical"):
                     reasoning.append(f"  ↳ {sig.severity.upper()}: {sig.description}")
+
+    # ── 3.5. PayPal rubric alignment ────────────────────────────────────────
+    if rubric_score is not None:
+        rubric_adj = max(-0.15, min(0.25, rubric_score.win_probability_boost))
+        if abs(rubric_adj) > 0.001:
+            p += rubric_adj
+            sp_status = rubric_score.seller_protection.status.value
+            contributions.append(SignalContribution(
+                source="paypal_rubric",
+                raw_value=rubric_score.score,
+                contribution=rubric_adj,
+                description=(
+                    f"PayPal rubric alignment {rubric_score.score:.0%}: "
+                    f"SP={sp_status}, boost={rubric_adj:+.0%}"
+                ),
+            ))
+            reasoning.append(
+                f"PayPal rubric: {rubric_score.score:.0%} alignment "
+                f"(SP: {sp_status}) → {rubric_adj:+.0%}"
+            )
+            if rubric_score.missing_critical:
+                reasoning.append(
+                    f"  ↳ Missing critical evidence: {', '.join(rubric_score.missing_critical)}"
+                )
 
     # ── 4. Carrier timing signal ────────────────────────────────────────────
     if carrier_timing_risk:
