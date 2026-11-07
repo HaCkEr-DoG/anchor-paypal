@@ -5754,5 +5754,65 @@ async def api_evidence_assembly(request: Request):
     })
 
 
+@app.post("/api/oracle/chargeback-forecast")
+async def api_chargeback_forecast(request: Request):
+    """
+    POST /api/oracle/chargeback-forecast
+
+    Wave 88 — Chargeback Rate Forecaster.
+    Predicts next-30-day chargeback rate using trailing dispute history,
+    trend detection, and claim-type risk mix. Alerts when approaching
+    PayPal's 1.5% monitoring threshold.
+
+    Body JSON fields:
+      merchant_id          str
+      high_season_active   bool   optional, default false
+      new_product_launch   bool   optional, default false
+      monthly_records      list of:
+        month_label          str   e.g. "2025-01"
+        total_transactions   int
+        total_disputes       int
+        unauth_disputes      int   optional, default 0
+        inr_disputes         int   optional, default 0
+        snad_disputes        int   optional, default 0
+    """
+    from oracle.chargeback_rate_forecaster import (
+        MonthlyRecord, ChargebackForecastInput, forecast_chargeback_rate,
+    )
+    body = await request.json()
+    raw_records = body.get("monthly_records", [])
+    records = [
+        MonthlyRecord(
+            month_label=str(m.get("month_label", "?")),
+            total_transactions=int(m.get("total_transactions", 0)),
+            total_disputes=int(m.get("total_disputes", 0)),
+            unauth_disputes=int(m.get("unauth_disputes", 0)),
+            inr_disputes=int(m.get("inr_disputes", 0)),
+            snad_disputes=int(m.get("snad_disputes", 0)),
+        )
+        for m in raw_records
+    ]
+    inp = ChargebackForecastInput(
+        merchant_id=str(body.get("merchant_id", "UNKNOWN")),
+        monthly_records=records,
+        high_season_active=bool(body.get("high_season_active", False)),
+        new_product_launch=bool(body.get("new_product_launch", False)),
+    )
+    r = forecast_chargeback_rate(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "base_rate": r.base_rate,
+        "trend": r.trend.value,
+        "trend_magnitude": r.trend_magnitude,
+        "forecast_rate": r.forecast_rate,
+        "confidence_low": r.confidence_low,
+        "confidence_high": r.confidence_high,
+        "alert_level": r.alert_level.value,
+        "days_to_threshold": r.days_to_threshold,
+        "contributing_factors": r.contributing_factors,
+        "recommendation": r.recommendation,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
