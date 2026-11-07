@@ -9521,5 +9521,93 @@ async def api_prioritize_disputes(request: Request):
     })
 
 
+# ── Chargeback Risk Scorer endpoint (wave 124) ───────────────────────────────
+
+@app.post("/api/oracle/score-chargeback-risk")
+async def api_score_chargeback_risk(request: Request):
+    from oracle.chargeback_risk_scorer import (
+        ChargebackRiskInput, ProductCategory, score_chargeback_risk,
+    )
+    body = await request.json()
+    try:
+        cat = ProductCategory(body.get("product_category", "PHYSICAL_GENERAL").upper())
+    except ValueError:
+        cat = ProductCategory.PHYSICAL_GENERAL
+    inp = ChargebackRiskInput(
+        transaction_id=body.get("transaction_id", "TXN"),
+        amount=float(body.get("amount", body.get("transaction_amount", 0.0))),
+        product_category=cat,
+        email_domain=body.get("email_domain", ""),
+        account_age_days=int(body.get("account_age_days", 365)),
+        account_prior_orders=int(body.get("account_prior_orders", body.get("prior_orders", 5))),
+        account_prior_disputes=int(body.get("account_prior_disputes", body.get("prior_chargebacks", 0))),
+        billing_shipping_match=bool(body.get("billing_shipping_match", body.get("shipping_matches_billing", True))),
+        ip_country_matches_billing=bool(body.get("ip_country_matches_billing", True)),
+        is_vpn_or_proxy=bool(body.get("is_vpn_or_proxy", False)),
+        device_fingerprint_new=bool(body.get("device_fingerprint_new", False)),
+        card_bin_prefix=body.get("card_bin_prefix", ""),
+        is_international_card=bool(body.get("is_international_card", body.get("is_international", False))),
+        is_prepaid_card=bool(body.get("is_prepaid_card", False)),
+        order_hour_utc=int(body.get("order_hour_utc", 12)),
+        orders_last_24h=int(body.get("orders_last_24h", 1)),
+    )
+    r = score_chargeback_risk(inp)
+    return JSONResponse({
+        "transaction_id": r.transaction_id,
+        "risk_score": r.risk_score,
+        "risk_tier": r.risk_tier.value,
+        "recommended_action": r.recommended_action.value,
+        "top_reason": r.top_reason,
+        "summary": r.summary,
+        "risk_factors": [{"name": f.name, "score_contribution": f.score_contribution, "description": f.description} for f in r.risk_factors],
+        "wave": 124,
+    })
+
+
+# ── Friendly Fraud Scorer endpoint (wave 125) ────────────────────────────────
+
+@app.post("/api/oracle/score-friendly-fraud")
+async def api_score_friendly_fraud(request: Request):
+    from oracle.friendly_fraud_scorer import (
+        FriendlyFraudInput, score_friendly_fraud,
+    )
+    body = await request.json()
+    inp = FriendlyFraudInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        claim_type=body.get("claim_type", "INR"),
+        disputed_amount=float(body.get("disputed_amount", 100.0)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        has_signature_confirmation=bool(body.get("has_signature_confirmation", False)),
+        item_delivered_before_dispute=bool(body.get("item_delivered_before_dispute", False)),
+        days_between_delivery_and_dispute=body.get("days_between_delivery_and_dispute"),
+        total_prior_orders=int(body.get("total_prior_orders", 0)),
+        total_prior_disputes=int(body.get("total_prior_disputes", 0)),
+        prior_disputes_won_by_buyer=int(body.get("prior_disputes_won_by_buyer", 0)),
+        is_repeat_dispute_same_merchant=bool(body.get("is_repeat_dispute_same_merchant", False)),
+        account_age_days=int(body.get("account_age_days", 0)),
+        is_digital_goods=bool(body.get("is_digital_goods", False)),
+        is_downloadable=bool(body.get("is_downloadable", False)),
+        item_accessed_after_purchase=bool(body.get("item_accessed_after_purchase", False)),
+        has_usage_logs=bool(body.get("has_usage_logs", False)),
+        same_device_as_prior_orders=bool(body.get("same_device_as_prior_orders", True)),
+        same_ip_as_prior_orders=bool(body.get("same_ip_as_prior_orders", True)),
+        shipping_matches_billing=bool(body.get("shipping_matches_billing", True)),
+        has_buyer_communication=bool(body.get("has_buyer_communication", False)),
+        buyer_acknowledged_receipt=bool(body.get("buyer_acknowledged_receipt", False)),
+    )
+    r = score_friendly_fraud(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "fraud_score": r.fraud_score,
+        "risk_level": r.risk_level.value,
+        "recommended_action": r.recommended_action.value,
+        "top_fraud_signals": r.top_fraud_signals,
+        "missing_evidence_to_prove_fraud": r.missing_evidence_to_prove_fraud,
+        "adjusted_win_probability": r.adjusted_win_probability,
+        "summary": r.summary,
+        "wave": 125,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
