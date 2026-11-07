@@ -9873,5 +9873,165 @@ async def api_score_response_quality(request: Request):
     })
 
 
+# ── HDR Forecast Engine endpoint (wave 132) ──────────────────────────────────
+
+@app.post("/api/oracle/forecast-hdr")
+async def api_forecast_hdr(request: Request):
+    from oracle.hdr_forecast_engine import HDRForecastInput, forecast_hdr
+    body = await request.json()
+    inp = HDRForecastInput(
+        merchant_id=body.get("merchant_id", "MERCHANT-001"),
+        transactions_last_90_days=int(body.get("transactions_last_90_days", 1000)),
+        disputes_last_90_days=int(body.get("disputes_last_90_days", 0)),
+        pending_disputes_count=int(body.get("pending_disputes_count", 0)),
+        pending_will_fight=int(body.get("pending_will_fight", 0)),
+        pending_fight_expected_wins=int(body.get("pending_fight_expected_wins", 0)),
+        can_defer_some_disputes=bool(body.get("can_defer_some_disputes", False)),
+        max_deferrable=int(body.get("max_deferrable", 0)),
+    )
+    r = forecast_hdr(inp)
+
+    def _scenario(s):
+        return {
+            "label": s.label,
+            "disputes_added": s.disputes_added,
+            "projected_disputes_total": s.projected_disputes_total,
+            "projected_rate": s.projected_rate,
+            "projected_tier": s.projected_tier.value,
+            "total_tier_fees": s.total_tier_fees,
+        }
+
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "current_rate": r.current_rate,
+        "current_tier": r.current_tier.value,
+        "disputes_until_next_tier": r.disputes_until_next_tier,
+        "next_tier": r.next_tier.value if r.next_tier else None,
+        "hdr_budget_remaining": r.hdr_budget_remaining,
+        "scenario_fight_all": _scenario(r.scenario_fight_all),
+        "scenario_accept_all": _scenario(r.scenario_accept_all),
+        "recommendation": r.recommendation,
+        "summary": r.summary,
+        "wave": 132,
+    })
+
+
+# ── Dispute Portfolio Analyzer endpoint (wave 133) ───────────────────────────
+
+@app.post("/api/oracle/analyze-portfolio")
+async def api_analyze_portfolio(request: Request):
+    from oracle.dispute_portfolio_analyzer import (
+        PortfolioAnalysisInput, PortfolioDispute, analyze_dispute_portfolio,
+    )
+    body = await request.json()
+    raw_disputes = body.get("disputes", [])
+    disputes = [
+        PortfolioDispute(
+            dispute_id=d.get("dispute_id", "PP-D"),
+            reason_code=d.get("reason_code", "INR"),
+            network=d.get("network", "PAYPAL"),
+            amount=float(d.get("amount", 0.0)),
+            days_remaining=int(d.get("days_remaining", 10)),
+            win_probability=float(d.get("win_probability", 0.5)),
+            response_cost=float(d.get("response_cost", 15.0)),
+            chargeback_fee=float(d.get("chargeback_fee", 20.0)),
+            is_hdr_counting=bool(d.get("is_hdr_counting", True)),
+            is_in_sp=bool(d.get("is_in_sp", False)),
+        )
+        for d in raw_disputes
+    ]
+    inp = PortfolioAnalysisInput(
+        merchant_id=body.get("merchant_id", "MERCHANT-001"),
+        disputes=disputes,
+        total_transactions_90d=int(body.get("total_transactions_90d", 1000)),
+        total_transaction_value_90d=float(body.get("total_transaction_value_90d", 50000.0)),
+    )
+    r = analyze_dispute_portfolio(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes": r.total_disputes,
+        "total_amount_at_risk": r.total_amount_at_risk,
+        "total_ev_if_all_fought": r.total_ev_if_all_fought,
+        "total_ev_if_all_accepted": r.total_ev_if_all_accepted,
+        "expected_net_recovery": r.expected_net_recovery,
+        "portfolio_avg_win_prob": r.portfolio_avg_win_prob,
+        "hdr_impact_rate": r.hdr_impact_rate,
+        "portfolio_risk_level": r.portfolio_risk_level.value,
+        "risk_flags": r.risk_flags,
+        "top_disputes": [
+            {
+                "dispute_id": d.dispute_id,
+                "ev_fight": d.ev_fight,
+                "ev_accept": d.ev_accept,
+                "priority_rank": d.priority_rank,
+                "priority_rationale": d.priority_rationale,
+            }
+            for d in r.top_disputes
+        ],
+        "summary": r.summary,
+        "wave": 133,
+    })
+
+
+# ── Fraud Pattern Detector endpoint (wave 134) ───────────────────────────────
+
+@app.post("/api/oracle/detect-fraud-patterns")
+async def api_detect_fraud_patterns(request: Request):
+    from oracle.fraud_pattern_detector import DisputeRecord, detect_patterns
+    from datetime import date as _date
+    body = await request.json()
+    raw_disputes = body.get("disputes", [])
+    records = []
+    for d in raw_disputes:
+        order_date = None
+        dispute_date = None
+        try:
+            if d.get("order_date"):
+                order_date = _date.fromisoformat(d["order_date"][:10])
+            if d.get("dispute_date"):
+                dispute_date = _date.fromisoformat(d["dispute_date"][:10])
+        except (ValueError, TypeError):
+            pass
+        records.append(DisputeRecord(
+            dispute_id=d.get("dispute_id", "PP-D"),
+            buyer_email=d.get("buyer_email", "buyer@example.com"),
+            buyer_ip=d.get("buyer_ip"),
+            buyer_zip=d.get("buyer_zip"),
+            buyer_name=d.get("buyer_name"),
+            shipping_address_hash=d.get("shipping_address_hash"),
+            claim_type=d.get("claim_type", "ITEM_NOT_RECEIVED"),
+            dispute_amount=float(d.get("dispute_amount", 0.0)),
+            carrier=d.get("carrier"),
+            tracking_number=d.get("tracking_number"),
+            order_date=order_date,
+            dispute_date=dispute_date,
+            is_new_account=bool(d.get("is_new_account", False)),
+            item_category=d.get("item_category"),
+            was_refunded_before=bool(d.get("was_refunded_before", False)),
+        ))
+    r = detect_patterns(records)
+    return JSONResponse({
+        "total_disputes_analyzed": r.total_disputes_analyzed,
+        "patterns_found": [
+            {
+                "pattern": p.pattern.value,
+                "confidence": p.confidence.value,
+                "confidence_score": p.confidence_score,
+                "affected_dispute_ids": p.affected_dispute_ids,
+                "recommended_action": p.recommended_action,
+                "escalation_recommended": p.escalation_recommended,
+                "law_enforcement_referral": p.law_enforcement_referral,
+            }
+            for p in r.patterns_found
+        ],
+        "high_confidence_patterns": r.high_confidence_patterns,
+        "buyer_block_recommendations": r.buyer_block_recommendations,
+        "law_enforcement_referral_warranted": r.law_enforcement_referral_warranted,
+        "total_coordinated_amount": r.total_coordinated_amount,
+        "summary": r.summary,
+        "wave": 134,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
