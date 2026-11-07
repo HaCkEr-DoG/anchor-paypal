@@ -8,7 +8,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     :root {
       --bg: #f7f7f8;
       --surface: #ffffff;
@@ -22,1866 +21,726 @@
       --hero-bg: #111112;
       --hero-text: #ffffff;
       --hero-muted: rgba(255,255,255,0.55);
-      --status-evidence: #111112;
-      --status-progress: #3d7af5;
+      --ok: #059669;
+      --warn: #d97706;
+      --error: #dc2626;
       --radius: 10px;
       --radius-sm: 6px;
     }
-
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, sans-serif;
-      font-feature-settings: "cv02","cv03","cv04","cv11";
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 14px;
       min-height: 100vh;
       -webkit-font-smoothing: antialiased;
     }
-
-    /* ── Top Nav ───────────────────────────────────────── */
+    /* ── Nav ── */
     .topnav {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 32px;
-      height: 52px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; height: 52px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
     }
     .nav-left { display: flex; align-items: center; gap: 0; }
-    .logo {
-      font-size: 17px;
-      font-weight: 700;
-      letter-spacing: -0.4px;
-      color: var(--text);
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      margin-right: 32px;
-      text-decoration: none;
-    }
-    .logo-anchor { font-size: 18px; }
+    .logo { font-size: 17px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); display: flex; align-items: center; gap: 7px; margin-right: 32px; text-decoration: none; }
     .nav-links { display: flex; align-items: stretch; height: 52px; }
     .nav-link {
-      display: flex;
-      align-items: center;
-      padding: 0 14px;
-      font-size: 13.5px;
-      font-weight: 500;
-      color: var(--muted);
-      border-bottom: 2px solid transparent;
-      cursor: pointer;
-      text-decoration: none;
-      transition: color 0.15s;
-      white-space: nowrap;
-      background: none;
-      border-top: none;
-      border-left: none;
-      border-right: none;
+      display: flex; align-items: center; padding: 0 14px;
+      font-size: 13.5px; font-weight: 500; color: var(--muted);
+      border-bottom: 2px solid transparent; cursor: pointer; background: none;
+      border-top: none; border-left: none; border-right: none;
+      transition: color 0.15s; white-space: nowrap;
     }
     .nav-link:hover { color: var(--text); }
-    .nav-link.active {
-      color: var(--text);
-      border-bottom-color: var(--accent);
-      font-weight: 600;
-    }
+    .nav-link.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
     .nav-right { display: flex; align-items: center; gap: 10px; }
-    .merchant-select {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 6px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text);
-      background: var(--surface);
-      cursor: pointer;
+    .env-badge {
+      font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
+      background: #fef3c7; color: #92400e; letter-spacing: .04em;
     }
-    .merchant-select svg { opacity: 0.45; }
-    .demo-badge {
-      padding: 5px 12px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--muted);
-      background: transparent;
-      cursor: default;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
+    .env-badge.live { background: #d1fae5; color: #065f46; }
+    .refresh-btn {
+      font-size: 12px; font-weight: 500; color: var(--muted-2); background: none;
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 4px 10px; cursor: pointer;
     }
-    .demo-badge.live { color: #059669; border-color: rgba(5,150,105,0.3); }
-
-    /* ── Main layout ───────────────────────────────────── */
-    .main {
-      max-width: 1120px;
-      margin: 0 auto;
-      padding: 32px 32px 64px;
-    }
-
-    /* ── Tab panels ────────────────────────────────────── */
+    .refresh-btn:hover { color: var(--text); border-color: var(--muted); }
+    /* ── Layout ── */
+    .main { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
+    .page-header { margin-bottom: 20px; }
+    .page-title { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+    .page-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+    /* ── Panel tabs ── */
     .panel { display: none; }
     .panel.active { display: block; }
-
-    /* ── Page header ───────────────────────────────────── */
-    .page-header { margin-bottom: 24px; }
-    .page-header h1 {
-      font-size: 26px;
-      font-weight: 700;
-      letter-spacing: -0.6px;
-      line-height: 1.2;
-      color: var(--text);
-    }
-    .page-header p {
-      font-size: 14px;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-
-    /* ── Hero dispute card ─────────────────────────────── */
-    .hero-card {
-      background: var(--hero-bg);
-      border-radius: var(--radius);
-      padding: 24px 28px;
-      margin-bottom: 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 20px;
-    }
-    @media (max-width: 700px) {
-      .hero-card { flex-direction: column; align-items: flex-start; }
-    }
-    .hero-eyebrow {
-      font-size: 10.5px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--hero-muted);
-      margin-bottom: 8px;
-    }
-    .hero-amount {
-      font-size: 40px;
-      font-weight: 700;
-      letter-spacing: -1.5px;
-      color: var(--hero-text);
-      line-height: 1;
-    }
-    .hero-desc {
-      font-size: 13px;
-      color: var(--hero-muted);
-      margin-top: 6px;
-    }
-    .hero-due {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 12px;
-      color: rgba(255,255,255,0.45);
-      margin-top: 10px;
-    }
-    .hero-signals {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      flex: 1;
-      min-width: 0;
-      padding: 0 24px;
-      border-left: 1px solid rgba(255,255,255,0.08);
-      border-right: 1px solid rgba(255,255,255,0.08);
-    }
-    @media (max-width: 700px) {
-      .hero-signals { padding: 14px 0; border: none; border-top: 1px solid rgba(255,255,255,0.08); border-bottom: 1px solid rgba(255,255,255,0.08); }
-    }
-    .hero-signal {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      font-size: 13px;
-      color: rgba(255,255,255,0.80);
-    }
-    .hero-signal .icon {
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
-      border: 1.5px solid rgba(255,255,255,0.25);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      font-size: 11px;
-    }
-    .hero-signal .icon.check { border-color: rgba(255,255,255,0.4); }
-    .hero-action { flex-shrink: 0; }
-    .btn-primary {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 11px 22px;
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius-sm);
-      font-size: 13.5px;
-      font-weight: 600;
-      cursor: pointer;
-      text-decoration: none;
-      transition: background 0.15s;
-      white-space: nowrap;
-    }
-    .btn-primary:hover { background: var(--accent-hover); }
-
-    /* ── Metrics strip ─────────────────────────────────── */
+    /* ── Metrics strip ── */
     .metrics-strip {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 1px;
-      background: var(--border);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      margin-bottom: 24px;
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px;
     }
-    @media (max-width: 600px) {
-      .metrics-strip { grid-template-columns: repeat(2, 1fr); }
+    @media(max-width:900px) { .metrics-strip { grid-template-columns: repeat(2,1fr); } }
+    .metric-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px 18px;
     }
-    .metric-cell {
-      background: var(--surface);
-      padding: 18px 20px;
+    .metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); margin-bottom: 6px; }
+    .metric-value { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; color: var(--text); line-height: 1; }
+    .metric-sub { font-size: 11px; color: var(--muted-2); margin-top: 4px; }
+    .metric-ok { color: var(--ok) !important; }
+    .metric-warn { color: var(--warn) !important; }
+    .metric-err { color: var(--error) !important; }
+    /* ── Grid ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    @media(max-width:900px) { .grid-2 { grid-template-columns: 1fr; } }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    @media(max-width:1000px) { .grid-3 { grid-template-columns: 1fr 1fr; } }
+    @media(max-width:700px) { .grid-3 { grid-template-columns: 1fr; } }
+    /* ── Cards ── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px;
     }
-    .metric-label {
-      font-size: 11.5px;
-      font-weight: 500;
-      color: var(--muted-2);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 6px;
-    }
-    .metric-value {
-      font-size: 26px;
-      font-weight: 700;
-      letter-spacing: -0.8px;
-      color: var(--text);
-      line-height: 1;
-    }
-    .metric-sub {
-      font-size: 11.5px;
-      color: var(--muted-2);
-      margin-top: 4px;
-    }
-
-    /* ── Two-column body ───────────────────────────────── */
-    .body-cols {
-      display: grid;
-      grid-template-columns: 1fr 320px;
-      gap: 20px;
-      align-items: start;
-    }
-    @media (max-width: 800px) {
-      .body-cols { grid-template-columns: 1fr; }
-    }
-
-    /* ── Priority queue ────────────────────────────────── */
-    .section-title {
-      font-size: 15px;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-      margin-bottom: 14px;
-      color: var(--text);
-    }
-    .queue-table {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      overflow: hidden;
-      width: 100%;
-    }
-    .queue-thead {
-      display: grid;
-      grid-template-columns: 2fr 1fr 1.3fr 1.5fr;
-      padding: 10px 18px;
-      border-bottom: 1px solid var(--border-light);
-      background: #fafafa;
-    }
-    .queue-th {
-      font-size: 10.5px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--muted-2);
-    }
-    .queue-row {
-      display: grid;
-      grid-template-columns: 2fr 1fr 1.3fr 1.5fr;
-      padding: 13px 18px;
-      border-bottom: 1px solid var(--border-light);
-      align-items: center;
-      transition: background 0.1s;
-      cursor: pointer;
-    }
-    .queue-row:last-child { border-bottom: none; }
-    .queue-row:hover { background: #fafafa; }
-    .queue-case-id {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--accent);
-    }
-    .queue-amount {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text);
-    }
-    .queue-due {
-      font-size: 12.5px;
-      color: var(--muted);
-    }
-    .queue-context {
-      font-size: 11.5px;
-      color: var(--muted-2);
-      overflow: hidden;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-    }
-    .status-pill {
-      display: inline-flex;
-      align-items: center;
-      padding: 3px 9px;
-      border-radius: 100px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-    .status-evidence {
-      background: #f3f3f4;
-      color: #111112;
-      border: 1px solid #dddde0;
-    }
-    .status-progress {
-      background: #eff4ff;
-      color: #1a6cf5;
-      border: 1px solid #c7d9ff;
-    }
-
-    /* ── Recovery card ─────────────────────────────────── */
-    .recovery-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px;
-    }
-    .recovery-title {
-      font-size: 15px;
-      font-weight: 700;
-      letter-spacing: -0.3px;
-      margin-bottom: 4px;
-    }
-    .recovery-sub {
-      font-size: 12.5px;
-      color: var(--muted);
-      margin-bottom: 16px;
-    }
-    .recovery-amount {
-      font-size: 34px;
-      font-weight: 700;
-      letter-spacing: -1.2px;
-      color: var(--text);
-      line-height: 1;
-      margin-bottom: 4px;
-    }
-    .recovery-est {
-      font-size: 12px;
-      color: var(--muted-2);
-      margin-bottom: 16px;
-    }
-    .recovery-bar-bg {
-      height: 5px;
-      background: var(--border);
-      border-radius: 3px;
-      margin-bottom: 16px;
-      overflow: hidden;
-    }
-    .recovery-bar-fill {
-      height: 100%;
-      background: var(--text);
-      border-radius: 3px;
-      width: 72%;
-    }
-    .recovery-link {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--accent);
-      text-decoration: none;
-      cursor: pointer;
-    }
-    .recovery-link:hover { text-decoration: underline; }
-
-    /* ── Settlement Oracle footer bar ──────────────────── */
-    .oracle-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px 20px;
-      margin-top: 20px;
-      gap: 12px;
-    }
-    .oracle-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 13px;
-      color: var(--text);
-    }
-    .oracle-icon {
-      width: 28px;
-      height: 28px;
-      border-radius: 6px;
-      background: #f3f3f4;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      flex-shrink: 0;
-    }
-    .oracle-label { font-weight: 600; }
-    .oracle-ev {
-      font-size: 12.5px;
-      color: var(--muted);
-      display: flex;
-      gap: 14px;
-    }
-    .oracle-ev span { color: var(--text); font-weight: 500; }
-    .oracle-model { font-size: 11.5px; color: var(--muted-2); }
-    .oracle-cta {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--accent);
-      cursor: pointer;
-      white-space: nowrap;
-      background: none;
-      border: none;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .oracle-cta:hover { text-decoration: underline; }
-
-    /* ── Sample Decision Drawer ────────────────────────── */
-    .drawer-overlay {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,0.35);
-      z-index: 200;
-      align-items: flex-end;
-      justify-content: center;
-    }
-    .drawer-overlay.open { display: flex; }
-    .drawer {
-      background: var(--surface);
-      border-radius: var(--radius) var(--radius) 0 0;
-      width: 100%;
-      max-width: 680px;
-      max-height: 80vh;
-      overflow-y: auto;
-      padding: 28px 32px 40px;
-      position: relative;
-      animation: slideUp 0.22s ease;
-    }
-    @keyframes slideUp {
-      from { transform: translateY(60px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-    .drawer-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 6px;
-    }
-    .drawer-title { font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
-    .drawer-close {
-      width: 32px;
-      height: 32px;
-      border-radius: 50%;
-      background: #f3f3f4;
-      border: none;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      color: var(--muted);
-    }
-    .drawer-close:hover { background: var(--border); }
-    .drawer-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      color: var(--muted-2);
-      margin-bottom: 20px;
-    }
-    .drawer-label::before {
-      content: '';
-      display: inline-block;
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #f59e0b;
-    }
-    .scenario-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-bottom: 20px;
-    }
-    @media (max-width: 500px) { .scenario-grid { grid-template-columns: 1fr; } }
-    .scenario-btn {
-      padding: 14px 16px;
-      border: 1.5px solid var(--border);
-      border-radius: var(--radius-sm);
-      background: transparent;
-      text-align: left;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .scenario-btn:hover { border-color: var(--accent); background: #f5f8ff; }
-    .scenario-btn.selected { border-color: var(--accent); background: #eff4ff; }
-    .scenario-name { font-size: 13px; font-weight: 600; color: var(--text); }
-    .scenario-desc { font-size: 12px; color: var(--muted); margin-top: 3px; }
-    .drawer-run-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 100%;
-      padding: 12px;
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      border-radius: var(--radius-sm);
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s;
-      margin-bottom: 10px;
-    }
-    .drawer-run-btn:hover { background: var(--accent-hover); }
-    .drawer-run-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    .drawer-disclaimer {
-      font-size: 11.5px;
-      color: var(--muted-2);
-      text-align: center;
-    }
-    .drawer-result {
-      margin-top: 20px;
-      padding: 18px;
-      background: #f9f9fa;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      display: none;
-    }
-    .drawer-result.show { display: block; }
-    .result-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 13px; }
-    .result-row:last-child { margin-bottom: 0; }
-    .result-label { color: var(--muted); }
-    .result-value { font-weight: 600; color: var(--text); }
-    .result-value.fight { color: #059669; }
-    .result-no-action {
-      font-size: 11.5px;
-      color: var(--muted-2);
-      margin-top: 10px;
-      padding-top: 10px;
-      border-top: 1px solid var(--border-light);
-    }
-
-    /* ── Other panels placeholder ──────────────────────── */
-    .placeholder-panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 48px 32px;
-      text-align: center;
-      color: var(--muted);
-    }
-    .placeholder-panel h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
-    .placeholder-panel p { font-size: 13.5px; }
-
-    /* ── Connections panel ─────────────────────────────── */
-    .connections-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 14px;
-    }
-    .conn-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 18px 20px;
-      display: flex;
-      align-items: flex-start;
-      gap: 14px;
-    }
-    .conn-logo {
-      width: 38px;
-      height: 38px;
-      border-radius: 8px;
-      background: #f3f3f4;
-      border: 1px solid var(--border-light);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 18px;
-      flex-shrink: 0;
-    }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .card-title-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: #eff6ff; color: #1a6cf5; }
+    /* ── Table ── */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .data-table th { text-align: left; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); padding: 0 0 8px 0; border-bottom: 1px solid var(--border); }
+    .data-table td { padding: 7px 0; border-bottom: 1px solid var(--border-light); color: var(--text); }
+    .data-table tr:last-child td { border-bottom: none; }
+    .data-table td:not(:first-child) { text-align: right; color: var(--muted); }
+    .path-cell { font-family: monospace; font-size: 11.5px; color: var(--accent); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .num-ok { color: var(--ok) !important; font-weight: 600; }
+    .num-warn { color: var(--warn) !important; font-weight: 600; }
+    .num-err { color: var(--error) !important; font-weight: 600; }
+    /* ── Env checklist ── */
+    .env-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 16px; }
+    .env-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+    .env-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .env-dot.ok { background: var(--ok); }
+    .env-dot.miss { background: #d1d1d6; }
+    .env-key { font-family: monospace; font-size: 11px; color: var(--text); }
+    /* ── Integration cards ── */
+    .connections-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 12px; }
+    .conn-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; gap: 12px; }
+    .conn-logo { font-size: 22px; flex-shrink: 0; }
     .conn-info { flex: 1; min-width: 0; }
-    .conn-name { font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+    .conn-name { font-size: 13.5px; font-weight: 600; margin-bottom: 2px; }
     .conn-desc { font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.4; }
     .conn-endpoints { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-    .conn-ep {
-      font-size: 10.5px;
-      font-family: "SF Mono", ui-monospace, monospace;
-      background: #f3f3f4;
-      border: 1px solid var(--border-light);
-      border-radius: 4px;
-      padding: 2px 6px;
-      color: var(--muted);
-    }
-    .conn-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 11.5px;
-      font-weight: 600;
-    }
-    .conn-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .conn-dot.ok { background: #059669; }
-    .conn-dot.demo { background: #f59e0b; }
-    .conn-dot.checking { background: #9898a3; animation: pulse2 1.4s infinite; }
-    @keyframes pulse2 { 0%,100%{opacity:1}50%{opacity:.3} }
-    .conn-status.ok { color: #059669; }
-    .conn-status.demo { color: #c97e00; }
-    .conn-status.checking { color: var(--muted-2); }
-
-    /* ── Spinner ───────────────────────────────────────── */
-    .spinner {
-      display: inline-block;
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255,255,255,0.3);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      margin-right: 7px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Focus styles ──────────────────────────────────── */
-    :focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-
-    /* ── Reduced motion ────────────────────────────────── */
-    @media (prefers-reduced-motion: reduce) {
-      * { animation: none !important; transition: none !important; }
-    }
+    .conn-ep { font-size: 10.5px; font-family: monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; color: var(--muted); }
+    .conn-status { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
+    .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .conn-dot.ok { background: var(--ok); }
+    .conn-dot.demo { background: var(--warn); }
+    .conn-dot.err { background: var(--error); }
+    @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+    .conn-dot.checking { background: var(--muted-2); animation: pulse 1.4s infinite; }
+    .conn-status.ok { color: var(--ok); }
+    .conn-status.demo { color: var(--warn); }
+    .conn-status.err { color: var(--error); }
+    /* ── Hero / PayPal card ── */
+    .hero-card { background: var(--hero-bg); color: var(--hero-text); border-radius: var(--radius); padding: 24px 26px; margin-bottom: 20px; }
+    .hero-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+    .hero-sub { font-size: 12px; color: var(--hero-muted); }
+    .hero-stats { display: flex; gap: 32px; margin-top: 18px; flex-wrap: wrap; }
+    .hero-stat-val { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
+    .hero-stat-label { font-size: 11px; color: var(--hero-muted); margin-top: 2px; font-weight: 500; }
+    /* ── Progress bar ── */
+    .bar-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+    /* ── Sample drawer ── */
+    .drawer-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:200; }
+    .drawer-overlay.open { display:flex; align-items:center; justify-content:center; }
+    .drawer { background:var(--surface); border-radius:12px; padding:28px; width:520px; max-width:94vw; max-height:88vh; overflow-y:auto; position:relative; }
+    .drawer-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+    .drawer-title { font-size:16px; font-weight:700; }
+    .drawer-close { background:none; border:none; font-size:20px; cursor:pointer; color:var(--muted); line-height:1; padding:4px; }
+    .scenario-btn { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; cursor:pointer; font-size:13px; display:block; width:100%; text-align:left; margin-bottom:8px; transition:border-color .15s; }
+    .scenario-btn:hover, .scenario-btn.selected { border-color:var(--accent); background:#eff6ff; }
+    .run-btn { background:var(--accent); color:#fff; border:none; border-radius:var(--radius-sm); padding:10px 20px; font-size:14px; font-weight:600; cursor:pointer; width:100%; margin-top:12px; }
+    .run-btn:disabled { opacity:.5; cursor:not-allowed; }
+    .drawer-result { display:none; margin-top:16px; background:var(--bg); border-radius:var(--radius-sm); padding:16px; }
+    .drawer-result.show { display:block; }
+    .result-row { display:flex; justify-content:space-between; padding:5px 0; font-size:13px; border-bottom:1px solid var(--border-light); }
+    .result-row:last-child { border-bottom:none; }
+    .result-label { color:var(--muted); }
+    .result-value { font-weight:600; }
+    .sim-label { font-size:10px; background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-weight:600; letter-spacing:.04em; display:inline-block; margin-bottom:14px; }
+    /* ── Oracle tab ── */
+    .oracle-full-table { width:100%; }
+    .sticky-header { position:sticky; top:52px; background:var(--bg); padding:16px 0 10px; z-index:10; }
+    .search-input { width:100%; padding:9px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); font-size:13px; background:var(--surface); }
+    /* ── Uptime bar ── */
+    .uptime-bar { display:flex; align-items:center; gap:10px; margin-top:10px; }
+    .uptime-segments { display:flex; gap:2px; flex:1; }
+    .uptime-seg { height:16px; border-radius:2px; flex:1; background:var(--ok); }
+    .uptime-seg.down { background:var(--error); }
+    .spinner { display:inline-block; width:14px; height:14px; border:2px solid #fff3; border-top-color:#fff; border-radius:50%; animation:spin .6s linear infinite; vertical-align:middle; margin-right:6px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    /* ── Responsive ── */
+    @media(max-width:600px) { .main { padding:16px; } .topnav { padding:0 16px; } .metrics-strip { grid-template-columns:1fr 1fr; } }
   </style>
 </head>
 <body>
 
-<!-- ── Top Navigation ─────────────────────────────────── -->
 <nav class="topnav" role="navigation" aria-label="Main navigation">
   <div class="nav-left">
-    <a class="logo" href="/dashboard" aria-label="Anchor home">
-      <span class="logo-anchor">⚓</span> Anchor
-    </a>
+    <a class="logo" href="/dashboard" aria-label="Anchor home">⚓ Anchor</a>
     <div class="nav-links" role="tablist">
-      <button class="nav-link active" role="tab" aria-selected="true"  aria-controls="panel-overview"   onclick="switchPanel('overview')"   id="tab-overview">Overview</button>
-      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-disputes"   onclick="switchPanel('disputes')"   id="tab-disputes">Disputes</button>
-      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-recoveries" onclick="switchPanel('recoveries')" id="tab-recoveries">Recoveries</button>
-      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-insights"   onclick="switchPanel('insights')"   id="tab-insights">Insights</button>
-      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-audit"      onclick="switchPanel('audit')"      id="tab-audit">Audit Trail</button>
-      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-safety"     onclick="switchPanel('safety')"     id="tab-safety">Safety</button>
-      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-connections" onclick="switchPanel('connections')" id="tab-connections">Connections</button>
+      <button class="nav-link active" role="tab" aria-selected="true"  onclick="switchPanel('overview')"    id="tab-overview">Overview</button>
+      <button class="nav-link"        role="tab" aria-selected="false" onclick="switchPanel('oracle')"      id="tab-oracle">Oracle</button>
+      <button class="nav-link"        role="tab" aria-selected="false" onclick="switchPanel('disputes')"    id="tab-disputes">Disputes</button>
+      <button class="nav-link"        role="tab" aria-selected="false" onclick="switchPanel('connections')" id="tab-connections">Connections</button>
     </div>
   </div>
   <div class="nav-right">
-    <div class="merchant-select" aria-label="Current merchant">
-      Acme Store
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-        <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </div>
-    <div class="demo-badge" id="env-badge" aria-live="polite">Demo Data</div>
+    <span id="env-badge" class="env-badge">Loading…</span>
+    <button class="refresh-btn" onclick="loadAll()" id="refresh-btn">↻ Refresh</button>
   </div>
 </nav>
 
-<!-- ── Main Content ───────────────────────────────────── -->
 <main class="main" role="main">
 
-  <!-- ══ Overview Panel ══════════════════════════════════ -->
+  <!-- ── Overview ─────────────────────────────────────────────────────────── -->
   <div class="panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
 
     <div class="page-header">
-      <h1 id="greeting">Good morning, Acme</h1>
-      <p id="subheading">Connecting to the PayPal sandbox…</p>
+      <div class="page-title">Production Overview</div>
+      <div class="page-sub" id="subheading">Loading live data…</div>
     </div>
 
-    <!-- Hero dispute card -->
-    <div class="hero-card" id="hero-card" aria-label="Urgent dispute requiring review" style="display:none">
-      <div class="hero-left">
-        <div class="hero-eyebrow">Needs your review</div>
-        <div class="hero-amount" id="hero-amount">$245</div>
-        <div class="hero-desc" id="hero-desc">Item not received · PP-D-0284</div>
-        <div class="hero-due">
-          <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
-            <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.2" opacity="0.6"/>
-            <path d="M6.5 3.5V6.5L8.5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
-          </svg>
-          <span id="hero-due-text">Merchant approval required</span>
+    <!-- Hero PayPal Card -->
+    <div class="hero-card" id="hero-card">
+      <div class="hero-title" id="hero-title">PayPal Dispute Console</div>
+      <div class="hero-sub" id="hero-sub">Connecting…</div>
+      <div class="hero-stats" id="hero-stats">
+        <div>
+          <div class="hero-stat-val" id="h-open">—</div>
+          <div class="hero-stat-label">Open disputes</div>
+        </div>
+        <div>
+          <div class="hero-stat-val" id="h-urgent">—</div>
+          <div class="hero-stat-label">Need action</div>
+        </div>
+        <div>
+          <div class="hero-stat-val" id="h-webhooks">—</div>
+          <div class="hero-stat-label">Webhooks registered</div>
         </div>
       </div>
-
-      <div class="hero-signals" aria-label="Oracle signals">
-        <div class="hero-signal">
-          <div class="icon check" aria-hidden="true">✓</div>
-          <span id="signal-1">Awaiting your decision</span>
-        </div>
-        <div class="hero-signal">
-          <div class="icon" aria-hidden="true">ℹ</div>
-          <div>
-            <div id="signal-2">Open the recorded reasoning</div>
-            <div style="font-size:11.5px;color:var(--hero-muted);margin-top:2px;" id="hero-ev">—</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="hero-action">
-        <button class="btn-primary" id="review-btn" onclick="openReviewDispute()" aria-label="Review dispute">
-          Review dispute
-        </button>
-      </div>
-    </div>
-
-    <!-- No urgent disputes state (hidden by default) -->
-    <div id="hero-empty" style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:28px 24px; margin-bottom:20px; color:var(--muted); font-size:14px;">
-      No dispute decisions are waiting for your review.
     </div>
 
     <!-- Metrics strip -->
     <div class="metrics-strip" role="region" aria-label="Portfolio metrics">
-      <div class="metric-cell">
-        <div class="metric-label">Open PayPal disputes</div>
-        <div class="metric-value" id="m-open">—</div>
+      <div class="metric-card">
+        <div class="metric-label">Oracle Calls</div>
+        <div class="metric-value" id="m-oracle-calls">—</div>
+        <div class="metric-sub" id="m-oracle-sub">this session</div>
       </div>
-      <div class="metric-cell">
-        <div class="metric-label">Need a response</div>
-        <div class="metric-value" id="m-risk">—</div>
+      <div class="metric-card">
+        <div class="metric-label">P95 Latency</div>
+        <div class="metric-value" id="m-p95">—</div>
+        <div class="metric-sub">oracle ms</div>
       </div>
-      <div class="metric-cell">
-        <div class="metric-label">Webhook registrations</div>
-        <div class="metric-value" id="m-recovered">—</div>
+      <div class="metric-card">
+        <div class="metric-label">Error Rate</div>
+        <div class="metric-value" id="m-err-rate">—</div>
+        <div class="metric-sub">all endpoints</div>
       </div>
-      <div class="metric-cell">
-        <div class="metric-label">Recovered orders</div>
-        <div class="metric-value" id="m-winrate">—</div>
-        <div class="metric-sub" id="m-winrate-sub">Recovery history unavailable</div>
+      <div class="metric-card">
+        <div class="metric-label">Uptime</div>
+        <div class="metric-value" id="m-uptime">—</div>
+        <div class="metric-sub" id="m-uptime-sub">since start</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Oracle Endpoints</div>
+        <div class="metric-value" id="m-endpoints">—</div>
+        <div class="metric-sub">registered routes</div>
       </div>
     </div>
 
-    <!-- Two-column body -->
-    <div class="body-cols">
-
-      <!-- Priority queue -->
-      <div>
-        <div class="section-title">Priority queue</div>
-        <div class="queue-table" role="table" aria-label="Dispute priority queue">
-          <div class="queue-thead" role="row">
-            <div class="queue-th" role="columnheader">Case</div>
-            <div class="queue-th" role="columnheader">Amount</div>
-            <div class="queue-th" role="columnheader">Decision</div>
-            <div class="queue-th" role="columnheader">Context</div>
-          </div>
-          <div id="queue-body">
-            <div class="queue-row" role="row"><div class="queue-context" role="cell">Connecting to PayPal…</div></div>
-          </div>
-        </div>
+    <!-- Main grid -->
+    <div class="grid-2">
+      <!-- Top oracle endpoints -->
+      <div class="card">
+        <div class="card-title">Top Oracle Endpoints <span class="card-title-badge" id="oracle-total-badge">0 calls</span></div>
+        <table class="data-table" id="oracle-top-table">
+          <thead><tr>
+            <th>Endpoint</th>
+            <th style="text-align:right">Calls</th>
+            <th style="text-align:right">Avg ms</th>
+            <th style="text-align:right">P95 ms</th>
+            <th style="text-align:right">Err%</th>
+          </tr></thead>
+          <tbody id="oracle-top-body"><tr><td colspan="5" style="color:var(--muted);padding:16px 0">No calls yet this session</td></tr></tbody>
+        </table>
       </div>
 
-      <!-- Checkout recovery -->
-      <div>
-        <div class="section-title">Checkout recovery</div>
-        <div class="recovery-card">
-          <div class="recovery-title" id="recovery-title">Checkout recovery</div>
-          <div class="recovery-sub" id="recovery-sub">Checking recovery storage…</div>
-          <div class="recovery-amount" id="recovery-amount">—</div>
-          <div class="recovery-est" id="recovery-est">Source: Anchor recovery records</div>
-          <div class="recovery-bar-bg" aria-hidden="true">
-            <div class="recovery-bar-fill" id="recovery-bar" style="width:0%"></div>
-          </div>
-          <a class="recovery-link" onclick="switchPanel('recoveries')" tabindex="0" role="link">View orders</a>
+      <!-- System health -->
+      <div class="card">
+        <div class="card-title">System Health</div>
+        <table class="data-table" id="health-table">
+          <tbody id="health-body"></tbody>
+        </table>
+        <div style="margin-top:16px">
+          <div class="card-title" style="margin-bottom:10px">Environment Variables</div>
+          <div class="env-grid" id="env-grid"></div>
         </div>
       </div>
-
     </div>
 
-    <!-- Settlement Oracle bar -->
-    <div class="oracle-bar" role="region" aria-label="Settlement Oracle">
-      <div class="oracle-left">
-        <div class="oracle-icon" aria-hidden="true">✦</div>
-        <div>
-          <span class="oracle-label">Settlement Oracle</span>
-          <div class="oracle-ev">
-            EV(fight) <span id="ev-fight">—</span>
-            &nbsp;·&nbsp;
-            EV(accept) <span id="ev-accept">—</span>
-          </div>
-        </div>
-      </div>
-      <div style="display:flex;align-items:center;gap:16px;">
-        <span class="oracle-model">sample calculation</span>
-        <button class="oracle-cta" onclick="openDrawer()" aria-haspopup="dialog" aria-expanded="false" id="try-sample-btn">
-          Try a sample decision
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </button>
+    <!-- Sample Decision Drawer trigger -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title">Settlement Oracle <span class="card-title-badge">158 decision modules</span></div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Runs every dispute through 158 specialized oracle modules covering evidence quality, fraud signals, subscription disputes, return authorizations, and more.</p>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <div style="font-size:13px"><strong id="ev-fight-label">EV Fight</strong>: <span id="ev-fight" style="font-weight:700">run a sample to see</span></div>
+        <button onclick="openDrawer()" id="try-sample-btn" aria-expanded="false" aria-controls="drawer-overlay" style="background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer">Try a sample decision</button>
       </div>
     </div>
 
   </div><!-- /panel-overview -->
 
-  <!-- ══ Disputes Panel ══════════════════════════════════ -->
+  <!-- ── Oracle tab ─────────────────────────────────────────────────────── -->
+  <div class="panel" id="panel-oracle" role="tabpanel" aria-labelledby="tab-oracle">
+    <div class="page-header">
+      <div class="page-title">Oracle Performance</div>
+      <div class="page-sub">Real-time call counts, latency, and error rates per oracle endpoint.</div>
+    </div>
+    <div class="sticky-header">
+      <input type="search" class="search-input" id="oracle-search" placeholder="Filter endpoints…" oninput="filterOracle(this.value)" />
+    </div>
+    <div class="card" style="margin-top:12px">
+      <table class="data-table oracle-full-table" id="oracle-full-table">
+        <thead><tr>
+          <th>Endpoint</th>
+          <th style="text-align:right">Calls</th>
+          <th style="text-align:right">Errors</th>
+          <th style="text-align:right">Client Err</th>
+          <th style="text-align:right">Avg ms</th>
+          <th style="text-align:right">P95 ms</th>
+          <th style="text-align:right">Err %</th>
+        </tr></thead>
+        <tbody id="oracle-full-body"><tr><td colspan="7" style="color:var(--muted);padding:16px 0">No oracle calls recorded yet — make a request first.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Disputes tab ───────────────────────────────────────────────────── -->
   <div class="panel" id="panel-disputes" role="tabpanel" aria-labelledby="tab-disputes">
     <div class="page-header">
-      <h1>Disputes</h1>
-      <p>Live open disputes from PayPal. Enter your API key to load full details.</p>
+      <div class="page-title">Dispute Log</div>
+      <div class="page-sub">Autonomous oracle decisions — timestamped, labeled, and traceable.</div>
     </div>
-
-    <!-- API Key input -->
-    <div id="disputes-auth-row" style="display:flex;gap:10px;margin-bottom:20px;align-items:center;flex-wrap:wrap;">
-      <input id="disputes-api-key" type="password" placeholder="Enter X-API-Key…"
-        style="flex:1;min-width:220px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);"
-        onkeydown="if(event.key==='Enter')loadLiveDisputes()" />
-      <button onclick="loadLiveDisputes()"
-        style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
-        Load Live Disputes
-      </button>
-      <button onclick="loadAllDisputes()"
-        style="background:var(--text);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
-        All States
-      </button>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Live Disputes API Access</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Requires <code>X-API-Key</code> for authenticated dispute data.</p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="disputes-api-key" type="password" placeholder="Enter X-API-Key…" style="flex:1;min-width:200px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px" />
+        <button onclick="loadDisputes()" style="background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer">Load disputes</button>
+      </div>
+      <div id="disputes-status-bar" style="display:none;margin-top:10px;padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600"></div>
     </div>
-
-    <div id="disputes-status-bar" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:6px;font-size:13px;font-weight:600;"></div>
-
-    <!-- Summary cards -->
-    <div id="disputes-summary-cards" style="display:none;margin-bottom:20px;display:flex;gap:12px;flex-wrap:wrap;"></div>
-
-    <!-- Disputes table -->
-    <div style="overflow-x:auto;">
-      <table id="disputes-table" style="width:100%;border-collapse:collapse;font-size:13px;display:none;">
-        <thead>
-          <tr style="border-bottom:2px solid var(--border);text-align:left;">
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Dispute ID</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Reason</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Amount</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Status</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Due Date</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Days Left</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Oracle Decision</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="disputes-tbody">
-        </tbody>
-      </table>
-    </div>
-    <div id="disputes-empty" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:14px;"></div>
-  </div>
-
-  <!-- ══ Recoveries Panel ════════════════════════════════ -->
-  <div class="panel" id="panel-recoveries" role="tabpanel" aria-labelledby="tab-recoveries">
-    <div class="page-header">
-      <h1>Recoveries</h1>
-      <p>Approved-but-uncaptured checkouts the Recovery Agent is working.</p>
-    </div>
-    <div class="placeholder-panel">
-      <h3>Checkout recovery pipeline</h3>
-      <p>Orders approved but not yet captured, with outreach history and estimated values.</p>
-    </div>
-  </div>
-
-  <!-- ══ Insights Panel ══════════════════════════════════ -->
-  <div class="panel" id="panel-insights" role="tabpanel" aria-labelledby="tab-insights">
-    <div class="page-header">
-      <h1>Insights</h1>
-      <p>Oracle analytics across your dispute portfolio.</p>
-    </div>
-    <div class="placeholder-panel">
-      <h3>Portfolio analytics</h3>
-      <p>Win rates by reason code, chargeback trends, evidence quality scores, and EV outcomes.</p>
-    </div>
-  </div>
-
-  <!-- ══ Audit Trail Panel ════════════════════════════════ -->
-  <div class="panel" id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">
-    <div class="page-header">
-      <h1>Audit Trail</h1>
-      <p>Every autonomous oracle decision — timestamped, labeled, and traceable. <span style="background:#fef3c7;color:#92400e;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;letter-spacing:.03em;">SANDBOX</span> entries are test/demo data.</p>
-    </div>
-
-    <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
-      <button onclick="loadAudit()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Refresh Log</button>
-      <button onclick="runE2ETrace()" style="background:var(--text);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Run End-to-End Trace</button>
-    </div>
-
-    <!-- E2E trace output -->
-    <div id="e2e-trace-box" style="display:none;margin-bottom:24px;"></div>
-
-    <!-- Audit stats strip -->
-    <div id="audit-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px;"></div>
-
-    <!-- Audit log table -->
-    <div style="overflow-x:auto;">
-      <table id="audit-table" style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="border-bottom:2px solid var(--border);text-align:left;">
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Entry ID</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Dispute</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Action</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Win Prob</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">EV Fight</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Amount</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Outcome</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Data</th>
-            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Time</th>
-          </tr>
-        </thead>
-        <tbody id="audit-tbody">
-          <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--muted);">Click "Refresh Log" or "Run End-to-End Trace" to populate</td></tr>
-        </tbody>
+    <div class="card">
+      <table class="data-table" id="disputes-table">
+        <thead><tr>
+          <th>Dispute ID</th>
+          <th style="text-align:right">Amount</th>
+          <th>Action</th>
+          <th>Reasoning</th>
+        </tr></thead>
+        <tbody id="disputes-body"><tr><td colspan="4" style="color:var(--muted);padding:16px 0">Enter your API key above to load dispute data.</td></tr></tbody>
       </table>
     </div>
   </div>
 
-  <!-- ══ Safety Panel ═════════════════════════════════════ -->
-  <div class="panel" id="panel-safety" role="tabpanel" aria-labelledby="tab-safety">
-    <div class="page-header">
-      <h1>Production Safety</h1>
-      <p>Six-check gate that must be green before Anchor acts autonomously on live disputes.</p>
-    </div>
-    <div style="display:flex;gap:12px;margin-bottom:20px;">
-      <button onclick="loadSafety()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Refresh</button>
-    </div>
-    <div id="safety-level-banner" style="display:none;padding:14px 20px;border-radius:8px;margin-bottom:20px;font-weight:700;font-size:15px;"></div>
-    <div id="safety-checks-list" style="display:flex;flex-direction:column;gap:10px;"></div>
-    <div id="safety-recommendation" style="margin-top:20px;padding:14px 18px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--muted);display:none;"></div>
-  </div>
-
-  <!-- ══ Connections Panel ═══════════════════════════════ -->
+  <!-- ── Connections tab ────────────────────────────────────────────────── -->
   <div class="panel" id="panel-connections" role="tabpanel" aria-labelledby="tab-connections">
     <div class="page-header">
-      <h1>Connections</h1>
-      <p>All 10 Hackathon sponsor integrations — live status from each service.</p>
+      <div class="page-title">Sponsor Integrations</div>
+      <div class="page-sub">Live status from all 10 hackathon sponsor integrations.</div>
     </div>
-    <div class="connections-grid" id="connections-grid" aria-live="polite">
-      <!-- Cards injected by JS -->
-    </div>
+    <div class="connections-grid" id="connections-grid" aria-live="polite"></div>
   </div>
 
 </main>
 
-<!-- ── Sample Decision Drawer ─────────────────────────── -->
-<div class="drawer-overlay" id="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onclick="closeDrawerOnOverlay(event)">
-  <div class="drawer" id="drawer">
+<!-- ── Sample Decision Drawer ─────────────────────────────────────────── -->
+<div class="drawer-overlay" id="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onclick="if(event.target===this)closeDrawer()">
+  <div class="drawer">
     <div class="drawer-header">
-      <h2 class="drawer-title" id="drawer-title">Sample decision</h2>
-      <button class="drawer-close" onclick="closeDrawer()" aria-label="Close drawer">✕</button>
+      <div class="drawer-title" id="drawer-title">Settlement Oracle — Sample Run</div>
+      <button class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
     </div>
-    <div class="drawer-label">Simulated · No PayPal action will be executed</div>
-
-    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
-      Choose a labeled sample. The deterministic Oracle calculates EV(fight) vs EV(accept); a configured Astropods model reviews only the supplied records and cites its sources. No PayPal action is executed.
-    </p>
-
-    <div class="scenario-grid" id="scenario-grid" role="group" aria-label="Select a scenario">
-      <button class="scenario-btn" onclick="selectScenario(this,'inr_fight')" aria-pressed="false">
-        <div class="scenario-name">Item not received</div>
-        <div class="scenario-desc">$245 · INR · Delivery tracking present</div>
-      </button>
-      <button class="scenario-btn" onclick="selectScenario(this,'snad_fight')" aria-pressed="false">
-        <div class="scenario-name">Significantly not as described</div>
-        <div class="scenario-desc">$320 · SNAD · Product and buyer evidence</div>
-      </button>
-      <button class="scenario-btn" onclick="selectScenario(this,'unauthorized_accept')" aria-pressed="false">
-        <div class="scenario-name">Unauthorized transaction</div>
-        <div class="scenario-desc">$180 · UNAUTH · No authorization evidence</div>
-      </button>
-      <button class="scenario-btn" onclick="selectScenario(this,'micro_accept')" aria-pressed="false">
-        <div class="scenario-name">Micro dispute</div>
-        <div class="scenario-desc">$18.50 · INR · No delivery evidence</div>
-      </button>
-    </div>
-
-    <button class="drawer-run-btn" id="run-btn" onclick="runScenario()" disabled>
-      Run sample review
-    </button>
-    <div class="drawer-disclaimer" aria-live="polite">
-      This is a simulated decision. No action is taken in PayPal.
-    </div>
-
-    <div class="drawer-result" id="drawer-result" role="region" aria-live="polite" aria-label="Oracle result">
-      <div class="result-row">
-        <span class="result-label">Recommendation</span>
-        <span class="result-value fight" id="res-rec">—</span>
-      </div>
-      <div class="result-row">
-        <span class="result-label">EV(fight)</span>
-        <span class="result-value" id="res-ev-fight">—</span>
-      </div>
-      <div class="result-row">
-        <span class="result-label">EV(accept)</span>
-        <span class="result-value" id="res-ev-accept">—</span>
-      </div>
-      <div class="result-row">
-        <span class="result-label">Win probability</span>
-        <span class="result-value" id="res-win-prob">—</span>
-      </div>
-      <div class="result-row">
-        <span class="result-label">Evidence strength</span>
-        <span class="result-value" id="res-evidence">—</span>
-      </div>
-      <div class="result-row" style="display:block;border-top:1px solid var(--border);padding-top:14px;margin-top:8px;">
-        <span class="result-label">AI evidence review</span>
-        <div id="res-ai-status" style="font-size:12px;color:var(--muted);margin-top:6px;">Not run</div>
-        <ul id="res-ai-claims" style="font-size:12px;color:var(--text);padding-left:18px;margin:6px 0;"></ul>
-        <div id="res-ai-gaps" style="font-size:12px;color:var(--muted);"></div>
-      </div>
-      <div class="result-no-action" aria-atomic="true">
-        ✓ Simulated — no action taken in PayPal. This is a model estimate only.
-      </div>
+    <div class="sim-label">SIMULATED · No PayPal action will be executed</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Select a scenario and run the full 158-module oracle pipeline. Results are computed locally — no PayPal API calls are made.</p>
+    <button class="scenario-btn" onclick="selectScenario(this,'inr_fight')" aria-pressed="false">📦 INR — $245 · item not received, strong seller evidence</button>
+    <button class="scenario-btn" onclick="selectScenario(this,'snad_fight')" aria-pressed="false">🔁 SNAD — $320 · item not as described, photos available</button>
+    <button class="scenario-btn" onclick="selectScenario(this,'unauthorized_accept')" aria-pressed="false">🔐 Unauthorized — $180 · no 3DS, no CVV match → accept</button>
+    <button class="scenario-btn" onclick="selectScenario(this,'micro_accept')" aria-pressed="false">💲 Micro — $18.50 · below auto-accept threshold</button>
+    <button class="run-btn" id="run-btn" disabled onclick="runScenario()">Run sample review</button>
+    <div class="drawer-result" id="drawer-result">
+      <div class="result-row"><span class="result-label">Recommendation</span><span class="result-value" id="res-rec">—</span></div>
+      <div class="result-row"><span class="result-label">EV Fight</span><span class="result-value" id="res-ev-fight">—</span></div>
+      <div class="result-row"><span class="result-label">EV Accept</span><span class="result-value" id="res-ev-accept">—</span></div>
+      <div class="result-row"><span class="result-label">Win probability</span><span class="result-value" id="res-win-prob">—</span></div>
+      <div class="result-row"><span class="result-label">Evidence multiplier</span><span class="result-value" id="res-evidence">—</span></div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted)" id="res-ai-status"></div>
+      <ul id="res-ai-claims" style="margin:8px 0 0 16px;font-size:12px;color:var(--text)"></ul>
+      <div id="res-ai-gaps" style="margin-top:6px;font-size:12px;color:var(--muted)"></div>
     </div>
   </div>
 </div>
 
 <script>
-  // ── Panel switching ─────────────────────────────────────
-  function switchPanel(id) {
-    document.querySelectorAll('.panel').forEach(p => {
-      p.classList.toggle('active', p.id === 'panel-' + id);
-    });
-    document.querySelectorAll('.nav-link').forEach(l => {
-      const active = l.id === 'tab-' + id;
-      l.classList.toggle('active', active);
-      l.setAttribute('aria-selected', active ? 'true' : 'false');
-    });
+// ── Panel switching ─────────────────────────────────────────────────────────
+function switchPanel(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
+  document.getElementById('panel-' + id).classList.add('active');
+  document.getElementById('tab-' + id).classList.add('active');
+  document.getElementById('tab-' + id).setAttribute('aria-selected','true');
+  if (id === 'oracle') renderOracleFull();
+  if (id === 'connections') renderConnections();
+}
+
+// ── Global state ────────────────────────────────────────────────────────────
+let _overview = null;
+let _metricsData = null;
+
+// ── Main data load ───────────────────────────────────────────────────────────
+async function loadAll() {
+  document.getElementById('refresh-btn').textContent = '↻ …';
+  try {
+    const [ov, met] = await Promise.all([
+      fetch('/api/prod/overview', { signal: AbortSignal.timeout(15000) }).then(r => r.json()),
+      fetch('/metrics', { signal: AbortSignal.timeout(8000) }).then(r => r.json()),
+    ]);
+    _overview = ov;
+    _metricsData = met;
+    renderOverview();
+    document.getElementById('refresh-btn').textContent = '↻ Refresh';
+  } catch(e) {
+    console.warn('loadAll error', e);
+    document.getElementById('subheading').textContent = 'Error loading data — ' + e.message;
+    document.getElementById('refresh-btn').textContent = '↻ Retry';
+  }
+}
+
+function renderOverview() {
+  if (!_overview) return;
+  const ov = _overview;
+  const sys = ov.system || {};
+  const oracle = ov.oracle || {};
+  const pp = ov.paypal || {};
+
+  // env badge
+  const badge = document.getElementById('env-badge');
+  if (pp.connected) {
+    badge.textContent = pp.environment === 'live' ? 'PayPal Live' : 'PayPal Sandbox';
+    badge.className = 'env-badge' + (pp.environment === 'live' ? ' live' : '');
+  } else {
+    badge.textContent = 'PayPal unavailable';
+    badge.className = 'env-badge';
   }
 
-  // ── Greeting ───────────────────────────────────────────
-  function setGreeting() {
-    const h = new Date().getHours();
-    const g = h < 12 ? 'morning' : h < 17 ? 'afternoon' : 'evening';
-    document.getElementById('greeting').textContent = `Good ${g}, Acme`;
-  }
-  setGreeting();
+  // subheading
+  const ts = ov.fetched_at ? new Date(ov.fetched_at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit',second:'2-digit'}) : '';
+  document.getElementById('subheading').textContent = `Live data · refreshed ${ts}`;
 
-  // ── Load live data ─────────────────────────────────────
-  async function loadData() {
-    try {
-      const response = await fetch('/api/dashboard/summary', { signal: AbortSignal.timeout(12000) });
-      if (!response.ok) throw new Error(`PayPal summary returned ${response.status}`);
-      const data = await response.json();
-      if (!data.connected) throw new Error('PayPal is not connected');
+  // hero
+  document.getElementById('h-open').textContent = pp.connected ? (pp.open_disputes ?? '—') : '—';
+  document.getElementById('h-urgent').textContent = pp.connected ? (pp.urgent_disputes ?? '—') : '—';
+  document.getElementById('h-webhooks').textContent = pp.connected ? (pp.webhook_registrations ?? '—') : '—';
+  const heroSub = pp.connected
+    ? `${pp.environment === 'live' ? 'Production' : 'Sandbox'} · ${pp.fetched_at ? 'fetched ' + new Date(pp.fetched_at).toLocaleTimeString() : ''}`
+    : (pp.error ? `PayPal unavailable (${pp.error})` : 'PayPal not configured');
+  document.getElementById('hero-sub').textContent = heroSub;
 
-      const badge = document.getElementById('env-badge');
-      badge.textContent = data.environment === 'sandbox' ? 'PayPal Sandbox' : 'PayPal Live';
-      badge.classList.add('live');
-      document.getElementById('subheading').textContent =
-        `Live PayPal data · refreshed ${new Date(data.fetched_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
-      document.getElementById('m-open').textContent = data.dispute_counts_complete ? data.open_disputes : `${data.open_disputes}+`;
-      document.getElementById('m-risk').textContent = data.dispute_counts_complete ? data.urgent_disputes : `${data.urgent_disputes}+`;
-      document.getElementById('m-recovered').textContent = data.webhook_registrations;
+  // metrics strip
+  document.getElementById('m-oracle-calls').textContent = oracle.total_calls != null ? oracle.total_calls.toLocaleString() : '—';
+  const p95 = oracle.p95_ms_global;
+  const p95El = document.getElementById('m-p95');
+  p95El.textContent = p95 != null ? p95 + 'ms' : '—';
+  p95El.className = 'metric-value' + (p95 > 500 ? ' metric-warn' : p95 > 1000 ? ' metric-err' : '');
 
-      const recovery = data.recoveries || {};
-      if (recovery.available) {
-        document.getElementById('m-winrate').textContent = recovery.recovered_orders;
-        document.getElementById('m-winrate-sub').textContent =
-          '$' + Number(recovery.recovered_revenue || 0).toLocaleString('en-US', {maximumFractionDigits:2}) + ' captured';
-        document.getElementById('recovery-title').textContent = 'Approved orders awaiting capture';
-        document.getElementById('recovery-sub').textContent = `${recovery.awaiting_capture} orders awaiting capture`;
-        document.getElementById('recovery-amount').textContent =
-          '$' + Number(recovery.recovered_revenue || 0).toLocaleString('en-US', {maximumFractionDigits:2});
-        document.getElementById('recovery-est').textContent = 'Confirmed PayPal captures';
-        document.getElementById('recovery-bar').style.width = Math.min(100, recovery.awaiting_capture * 10) + '%';
-      } else {
-        document.getElementById('m-winrate').textContent = '—';
-        document.getElementById('m-winrate-sub').textContent = 'Recovery storage not connected';
-        document.getElementById('recovery-title').textContent = 'Recovery history unavailable';
-        document.getElementById('recovery-sub').textContent = 'Connect Elasticsearch to track approved orders and captures.';
-        document.getElementById('recovery-amount').textContent = '—';
-        document.getElementById('recovery-est').textContent = 'No recovery database configured';
-      }
+  const errRate = sys.error_rate_pct;
+  const errEl = document.getElementById('m-err-rate');
+  errEl.textContent = errRate != null ? errRate.toFixed(1) + '%' : '—';
+  errEl.className = 'metric-value' + (errRate > 5 ? ' metric-err' : errRate > 1 ? ' metric-warn' : errRate === 0 ? ' metric-ok' : '');
 
-      const empty = document.getElementById('hero-empty');
-      document.getElementById('hero-card').style.display = 'none';
-      empty.style.display = 'block';
-      if (data.open_disputes === 0) {
-        empty.textContent = 'No open disputes in the connected PayPal account.';
-      } else {
-        empty.textContent = `${data.open_disputes} open dispute(s) found. Case details are available only in the private merchant view.`;
-      }
-      const queue = document.getElementById('queue-body');
-      queue.replaceChildren();
-      const row = document.createElement('div');
-      row.className = 'queue-row';
-      row.setAttribute('role', 'row');
-      const cell = document.createElement('div');
-      cell.className = 'queue-context';
-      cell.setAttribute('role', 'cell');
-      cell.textContent = data.open_disputes === 0
-        ? 'Live PayPal result · no open disputes'
-        : 'Live PayPal result · private dispute details are protected';
-      row.appendChild(cell);
-      queue.appendChild(row);
-    } catch(e) {
-      document.getElementById('env-badge').textContent = 'PayPal unavailable';
-      document.getElementById('subheading').textContent = 'Could not load live PayPal data. Check the service connection.';
-      document.getElementById('hero-empty').style.display = 'block';
-      document.getElementById('hero-empty').textContent = 'Live PayPal data is unavailable right now.';
-      document.getElementById('queue-body').textContent = 'Could not load PayPal data.';
-      console.warn('Dashboard data load error:', e);
-    }
-  }
+  const uptime = ov.uptime_seconds;
+  document.getElementById('m-uptime').textContent = uptime != null ? fmtUptime(uptime) : '—';
+  document.getElementById('m-uptime-sub').textContent = ov.started_at ? 'since ' + new Date(ov.started_at).toLocaleDateString() : 'since start';
+  document.getElementById('m-endpoints').textContent = oracle.endpoint_count ?? '—';
 
-  function renderQueue(disputes) {
-    if (!disputes) return;
-    const body = document.getElementById('queue-body');
-    body.replaceChildren();
-    disputes.forEach(d => {
-      const action = String(d.action_type || 'dispute_action').replaceAll('_',' ');
-      const row = document.createElement('div');
-      row.className = 'queue-row';
-      row.setAttribute('role','row');
-      row.setAttribute('tabindex','0');
-      row.onclick = () => switchPanel('disputes');
-      const cells = [
-        [d.dispute_id || d.id || 'PayPal dispute', 'queue-case-id'],
-        ['$' + Number(d.amount || d.disputed_amount || 0).toFixed(2), 'queue-amount'],
-        [action, 'queue-due'],
-        [d.reasoning || d.outcome || 'Recorded decision', 'queue-context'],
-      ];
-      cells.forEach(([text, className]) => {
-        const cell = document.createElement('div');
-        cell.className = className;
-        cell.setAttribute('role','cell');
-        cell.textContent = text;
-        row.appendChild(cell);
-      });
-      body.appendChild(row);
-    });
-    if (!disputes.length) {
-      const empty = document.createElement('div');
-      empty.className = 'queue-row';
-      empty.textContent = 'No recorded dispute decisions yet.';
-      body.appendChild(empty);
-    }
-  }
-
-  function openReviewDispute() {
-    switchPanel('disputes');
-  }
-
-  loadData();
-
-  // ── Sample Decision Drawer ──────────────────────────────
-  let _selectedScenario = null;
-
-  const SCENARIOS = {
-    inr_fight: { amount: 245, reason: 'ITEM_NOT_RECEIVED' },
-    snad_fight: { amount: 320, reason: 'SIGNIFICANTLY_NOT_AS_DESCRIBED' },
-    unauthorized_accept: { amount: 180, reason: 'UNAUTHORIZED' },
-    micro_accept: { amount: 18.5, reason: 'ITEM_NOT_RECEIVED' },
-  };
-
-  function selectScenario(btn, key) {
-    _selectedScenario = key;
-    document.querySelectorAll('.scenario-btn').forEach(b => {
-      b.classList.remove('selected');
-      b.setAttribute('aria-pressed','false');
-    });
-    btn.classList.add('selected');
-    btn.setAttribute('aria-pressed','true');
-    document.getElementById('run-btn').disabled = false;
-    document.getElementById('drawer-result').classList.remove('show');
-  }
-
-  async function runScenario() {
-    if (!_selectedScenario) return;
-    const btn = document.getElementById('run-btn');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Reviewing evidence…';
-
-    let result;
-    try {
-      const resp = await fetch('/api/demo/simulate-dispute', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({scenario: _selectedScenario})
-      });
-      if (!resp.ok) throw new Error(`Scenario request failed (${resp.status})`);
-      result = await resp.json();
-    } catch(e) {
-      document.getElementById('res-ai-status').textContent = 'Could not reach Anchor. Please try again.';
-      document.getElementById('drawer-result').classList.add('show');
-      btn.disabled = false;
-      btn.textContent = 'Try again';
-      return;
-    }
-
-    const oracle = result.oracle || {};
-    document.getElementById('res-rec').textContent = oracle.recommendation || 'Review required';
-    document.getElementById('res-ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
-    document.getElementById('res-ev-accept').textContent = oracle.ev_accept != null ? '$' + oracle.ev_accept.toFixed(2) : '—';
-    document.getElementById('res-win-prob').textContent = oracle.win_probability != null ? (oracle.win_probability * 100).toFixed(0) + '% · model estimate' : '—';
-    document.getElementById('res-evidence').textContent = oracle.evidence_multiplier != null ? oracle.evidence_multiplier.toFixed(2) + '× · rule-based' : '—';
-
-    const rec = document.getElementById('res-rec');
-    rec.className = 'result-value';
-    const rt = String(oracle.recommendation || '').toLowerCase();
-    rec.classList.add(rt.includes('fight') || rt.includes('reject') ? 'fight' : '');
-
-    const ai = result.ai_review || {};
-    const aiStatus = document.getElementById('res-ai-status');
-    const aiClaims = document.getElementById('res-ai-claims');
-    aiClaims.replaceChildren();
-    document.getElementById('res-ai-gaps').textContent = '';
-    if (ai.status === 'ready') {
-      aiStatus.textContent = `Live AI review · ${ai.provider} · ${ai.model}`;
-      (ai.claims || []).forEach(claim => {
-        const li = document.createElement('li');
-        li.textContent = `${claim.statement} [${claim.source_ids.join(', ')}]`;
-        aiClaims.appendChild(li);
-      });
-      const gaps = ai.missing_evidence || [];
-      if (gaps.length) document.getElementById('res-ai-gaps').textContent = `Could request: ${gaps.join(' · ')}`;
-    } else {
-      aiStatus.textContent = ai.status === 'not_configured'
-        ? 'AI gateway not configured; no AI output was generated.'
-        : `AI review unavailable (${ai.status || 'unknown'}); no AI output was generated.`;
-    }
-
-    document.getElementById('drawer-result').classList.add('show');
-    btn.disabled = false;
-    btn.innerHTML = 'Run sample review';
-
-    // Update oracle bar
-    document.getElementById('ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
-  }
-
-  function openDrawer() {
-    document.getElementById('drawer-overlay').classList.add('open');
-    document.getElementById('try-sample-btn').setAttribute('aria-expanded','true');
-    document.getElementById('drawer-close') && document.getElementById('drawer-close').focus();
-    document.querySelector('.drawer-close').focus();
-    // reset state
-    _selectedScenario = null;
-    document.querySelectorAll('.scenario-btn').forEach(b => { b.classList.remove('selected'); b.setAttribute('aria-pressed','false'); });
-    document.getElementById('run-btn').disabled = true;
-    document.getElementById('run-btn').innerHTML = 'Run sample review';
-    document.getElementById('drawer-result').classList.remove('show');
-  }
-
-  function closeDrawer() {
-    document.getElementById('drawer-overlay').classList.remove('open');
-    document.getElementById('try-sample-btn').setAttribute('aria-expanded','false');
-    document.getElementById('try-sample-btn').focus();
-  }
-
-  function closeDrawerOnOverlay(e) {
-    if (e.target === document.getElementById('drawer-overlay')) closeDrawer();
-  }
-
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && document.getElementById('drawer-overlay').classList.contains('open')) {
-      closeDrawer();
-    }
-  });
-
-  // ── Connections panel ───────────────────────────────────
-  const SPONSORS = [
-    {
-      key: 'render', name: 'Render', logo: '🟣', category: 'Hosting',
-      desc: 'Anchor is hosted on Render. Free instances may sleep after inactivity; GitHub pushes trigger deployment.',
-      endpoints: ['GET /api/render/status', 'GET /api/render/health'],
-      statusUrl: '/api/render/health',
-      statusKey: 'status',
-    },
-    {
-      key: 'aggrid', name: 'AG Grid', logo: '📊', category: 'UI · Data Grid',
-      desc: 'Community 31.3.2 — powers the Disputes and Recoveries data tables with column groups and CSV export.',
-      endpoints: ['GET /api/aggrid/status', 'GET /api/aggrid/data'],
-      statusUrl: '/api/aggrid/status',
-      statusKey: 'status',
-    },
-    {
-      key: 'bryntum', name: 'Bryntum', logo: '📅', category: 'UI · Scheduler',
-      desc: 'Deadline and response timeline visualization in the dispute management view.',
-      endpoints: ['GET /api/bryntum/status', 'GET /api/bryntum/data'],
-      statusUrl: '/api/bryntum/status',
-      statusKey: 'status',
-    },
-    {
-      key: 'zapier', name: 'Zapier', logo: '⚡', category: 'Automation',
-      desc: 'Webhook subscriptions — Zapier can trigger Anchor on new disputes and receive real-time alerts.',
-      endpoints: ['POST /api/zapier/subscribe', 'POST /api/zapier/ingest'],
-      statusUrl: null,
-      statusKey: null,
-    },
-    {
-      key: 'elastic', name: 'Elastic', logo: '🔍', category: 'Search',
-      desc: 'Full-text search and indexing over dispute history. Keyword and structured queries across all cases.',
-      endpoints: ['POST /api/elastic/search', 'GET /api/elastic/stats'],
-      statusUrl: '/api/elastic/stats',
-      statusKey: 'status',
-    },
-    {
-      key: 'apimatic', name: 'APIMatic', logo: '📐', category: 'API · SDK Gen',
-      desc: 'Auto-generates SDKs from Anchor\'s OpenAPI spec. Full endpoint catalog and schema export.',
-      endpoints: ['GET /api/openapi.json', 'GET /api/apimatic/context'],
-      statusUrl: '/api/openapi.json',
-      statusKey: null,
-    },
-    {
-      key: 'postman', name: 'Postman', logo: '📮', category: 'API · Testing',
-      desc: 'Runnable Postman collection covering every Anchor endpoint — importable in one click.',
-      endpoints: ['GET /api/postman/collection', 'POST /api/postman/publish'],
-      statusUrl: '/api/postman/status',
-      statusKey: 'status',
-    },
-    {
-      key: 'astropods', name: 'Astropods', logo: '🤖', category: 'Agent Governance',
-      desc: 'Optional source-cited dispute evidence review. The model does not control EV decisions or PayPal actions.',
-      endpoints: ['GET /api/astropods/status', 'GET /api/astropods/agent-registry'],
-      statusUrl: '/api/astropods/status',
-      statusKey: 'gateway_configured',
-      statusLabel: 'Configured',
-    },
-    {
-      key: 'channel3', name: 'Channel3', logo: '🛍️', category: 'Commerce Enrichment',
-      desc: 'Agentic commerce — enriches INR/SNAD disputes with live product details and delivery verification.',
-      endpoints: ['GET /api/channel3/product-lookup', 'POST /api/channel3/dispute-enrich'],
-      statusUrl: '/api/channel3/status',
-      statusKey: 'status',
-    },
-    {
-      key: 'kernel', name: 'KERNEL', logo: '🌐', category: 'Community Trust',
-      desc: 'Cross-references buyer IDs against KERNEL\'s community trust graph. Surfaces repeat-disputer risk.',
-      endpoints: ['POST /api/kernel/community-trust', 'GET /api/kernel/trust-stats'],
-      statusUrl: '/api/kernel/status',
-      statusKey: 'status',
-    },
-  ];
-
-  async function loadConnections() {
-    const grid = document.getElementById('connections-grid');
-    if (!grid) return;
-
-    // Render cards immediately with "checking" state
-    grid.innerHTML = SPONSORS.map(s => `
-      <div class="conn-card" id="conn-${s.key}">
-        <div class="conn-logo" aria-hidden="true">${s.logo}</div>
-        <div class="conn-info">
-          <div class="conn-name">${s.name} <span style="font-size:11px;font-weight:500;color:var(--muted-2);margin-left:4px;">${s.category}</span></div>
-          <div class="conn-desc">${s.desc}</div>
-          <div class="conn-endpoints">${s.endpoints.map(e => `<span class="conn-ep">${e}</span>`).join('')}</div>
-          <div class="conn-status checking" id="conn-status-${s.key}">
-            <span class="conn-dot checking"></span>
-            Checking…
-          </div>
-        </div>
-      </div>
-    `).join('');
-
-    // Probe each endpoint in parallel
-    await Promise.all(SPONSORS.map(async s => {
-      const el = document.getElementById('conn-status-' + s.key);
-      if (!el) return;
-      if (!s.statusUrl) {
-        // Zapier — static (webhook-driven, no GET probe)
-        el.className = 'conn-status demo';
-        el.innerHTML = '<span class="conn-dot demo"></span>Webhook ready';
-        return;
-      }
-      try {
-        const res = await fetch(s.statusUrl, { signal: AbortSignal.timeout(4000) });
-        if (res.ok) {
-          const data = await res.json().catch(() => ({}));
-          const statusVal = s.statusKey ? (data[s.statusKey] || '') : '';
-          const isDemo = data.demo === true || statusVal === false || !statusVal ||
-                         String(statusVal).toLowerCase().includes('demo') ||
-                         String(statusVal).toLowerCase().includes('simulated');
-          el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
-          el.innerHTML = isDemo
-            ? `<span class="conn-dot demo"></span>${s.statusKey === 'gateway_configured' ? 'Not configured' : 'Demo mode'}`
-            : `<span class="conn-dot ok"></span>${s.statusLabel || 'Connected'}`;
-          // Extra detail if available
-          if (data.version) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">v${data.version}</span>`;
-          if (data.requests_indexed != null) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">${data.requests_indexed} requests</span>`;
-          if (data.agent_count != null) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">${data.agent_count} agents</span>`;
-        } else {
-          el.className = 'conn-status demo';
-          el.innerHTML = '<span class="conn-dot demo"></span>Demo mode';
-        }
-      } catch(e) {
-        el.className = 'conn-status demo';
-        el.innerHTML = '<span class="conn-dot demo"></span>Demo mode';
-      }
-    }));
-  }
-
-  // ── Live Disputes panel ────────────────────────────────
-  let _disputesAuditCache = null;
-
-  function _getApiKey() {
-    const inp = document.getElementById('disputes-api-key');
-    const val = inp ? inp.value.trim() : '';
-    if (val) { try { sessionStorage.setItem('anchor_api_key', val); } catch(e){} return val; }
-    try { return sessionStorage.getItem('anchor_api_key') || ''; } catch(e){ return ''; }
-  }
-
-  function _daysUntil(dateStr) {
-    if (!dateStr) return null;
-    const diff = (new Date(dateStr) - Date.now()) / 86400000;
-    return Math.round(diff);
-  }
-
-  function _deadlineBadge(days) {
-    if (days === null) return '<span style="color:var(--muted)">—</span>';
-    const color = days <= 1 ? '#dc2626' : days <= 5 ? '#d97706' : '#16a34a';
-    const label = days < 0 ? `OVERDUE ${Math.abs(days)}d` : `${days}d`;
-    return `<span style="color:${color};font-weight:700;">${label}</span>`;
-  }
-
-  function _reasonLabel(r) {
-    const map = {
-      ITEM_NOT_RECEIVED: 'INR',
-      SIGNIFICANTLY_NOT_AS_DESCRIBED: 'SNAD',
-      UNAUTHORIZED: 'Unauth',
-      CREDIT_NOT_PROCESSED: 'Credit',
-      DUPLICATE_TRANSACTION: 'Dup',
-      INCORRECT_AMOUNT: 'Amt',
-      PAYMENT_BY_OTHER_MEANS: 'Other Pay',
-    };
-    return map[r] || r || '—';
-  }
-
-  async function _fetchAuditCache(apiKey) {
-    if (_disputesAuditCache) return _disputesAuditCache;
-    try {
-      const r = await fetch('/api/audit/log?limit=200', { signal: AbortSignal.timeout(8000) });
-      if (r.ok) {
-        const j = await r.json();
-        _disputesAuditCache = {};
-        for (const e of (j.entries || [])) {
-          if (!_disputesAuditCache[e.dispute_id]) _disputesAuditCache[e.dispute_id] = e;
-        }
-      }
-    } catch(e) { _disputesAuditCache = {}; }
-    return _disputesAuditCache;
-  }
-
-  function _oracleBadge(entry) {
-    if (!entry) return '<span style="color:var(--muted);font-size:12px;">No decision logged</span>';
-    const colors = { AUTO_FIGHT: '#16a34a', AUTO_ACCEPT: '#dc2626', REQUEST_APPROVAL: '#d97706', GATHER_EVIDENCE: '#2563eb', SKIPPED: '#9898a3' };
-    const c = colors[entry.action] || '#9898a3';
-    const prob = entry.win_prob != null ? ` · ${(entry.win_prob*100).toFixed(0)}%` : '';
-    return `<span style="background:${c}18;color:${c};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">${entry.action}${prob}</span>`;
-  }
-
-  async function _renderDisputesTable(disputes) {
-    const apiKey = _getApiKey();
-    const audit = await _fetchAuditCache(apiKey);
-    const tbody = document.getElementById('disputes-tbody');
-    const table = document.getElementById('disputes-table');
-    const empty = document.getElementById('disputes-empty');
-
-    if (!disputes.length) {
-      table.style.display = 'none';
-      empty.style.display = 'block';
-      empty.textContent = 'No open disputes found in this state.';
-      return;
-    }
-
-    tbody.replaceChildren();
-    disputes.forEach(d => {
-      const tr = document.createElement('tr');
-      tr.style.cssText = 'border-bottom:1px solid var(--border-light);cursor:default;';
-      tr.onmouseover = () => tr.style.background = 'var(--bg)';
-      tr.onmouseleave = () => tr.style.background = '';
-
-      const days = _daysUntil(d.due_date || d.seller_response_due_date);
-      const oracleEntry = audit[d.dispute_id];
-
-      const cells = [
-        `<a href="https://www.sandbox.paypal.com/disputes/details/${d.dispute_id}" target="_blank" rel="noopener"
-           style="color:var(--accent);font-weight:600;font-size:12px;font-family:monospace;">${d.dispute_id}</a>`,
-        `<span style="font-weight:500;">${_reasonLabel(d.reason)}</span>`,
-        `<span style="font-weight:600;">${d.amount || '—'}</span>`,
-        `<span style="font-size:11px;color:var(--muted);">${(d.status||'').replaceAll('_',' ')}</span>`,
-        `<span style="font-size:12px;">${(d.due_date||d.seller_response_due_date||'—').replace('T',' ').substring(0,16)}</span>`,
-        _deadlineBadge(days),
-        _oracleBadge(oracleEntry),
-        `<span style="display:flex;gap:5px;flex-wrap:wrap;">
-          <button onclick="disputeAccept('${d.dispute_id}')" title="Accept claim and issue refund"
-            style="font-size:11px;padding:3px 8px;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:4px;cursor:pointer;font-weight:600;">Accept</button>
-          <button onclick="disputeMessage('${d.dispute_id}')" title="Send message to buyer or PayPal"
-            style="font-size:11px;padding:3px 8px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:4px;cursor:pointer;font-weight:600;">Message</button>
-         </span>`,
-      ];
-
-      tr.innerHTML = cells.map(c => `<td style="padding:10px 12px;vertical-align:middle;">${c}</td>`).join('');
-      tbody.appendChild(tr);
-    });
-
-    table.style.display = 'table';
-    empty.style.display = 'none';
-  }
-
-  async function _loadDisputesForState(state) {
-    const apiKey = _getApiKey();
-    if (!apiKey) {
-      const bar = document.getElementById('disputes-status-bar');
-      bar.style.cssText = 'display:block;background:#fef3c7;color:#92400e;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-      bar.textContent = 'Enter your X-API-Key above to load live dispute data.';
-      return [];
-    }
-    const bar = document.getElementById('disputes-status-bar');
-    bar.style.cssText = 'display:block;background:#dbeafe;color:#1e40af;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;';
-    bar.textContent = `Loading ${state} disputes from PayPal…`;
-    try {
-      const r = await fetch(`/api/paypal/disputes?state=${state}&page_size=50`, {
-        headers: { 'X-API-Key': apiKey },
-        signal: AbortSignal.timeout(15000),
-      });
-      if (r.status === 401) {
-        bar.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-        bar.textContent = 'Invalid API key. Check your X-API-Key.';
-        return [];
-      }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      return data.items || data.urgent_items || [];
-    } catch(e) {
-      bar.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-      bar.textContent = `Error loading disputes: ${e.message}`;
-      return [];
-    }
-  }
-
-  async function loadLiveDisputes() {
-    _disputesAuditCache = null;
-    const inp = document.getElementById('disputes-api-key');
-    if (inp && inp.value.trim()) try { sessionStorage.setItem('anchor_api_key', inp.value.trim()); } catch(e){}
-    const disputes = await _loadDisputesForState('REQUIRED_ACTION');
-    if (!disputes.length && _getApiKey()) {
-      const bar = document.getElementById('disputes-status-bar');
-      if (!bar.textContent.includes('Error') && !bar.textContent.includes('Invalid')) {
-        bar.style.cssText = 'display:block;background:#d1fae5;color:#065f46;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-        bar.textContent = 'No REQUIRED_ACTION disputes — no urgent responses needed right now.';
-      }
-    } else if (disputes.length) {
-      const bar = document.getElementById('disputes-status-bar');
-      bar.style.cssText = 'display:block;background:#d1fae5;color:#065f46;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-      bar.textContent = `Loaded ${disputes.length} disputes requiring action.`;
-    }
-    await _renderDisputesTable(disputes);
-  }
-
-  async function loadAllDisputes() {
-    _disputesAuditCache = null;
-    const inp = document.getElementById('disputes-api-key');
-    if (inp && inp.value.trim()) try { sessionStorage.setItem('anchor_api_key', inp.value.trim()); } catch(e){}
-    const states = ['REQUIRED_ACTION', 'REQUIRED_OTHER_PARTY_ACTION', 'UNDER_REVIEW', 'OPEN_INQUIRIES'];
-    const bar = document.getElementById('disputes-status-bar');
-    bar.style.cssText = 'display:block;background:#dbeafe;color:#1e40af;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;';
-    bar.textContent = 'Loading all open dispute states…';
-    try {
-      const apiKey = _getApiKey();
-      if (!apiKey) { bar.style.cssText = bar.style.cssText.replace('1e40af','92400e').replace('dbeafe','fef3c7'); bar.textContent = 'Enter your X-API-Key above.'; return; }
-      const results = await Promise.all(states.map(s =>
-        fetch(`/api/paypal/disputes?state=${s}&page_size=50`, { headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(15000) })
-          .then(r => r.ok ? r.json() : { items: [] })
-          .then(j => j.items || j.urgent_items || [])
-          .catch(() => [])
-      ));
-      const all = results.flat();
-      const seen = new Set();
-      const unique = all.filter(d => { if (seen.has(d.dispute_id)) return false; seen.add(d.dispute_id); return true; });
-      bar.style.cssText = 'display:block;background:#d1fae5;color:#065f46;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-      bar.textContent = `Loaded ${unique.length} total open disputes.`;
-      await _renderDisputesTable(unique);
-    } catch(e) {
-      bar.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
-      bar.textContent = `Error: ${e.message}`;
-    }
-  }
-
-  // ── Dispute action helpers ────────────────────────────────────────────────
-
-  async function _disputeAction(disputeId, path, body, confirmMsg) {
-    if (!confirm(confirmMsg)) return;
-    const apiKey = _getApiKey();
-    if (!apiKey) { alert('Enter your X-API-Key first.'); return; }
-    const btn = event.target;
-    btn.disabled = true;
-    btn.textContent = '…';
-    try {
-      const r = await fetch(`/api/paypal/disputes/${disputeId}/${path}`, {
-        method: 'POST',
-        headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(20000),
-      });
-      const data = await r.json();
-      if (r.ok) {
-        btn.textContent = '✓ Done';
-        btn.style.background = '#d1fae5';
-        btn.style.color = '#065f46';
-        setTimeout(() => loadLiveDisputes(), 2000);
-      } else {
-        alert(`Error: ${data.error || r.statusText}`);
-        btn.disabled = false;
-        btn.textContent = path.includes('accept') ? 'Accept' : 'Message';
-      }
-    } catch(e) {
-      alert(`Request failed: ${e.message}`);
-      btn.disabled = false;
-      btn.textContent = path.includes('accept') ? 'Accept' : 'Message';
-    }
-  }
-
-  window.disputeAccept = function(disputeId) {
-    _disputeAction(disputeId, 'accept', { note: 'Merchant accepts this claim via Anchor dashboard.' },
-      `Accept claim ${disputeId} and issue refund? This cannot be undone.`);
-  };
-
-  window.disputeMessage = function(disputeId) {
-    const msg = prompt(`Message to buyer/PayPal for dispute ${disputeId}:`);
-    if (!msg || !msg.trim()) return;
-    _disputeAction(disputeId, 'send-message', { message: msg.trim() },
-      `Send this message on dispute ${disputeId}?`);
-  };
-
-  // Load connections when that panel is first opened
-  let _connectionsLoaded = false;
-  const _origSwitchPanel = switchPanel;
-  window.switchPanel = function(id) {
-    _origSwitchPanel(id);
-    if (id === 'connections' && !_connectionsLoaded) {
-      _connectionsLoaded = true;
-      loadConnections();
-    }
-    if (id === 'audit') loadAudit();
-    if (id === 'safety') loadSafety();
-    if (id === 'disputes') {
-      // Pre-fill API key from session storage
-      try {
-        const saved = sessionStorage.getItem('anchor_api_key');
-        const inp = document.getElementById('disputes-api-key');
-        if (saved && inp && !inp.value) inp.value = saved;
-      } catch(e) {}
-    }
-  };
-
-  // ── Audit Trail panel ──────────────────────────────────
-  const ACTION_COLORS = {
-    AUTO_FIGHT:       '#16a34a',
-    AUTO_ACCEPT:      '#dc2626',
-    REQUEST_APPROVAL: '#d97706',
-    GATHER_EVIDENCE:  '#2563eb',
-    SKIPPED:          '#9898a3',
-  };
-  const OUTCOME_COLORS = {
-    PENDING:   '#d97706',
-    WON:       '#16a34a',
-    LOST:      '#dc2626',
-    SETTLED:   '#2563eb',
-    WITHDRAWN: '#9898a3',
-    UNKNOWN:   '#9898a3',
-  };
-
-  async function loadAudit() {
-    try {
-      const [logRes, statsRes] = await Promise.all([
-        fetch('/api/audit/log?limit=50'),
-        fetch('/api/audit/stats'),
-      ]);
-      if (logRes.ok) renderAuditTable(await logRes.json());
-      if (statsRes.ok) renderAuditStats(await statsRes.json());
-    } catch(e) {
-      document.getElementById('audit-tbody').innerHTML =
-        '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--muted);">Could not reach audit API</td></tr>';
-    }
-  }
-
-  function renderAuditStats(stats) {
-    const el = document.getElementById('audit-stats');
-    if (!el) return;
-    const cells = [
-      { label: 'Total Logged',       value: stats.total_logged },
-      { label: 'Avg Win Prob',        value: stats.avg_win_probability != null ? (stats.avg_win_probability * 100).toFixed(0) + '%' : '—' },
-      { label: 'Amount at Risk',      value: stats.total_amount_at_risk_usd != null ? '$' + stats.total_amount_at_risk_usd.toFixed(2) : '—' },
-      { label: 'Sandbox Entries',     value: stats.sandbox_pct != null ? stats.sandbox_pct + '%' : '—' },
-    ];
-    el.innerHTML = cells.map(c => `
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 18px;min-width:120px;">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">${c.label}</div>
-        <div style="font-size:20px;font-weight:700;color:var(--text);">${c.value}</div>
-      </div>`).join('');
-  }
-
-  function renderAuditTable(data) {
-    const tbody = document.getElementById('audit-tbody');
-    if (!data.entries || data.entries.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--muted);">No audit entries yet — run a trace or simulate a dispute</td></tr>';
-      return;
-    }
-    tbody.innerHTML = data.entries.map(e => {
-      const ac = ACTION_COLORS[e.action] || '#9898a3';
-      const oc = OUTCOME_COLORS[e.outcome] || '#9898a3';
-      const ts = new Date(e.timestamp_utc).toLocaleTimeString();
-      const sandboxBadge = e.is_sandbox
-        ? '<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;">SANDBOX</span>'
-        : '<span style="background:#dcfce7;color:#166534;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;">LIVE</span>';
-      return `<tr style="border-bottom:1px solid var(--border-light);">
-        <td style="padding:8px 12px;font-family:monospace;font-size:11px;color:var(--muted);">${e.entry_id}</td>
-        <td style="padding:8px 12px;font-weight:600;">${e.dispute_id}</td>
-        <td style="padding:8px 12px;"><span style="color:${ac};font-weight:700;font-size:12px;">${e.action}</span></td>
-        <td style="padding:8px 12px;">${(e.oracle_win_probability * 100).toFixed(0)}%</td>
-        <td style="padding:8px 12px;font-family:monospace;">${e.oracle_ev_fight >= 0 ? '+' : ''}$${e.oracle_ev_fight.toFixed(2)}</td>
-        <td style="padding:8px 12px;">$${e.amount_usd.toFixed(2)}</td>
-        <td style="padding:8px 12px;"><span style="color:${oc};font-weight:600;font-size:12px;">${e.outcome}</span></td>
-        <td style="padding:8px 12px;">${sandboxBadge}</td>
-        <td style="padding:8px 12px;color:var(--muted);font-size:12px;">${ts}</td>
+  // oracle top endpoints table
+  document.getElementById('oracle-total-badge').textContent = (oracle.total_calls || 0).toLocaleString() + ' calls';
+  const topBody = document.getElementById('oracle-top-body');
+  if (!oracle.top_endpoints || oracle.top_endpoints.length === 0) {
+    topBody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:16px 0">No oracle calls this session</td></tr>';
+  } else {
+    topBody.innerHTML = oracle.top_endpoints.map(r => {
+      const shortPath = r.path.replace('/api/oracle/','');
+      const errCls = r.error_rate_pct > 5 ? 'num-err' : r.error_rate_pct > 0 ? 'num-warn' : 'num-ok';
+      return `<tr>
+        <td class="path-cell" title="${r.path}">${shortPath}</td>
+        <td style="text-align:right">${r.count}</td>
+        <td style="text-align:right">${r.avg_ms}ms</td>
+        <td style="text-align:right">${r.p95_ms}ms</td>
+        <td style="text-align:right" class="${errCls}">${r.error_rate_pct}%</td>
       </tr>`;
     }).join('');
   }
 
-  // ── Safety panel ───────────────────────────────────────
-  const SAFETY_LEVEL_STYLES = {
-    SAFE:         { bg: '#dcfce7', color: '#166534', label: '✓ SAFE — autonomous actions permitted' },
-    SHADOW:       { bg: '#fef3c7', color: '#92400e', label: '◎ SHADOW MODE — decisions logged, no PayPal actions' },
-    HUMAN_REVIEW: { bg: '#fef9c3', color: '#854d0e', label: '⚠ HUMAN REVIEW REQUIRED — soft checks failed' },
-    BLOCKED:      { bg: '#fee2e2', color: '#991b1b', label: '✗ BLOCKED — hard safety checks failed' },
-  };
-  const CHECK_STATUS_STYLES = {
-    PASS: { icon: '✓', color: '#16a34a', bg: '#f0fdf4' },
-    WARN: { icon: '⚠', color: '#d97706', bg: '#fffbeb' },
-    FAIL: { icon: '✗', color: '#dc2626', bg: '#fef2f2' },
-  };
+  // system health table
+  const healthBody = document.getElementById('health-body');
+  const healthRows = [
+    ['Scheduler', sys.scheduler_running ? ['Running','ok'] : ['Stopped','err']],
+    ['Rate limit', [`${sys.rate_limit_per_minute ?? '?'} req/min`, 'ok']],
+    ['Oracle timeout', [`${sys.oracle_timeout_seconds ?? '?'}s`, 'ok']],
+    ['Lockout threshold', [`${sys.lockout_threshold ?? '?'} failures`, 'ok']],
+    ['Auth failures (window)', [sys.total_auth_failures ?? 0, sys.total_auth_failures > 0 ? 'warn' : 'ok']],
+    ['Secondary key', [sys.secondary_key_configured ? 'Configured' : 'Not set', sys.secondary_key_configured ? 'ok' : 'demo']],
+  ];
+  healthBody.innerHTML = healthRows.map(([label,[val,cls]]) =>
+    `<tr><td>${label}</td><td style="text-align:right;font-weight:600" class="num-${cls}">${val}</td></tr>`
+  ).join('');
 
-  async function loadSafety() {
-    try {
-      const res = await fetch('/api/safety/check');
-      const data = await res.json();
-      renderSafety(data);
-    } catch(e) {
-      document.getElementById('safety-checks-list').innerHTML =
-        '<div style="color:var(--muted);padding:16px;">Could not reach safety API</div>';
-    }
+  // env grid
+  const envGrid = document.getElementById('env-grid');
+  if (sys.env) {
+    envGrid.innerHTML = Object.entries(sys.env).map(([k,v]) =>
+      `<div class="env-row"><div class="env-dot ${v?'ok':'miss'}"></div><span class="env-key">${k}</span></div>`
+    ).join('');
   }
+}
 
-  function renderSafety(data) {
-    const banner = document.getElementById('safety-level-banner');
-    const style = SAFETY_LEVEL_STYLES[data.safety_level] || SAFETY_LEVEL_STYLES['BLOCKED'];
-    banner.style.display = 'block';
-    banner.style.background = style.bg;
-    banner.style.color = style.color;
-    banner.textContent = style.label;
+// ── Oracle full tab ─────────────────────────────────────────────────────────
+let _oracleRows = [];
+function renderOracleFull() {
+  if (!_metricsData) return;
+  _oracleRows = (_metricsData.paths || []).filter(r => r.path.startsWith('/api/oracle/'));
+  renderOracleFiltered(_oracleRows);
+}
+function filterOracle(q) {
+  const filtered = q ? _oracleRows.filter(r => r.path.includes(q)) : _oracleRows;
+  renderOracleFiltered(filtered);
+}
+function renderOracleFiltered(rows) {
+  const body = document.getElementById('oracle-full-body');
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:16px 0">No oracle calls yet</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => {
+    const shortPath = r.path.replace('/api/oracle/','');
+    const errCls = r.error_rate_pct > 5 ? 'num-err' : r.error_rate_pct > 0 ? 'num-warn' : '';
+    return `<tr>
+      <td class="path-cell" title="${r.path}">${shortPath}</td>
+      <td style="text-align:right">${r.count}</td>
+      <td style="text-align:right">${r.errors}</td>
+      <td style="text-align:right">${r.client_errors}</td>
+      <td style="text-align:right">${r.avg_ms}ms</td>
+      <td style="text-align:right">${r.p95_ms}ms</td>
+      <td style="text-align:right" class="${errCls}">${r.error_rate_pct}%</td>
+    </tr>`;
+  }).join('');
+}
 
-    const rec = document.getElementById('safety-recommendation');
-    rec.style.display = 'block';
-    rec.textContent = data.recommendation;
+// ── Disputes tab ────────────────────────────────────────────────────────────
+async function loadDisputes() {
+  const key = document.getElementById('disputes-api-key').value.trim();
+  const statusBar = document.getElementById('disputes-status-bar');
+  statusBar.style.display = 'block';
+  statusBar.style.background = '#eff6ff';
+  statusBar.style.color = '#1a6cf5';
+  statusBar.textContent = 'Loading…';
+  try {
+    const r = await fetch('/api/disputes', { headers: { 'X-API-Key': key }, signal: AbortSignal.timeout(10000) });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    const rows = data.rows || [];
+    const body = document.getElementById('disputes-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">No dispute records found.</td></tr>';
+    } else {
+      body.innerHTML = rows.map(d => {
+        const action = String(d.action_type||'').replace(/_/g,' ');
+        return `<tr>
+          <td class="path-cell">${d.dispute_id||d.id||'—'}</td>
+          <td style="text-align:right">$${Number(d.amount||d.disputed_amount||0).toFixed(2)}</td>
+          <td>${action}</td>
+          <td style="color:var(--muted)">${d.reasoning||d.outcome||'—'}</td>
+        </tr>`;
+      }).join('');
+    }
+    statusBar.style.background = '#d1fae5'; statusBar.style.color = '#065f46';
+    statusBar.textContent = `${rows.length} record(s) loaded` + (data.demo ? ' · DEMO data' : '');
+  } catch(e) {
+    statusBar.style.background = '#fee2e2'; statusBar.style.color = '#991b1b';
+    statusBar.textContent = 'Error: ' + e.message;
+  }
+}
 
-    const list = document.getElementById('safety-checks-list');
-    list.innerHTML = (data.checks || []).map(c => {
-      const s = CHECK_STATUS_STYLES[c.status] || CHECK_STATUS_STYLES['FAIL'];
-      return `<div style="display:flex;gap:12px;padding:12px 16px;background:${s.bg};border-radius:8px;align-items:flex-start;">
-        <div style="font-size:16px;font-weight:900;color:${s.color};width:20px;text-align:center;flex-shrink:0;">${s.icon}</div>
-        <div>
-          <div style="font-weight:700;font-size:13px;color:${s.color};">${c.name.replace(/_/g,' ').toUpperCase()}</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:2px;">${c.detail}</div>
-          ${c.is_hard && c.status === 'FAIL' ? '<div style="font-size:11px;font-weight:700;color:#dc2626;margin-top:4px;">HARD CHECK — blocks autonomous action</div>' : ''}
+// ── Connections tab ─────────────────────────────────────────────────────────
+const SPONSORS = [
+  { key:'paypal',    name:'PayPal',      logo:'🅿',  category:'Payments',           desc:'Dispute management, webhook events, OAuth2 token lifecycle.',          endpoints:['GET /api/dashboard/summary','GET /api/paypal/status'] },
+  { key:'apimatic',  name:'APIMatic',    logo:'📐', category:'API · SDK Gen',       desc:'Generates context-aware PayPal API routing. Prevents hallucinated endpoints.',endpoints:['GET /api/apimatic/status','GET /api/apimatic/context'] },
+  { key:'channel3',  name:'Channel3',    logo:'📦', category:'Product Intel',       desc:'100M+ product graph enrichment for SNAD evidence generation.',          endpoints:['GET /api/channel3/status','POST /api/channel3/enrich'] },
+  { key:'postman',   name:'Postman',     logo:'📮', category:'API · Testing',       desc:'Live collection with 158 oracle endpoints + Guardian workflows.',       endpoints:['GET /api/postman/status'] },
+  { key:'render',    name:'Render',      logo:'🟣', category:'Hosting',             desc:'Hosts the production service. Auto-deploys on push.',                   endpoints:['GET /api/render/health','GET /api/render/status'] },
+  { key:'bryntum',   name:'Bryntum',     logo:'📅', category:'UI · Scheduler',      desc:'Dispute timeline scheduler with conflict detection.',                   endpoints:['GET /api/bryntum/status'] },
+  { key:'zapier',    name:'Zapier',      logo:'⚡', category:'Automation',          desc:'Cross-platform dispute ingestion from Stripe, WooCommerce, Shopify.',   endpoints:['POST /api/integrations/zapier/dispute','POST /api/zapier/subscribe'] },
+  { key:'astropods', name:'Astropods',   logo:'🤖', category:'AI Governance',       desc:'AI gateway with model routing, rate limits, and billing telemetry.',    endpoints:['GET /api/astropods/status'] },
+  { key:'aggrid',    name:'AG Grid',     logo:'📊', category:'Data Grid',           desc:'Enterprise grid for the dispute log and recovery tables.',              endpoints:['GET /api/aggrid/status','GET /api/aggrid/data'] },
+  { key:'kernel',    name:'Kernel',      logo:'🧠', category:'AI Infra',            desc:'Model kernel for dispute analysis reasoning chains.',                   endpoints:['GET /api/kernel/status'] },
+];
+
+function renderConnections() {
+  const grid = document.getElementById('connections-grid');
+  grid.innerHTML = SPONSORS.map(s => `
+    <div class="conn-card" id="conn-${s.key}">
+      <div class="conn-logo" aria-hidden="true">${s.logo}</div>
+      <div class="conn-info">
+        <div class="conn-name">${s.name} <span style="font-size:11px;color:var(--muted-2);font-weight:500">${s.category}</span></div>
+        <div class="conn-desc">${s.desc}</div>
+        <div class="conn-endpoints">${s.endpoints.map(e => `<span class="conn-ep">${e}</span>`).join('')}</div>
+        <div class="conn-status checking" id="conn-status-${s.key}">
+          <span class="conn-dot checking"></span>Checking…
         </div>
-      </div>`;
-    }).join('');
+      </div>
+    </div>
+  `).join('');
+
+  // Use pre-fetched integration data if available
+  if (_overview && _overview.integrations) {
+    for (const s of SPONSORS) {
+      const intData = _overview.integrations[s.key];
+      const el = document.getElementById('conn-status-' + s.key);
+      if (!el) continue;
+      if (!intData) {
+        // Not in aggregated map — fetch individually
+        fetchConnStatus(s);
+        continue;
+      }
+      if (intData.ok) {
+        const isDemo = intData.data && (intData.data.demo === true || intData.data.gateway_configured === false || intData.data.enabled === false);
+        el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
+        el.innerHTML = isDemo
+          ? '<span class="conn-dot demo"></span>Demo mode'
+          : '<span class="conn-dot ok"></span>Connected';
+      } else {
+        el.className = 'conn-status demo';
+        el.innerHTML = `<span class="conn-dot demo"></span>Not configured`;
+      }
+    }
+  } else {
+    SPONSORS.forEach(fetchConnStatus);
   }
 
-  async function runE2ETrace() {
-    const box = document.getElementById('e2e-trace-box');
-    box.style.display = 'block';
-    box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px;">Running end-to-end trace…</div>';
-    try {
-      const res = await fetch('/api/demo/e2e-trace', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({scenario: 'inr_fight'}),
-      });
-      const data = await res.json();
-      if (!res.ok) { box.innerHTML = `<div style="color:#dc2626;padding:16px;">${JSON.stringify(data)}</div>`; return; }
-      const s = data.summary;
-      box.innerHTML = `
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:12px;">
-          <div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--text);">
-            End-to-End Trace
-            <span style="background:#fef3c7;color:#92400e;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;margin-left:8px;">SANDBOX</span>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px;">
-            ${[
-              ['Scenario',    s.scenario],
-              ['Dispute',     s.dispute_id],
-              ['Oracle',      s.oracle_decision],
-              ['Action',      `<b style="color:${ACTION_COLORS[s.guardian_action]||'#111'}">${s.guardian_action}</b>`],
-              ['Win Prob',    (s.win_probability*100).toFixed(0)+'%'],
-              ['EV Fight',    (s.ev_fight>=0?'+':'')+'$'+s.ev_fight.toFixed(2)],
-              ['Pipeline ms', s.total_pipeline_ms+'ms'],
-              ['Audit ID',    `<span style="font-family:monospace;font-size:11px">${s.audit_entry_id}</span>`],
-            ].map(([k,v])=>`<div><div style="font-size:11px;color:var(--muted)">${k}</div><div style="font-weight:600">${v}</div></div>`).join('')}
-          </div>
-          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pipeline Steps</div>
-          <div style="display:flex;flex-direction:column;gap:6px;">
-            ${data.trace.map((step, i) => `
-              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg);border-radius:7px;">
-                <div style="background:var(--accent);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${i+1}</div>
-                <div>
-                  <div style="font-size:12px;font-weight:700;color:var(--text);">${step.step} <span style="font-weight:400;color:var(--muted);margin-left:6px;">+${step.elapsed_ms}ms</span></div>
-                  ${step.data.note ? `<div style="font-size:11px;color:#92400e;margin-top:2px;">${step.data.note}</div>` : ''}
-                </div>
-              </div>`).join('')}
-          </div>
-        </div>`;
-      await loadAudit();
-    } catch(e) {
-      box.innerHTML = `<div style="color:#dc2626;padding:16px;">Trace failed: ${e.message}</div>`;
-    }
+  // PayPal is special — use overview data
+  const ppEl = document.getElementById('conn-status-paypal');
+  if (ppEl && _overview && _overview.paypal) {
+    const pp = _overview.paypal;
+    ppEl.className = 'conn-status ' + (pp.connected ? 'ok' : 'demo');
+    ppEl.innerHTML = pp.connected
+      ? `<span class="conn-dot ok"></span>${pp.environment === 'live' ? 'Live' : 'Sandbox'} · ${pp.open_disputes} open`
+      : `<span class="conn-dot demo"></span>Not connected`;
   }
+}
+
+async function fetchConnStatus(s) {
+  if (!s.statusUrl) return;
+  const el = document.getElementById('conn-status-' + s.key);
+  if (!el) return;
+  try {
+    const r = await fetch(s.statusUrl, { signal: AbortSignal.timeout(6000) });
+    const data = await r.json();
+    if (r.ok) {
+      const isDemo = data.demo === true || data.gateway_configured === false || data.enabled === false;
+      el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
+      el.innerHTML = isDemo
+        ? '<span class="conn-dot demo"></span>Demo mode'
+        : '<span class="conn-dot ok"></span>Connected';
+    } else {
+      el.className = 'conn-status err';
+      el.innerHTML = `<span class="conn-dot err"></span>Error ${r.status}`;
+    }
+  } catch {
+    el.className = 'conn-status demo';
+    el.innerHTML = '<span class="conn-dot demo"></span>Not reachable';
+  }
+}
+
+// ── Drawer ───────────────────────────────────────────────────────────────────
+let _selectedScenario = null;
+const SCENARIOS = {
+  inr_fight: { amount:245, reason:'ITEM_NOT_RECEIVED' },
+  snad_fight: { amount:320, reason:'SIGNIFICANTLY_NOT_AS_DESCRIBED' },
+  unauthorized_accept: { amount:180, reason:'UNAUTHORIZED' },
+  micro_accept: { amount:18.5, reason:'ITEM_NOT_RECEIVED' },
+};
+function selectScenario(btn, key) {
+  _selectedScenario = key;
+  document.querySelectorAll('.scenario-btn').forEach(b => { b.classList.remove('selected'); b.setAttribute('aria-pressed','false'); });
+  btn.classList.add('selected'); btn.setAttribute('aria-pressed','true');
+  document.getElementById('run-btn').disabled = false;
+  document.getElementById('drawer-result').classList.remove('show');
+}
+async function runScenario() {
+  if (!_selectedScenario) return;
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Reviewing evidence…';
+  try {
+    const resp = await fetch('/api/demo/simulate-dispute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({scenario:_selectedScenario}) });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+    const oracle = result.oracle || {};
+    document.getElementById('res-rec').textContent = oracle.recommendation || 'Review required';
+    document.getElementById('res-ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
+    document.getElementById('res-ev-accept').textContent = oracle.ev_accept != null ? '$' + oracle.ev_accept.toFixed(2) : '—';
+    document.getElementById('res-win-prob').textContent = oracle.win_probability != null ? (oracle.win_probability*100).toFixed(0) + '% · model estimate' : '—';
+    document.getElementById('res-evidence').textContent = oracle.evidence_multiplier != null ? oracle.evidence_multiplier.toFixed(2) + '× · rule-based' : '—';
+    const ai = result.ai_review || {};
+    document.getElementById('res-ai-status').textContent = ai.status === 'ready' ? `Live AI · ${ai.provider} · ${ai.model}` : ai.status === 'not_configured' ? 'AI gateway not configured.' : `AI unavailable (${ai.status||'unknown'})`;
+    document.getElementById('res-ai-claims').innerHTML = (ai.claims||[]).map(c => `<li>${c.statement} [${c.source_ids.join(',')}]</li>`).join('');
+    const gaps = ai.missing_evidence || [];
+    document.getElementById('res-ai-gaps').textContent = gaps.length ? 'Could request: ' + gaps.join(' · ') : '';
+    document.getElementById('drawer-result').classList.add('show');
+    document.getElementById('ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
+  } catch(e) {
+    document.getElementById('res-ai-status').textContent = 'Could not reach Anchor: ' + e.message;
+    document.getElementById('drawer-result').classList.add('show');
+  }
+  btn.disabled = false; btn.textContent = 'Run sample review';
+}
+function openDrawer() {
+  _selectedScenario = null;
+  document.querySelectorAll('.scenario-btn').forEach(b => { b.classList.remove('selected'); b.setAttribute('aria-pressed','false'); });
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('drawer-result').classList.remove('show');
+  document.getElementById('drawer-overlay').classList.add('open');
+  document.getElementById('try-sample-btn').setAttribute('aria-expanded','true');
+  document.querySelector('.drawer-close').focus();
+}
+function closeDrawer() {
+  document.getElementById('drawer-overlay').classList.remove('open');
+  document.getElementById('try-sample-btn').setAttribute('aria-expanded','false');
+  document.getElementById('try-sample-btn').focus();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function fmtUptime(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm';
+  if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
+  return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
+}
+
+// ── Auto-refresh ─────────────────────────────────────────────────────────────
+loadAll();
+setInterval(loadAll, 30000);
 </script>
 </body>
 </html>

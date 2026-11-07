@@ -602,6 +602,130 @@ async def api_status():
     }
 
 
+@app.get("/api/prod/overview", tags=["health"], summary="Single-call production overview for the dashboard")
+async def api_prod_overview():
+    """
+    Aggregates system health, oracle metrics, PayPal state, and all integration
+    statuses into a single JSON payload for the production dashboard.
+    Safe to call without auth — does not expose PII or credentials.
+    """
+    import asyncio, httpx
+
+    uptime_s = round(time.monotonic() - _APP_START, 1)
+
+    # ── Oracle metrics ───────────────────────────────────────────────────────
+    oracle_total = sum(m["count"] for p, m in _path_metrics.items() if p.startswith("/api/oracle/"))
+    oracle_errors = sum(m["errors"] for p, m in _path_metrics.items() if p.startswith("/api/oracle/"))
+    oracle_client_errs = sum(m.get("client_errors", 0) for p, m in _path_metrics.items() if p.startswith("/api/oracle/"))
+    oracle_p95s = [_p95(_path_latencies.get(p, [])) for p, m in _path_metrics.items() if p.startswith("/api/oracle/") and _path_latencies.get(p)]
+    oracle_p95_global = round(max(oracle_p95s), 1) if oracle_p95s else 0.0
+    top_oracle = sorted(
+        [{"path": p, "count": m["count"], "avg_ms": round(m["total_ms"]/m["count"],1) if m["count"] else 0, "p95_ms": _p95(_path_latencies.get(p,[])), "error_rate_pct": round(m["errors"]/m["count"]*100,1) if m["count"] else 0} for p, m in _path_metrics.items() if p.startswith("/api/oracle/")],
+        key=lambda x: -x["count"]
+    )[:10]
+
+    oracle_count = sum(1 for r in app.routes if getattr(r,"path","").startswith("/api/oracle/") and getattr(r,"path","") not in {"/api/oracle/catalog"})
+
+    # ── System health ────────────────────────────────────────────────────────
+    total_reqs = sum(m["count"] for m in _path_metrics.values())
+    total_errs = sum(m["errors"] for m in _path_metrics.values())
+    sys_error_rate = round(total_errs / total_reqs * 100, 2) if total_reqs else 0.0
+    total_auth_failures = sum(len(v) for v in _auth_failures.values())
+    env = {
+        "PAYPAL_CLIENT_ID":     bool(os.environ.get("PAYPAL_CLIENT_ID")),
+        "PAYPAL_CLIENT_SECRET": bool(os.environ.get("PAYPAL_CLIENT_SECRET")),
+        "API_SECRET":           bool(os.environ.get("API_SECRET")),
+        "ORACLE_API_KEY":       bool(os.environ.get("ORACLE_API_KEY")),
+        "DATABASE_URL":         bool(os.environ.get("DATABASE_URL")),
+        "ELASTICSEARCH_URL":    bool(os.environ.get("ELASTICSEARCH_URL")),
+        "SLACK_WEBHOOK_URL":    bool(os.environ.get("SLACK_WEBHOOK_URL")),
+        "RENDER_EXTERNAL_URL":  bool(os.environ.get("RENDER_EXTERNAL_URL")),
+        "CHANNEL3_API_KEY":     bool(os.environ.get("CHANNEL3_API_KEY")),
+        "RENDER_API_KEY":       bool(os.environ.get("RENDER_API_KEY")),
+        "ASTRO_GATEWAY_URL":    bool(os.environ.get("ASTRO_GATEWAY_URL")),
+    }
+
+    # ── PayPal summary (best-effort, no auth required for sandbox) ───────────
+    paypal = {"connected": False, "open_disputes": 0, "urgent_disputes": 0, "webhook_registrations": 0, "environment": os.environ.get("PAYPAL_ENV","sandbox")}
+    try:
+        from agents.paypal_client import get_client as _pp_client
+        pp = _pp_client()
+        if pp.configured():
+            urgent_data = await asyncio.wait_for(pp.list_disputes(dispute_state="REQUIRED_ACTION", page_size=50), timeout=8.0)
+            all_data = await asyncio.wait_for(pp.list_disputes(page_size=50), timeout=8.0)
+            webhook_data = await asyncio.wait_for(pp.list_webhooks(), timeout=5.0)
+            paypal = {
+                "connected": True,
+                "open_disputes": int(all_data.get("total_items") or len(all_data.get("items",[]))),
+                "urgent_disputes": int(urgent_data.get("total_items") or len(urgent_data.get("items",[]))),
+                "webhook_registrations": len(webhook_data.get("webhooks",[])),
+                "environment": os.environ.get("PAYPAL_ENV","sandbox"),
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            }
+    except Exception as exc:
+        paypal["error"] = type(exc).__name__
+
+    # ── Integration statuses (parallel, best-effort) ─────────────────────────
+    _base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:8000")
+    _status_urls = {
+        "apimatic":    f"{_base}/api/apimatic/status",
+        "channel3":    f"{_base}/api/channel3/status",
+        "postman":     f"{_base}/api/postman/status",
+        "astropods":   f"{_base}/api/astropods/status",
+        "render":      f"{_base}/api/render/health",
+        "bryntum":     f"{_base}/api/bryntum/status",
+        "aggrid":      f"{_base}/api/aggrid/status",
+        "kernel":      f"{_base}/api/kernel/status",
+        "zapier":      f"{_base}/api/zapier/status",
+        "shopify":     f"{_base}/api/integrations/shopify/status",
+    }
+
+    async def _fetch_status(key: str, url: str) -> tuple[str, dict]:
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as c:
+                r = await c.get(url)
+                return key, {"ok": r.status_code < 400, "status_code": r.status_code, "data": r.json()}
+        except Exception as exc:
+            return key, {"ok": False, "error": type(exc).__name__}
+
+    tasks = [_fetch_status(k, v) for k, v in _status_urls.items()]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    integrations = {}
+    for item in results:
+        if isinstance(item, Exception):
+            continue
+        k, v = item
+        integrations[k] = v
+
+    return JSONResponse({
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "uptime_seconds": uptime_s,
+        "started_at": _APP_START_DT.isoformat(),
+        "system": {
+            "total_requests": total_reqs,
+            "total_errors": total_errs,
+            "total_auth_failures": total_auth_failures,
+            "error_rate_pct": sys_error_rate,
+            "scheduler_running": _scheduler.running,
+            "rate_limit_per_minute": _RATE_LIMIT,
+            "oracle_timeout_seconds": _ORACLE_TIMEOUT,
+            "lockout_threshold": _LOCKOUT_THRESHOLD,
+            "secondary_key_configured": bool(_ORACLE_SECRET_2),
+            "env": env,
+        },
+        "oracle": {
+            "endpoint_count": oracle_count,
+            "total_calls": oracle_total,
+            "total_errors": oracle_errors,
+            "total_client_errors": oracle_client_errs,
+            "p95_ms_global": oracle_p95_global,
+            "top_endpoints": top_oracle,
+        },
+        "paypal": paypal,
+        "integrations": integrations,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Idempotency store — prevents duplicate processing on PayPal's 25 retries.
 # Primary: ES op_type=create (atomic, survives restarts, multi-instance safe).
