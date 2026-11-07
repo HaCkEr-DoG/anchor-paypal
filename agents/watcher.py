@@ -7779,5 +7779,489 @@ async def api_intelligence_summary(merchant_id: str = ""):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 101 — Seller Performance Scorecard  POST /api/oracle/seller-performance
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/seller-performance")
+async def api_seller_performance(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    import uuid, math
+
+    dispute_results = body.get("dispute_results", [])  # list of {outcome, claim_type, response_days, amount_usd}
+    seller_id = body.get("seller_id") or os.getenv("MERCHANT_ID", "anchor-main")
+    period_days = int(body.get("period_days", 90))
+
+    total = len(dispute_results)
+    wins = sum(1 for r in dispute_results if r.get("outcome") == "won")
+    losses = sum(1 for r in dispute_results if r.get("outcome") == "lost")
+    settled = sum(1 for r in dispute_results if r.get("outcome") == "settled")
+
+    win_rate = wins / total if total else 0.0
+    total_exposure = sum(r.get("amount_usd", 0) for r in dispute_results)
+    avg_exposure = total_exposure / total if total else 0.0
+
+    # Response speed score: avg days to respond (lower = better)
+    response_times = [r.get("response_days", 7) for r in dispute_results if "response_days" in r]
+    avg_response_days = sum(response_times) / len(response_times) if response_times else None
+    if avg_response_days is None:
+        response_speed_score = 50
+    elif avg_response_days <= 1:
+        response_speed_score = 100
+    elif avg_response_days <= 3:
+        response_speed_score = 80
+    elif avg_response_days <= 7:
+        response_speed_score = 60
+    else:
+        response_speed_score = 30
+
+    # Composite score: 50% win rate, 30% response speed, 20% volume penalty
+    volume_penalty = min(20, math.log1p(total) * 3) if total > 0 else 0
+    composite = round(win_rate * 50 + response_speed_score * 0.3 + (20 - volume_penalty), 1)
+    composite = min(100, max(0, composite))
+
+    if composite >= 80:
+        grade = "A"
+        summary = "Excellent dispute management"
+    elif composite >= 65:
+        grade = "B"
+        summary = "Good performance with room for improvement"
+    elif composite >= 50:
+        grade = "C"
+        summary = "Average performance — focus on response speed"
+    elif composite >= 35:
+        grade = "D"
+        summary = "Below average — review dispute strategy"
+    else:
+        grade = "F"
+        summary = "Poor performance — immediate action needed"
+
+    claim_breakdown: dict = {}
+    for r in dispute_results:
+        ct = r.get("claim_type", "OTHER")
+        if ct not in claim_breakdown:
+            claim_breakdown[ct] = {"total": 0, "wins": 0, "losses": 0, "settled": 0}
+        claim_breakdown[ct]["total"] += 1
+        outcome = r.get("outcome", "")
+        if outcome == "won":
+            claim_breakdown[ct]["wins"] += 1
+        elif outcome == "lost":
+            claim_breakdown[ct]["losses"] += 1
+        elif outcome == "settled":
+            claim_breakdown[ct]["settled"] += 1
+
+    for ct, stats in claim_breakdown.items():
+        t = stats["total"]
+        stats["win_rate"] = round(stats["wins"] / t, 3) if t else 0.0
+
+    recommendations = []
+    if win_rate < 0.4:
+        recommendations.append("Win rate below 40% — improve evidence documentation and response quality")
+    if avg_response_days and avg_response_days > 5:
+        recommendations.append("Average response time is slow — aim for same-day or next-day responses")
+    if settled / total > 0.4 if total else False:
+        recommendations.append("High settlement rate — review whether fights would yield better EV")
+    if not recommendations:
+        recommendations.append("Performance looks solid — maintain current practices")
+
+    return JSONResponse({
+        "seller_id": seller_id,
+        "period_days": period_days,
+        "total_disputes": total,
+        "wins": wins,
+        "losses": losses,
+        "settled": settled,
+        "win_rate": round(win_rate, 3),
+        "composite_score": composite,
+        "grade": grade,
+        "summary": summary,
+        "avg_exposure_usd": round(avg_exposure, 2),
+        "total_exposure_usd": round(total_exposure, 2),
+        "avg_response_days": round(avg_response_days, 1) if avg_response_days else None,
+        "response_speed_score": response_speed_score,
+        "by_claim_type": claim_breakdown,
+        "recommendations": recommendations,
+        "wave": 101,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 102 — Case Similarity Finder  POST /api/oracle/case-similarity
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/case-similarity")
+async def api_case_similarity(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    claim_type = (body.get("claim_type") or "OTHER").upper()
+    amount_usd = float(body.get("amount_usd", 0))
+    buyer_history_disputes = int(body.get("buyer_history_disputes", 0))
+    has_tracking = bool(body.get("has_tracking", False))
+    has_delivery_confirmation = bool(body.get("has_delivery_confirmation", False))
+    is_digital_goods = bool(body.get("is_digital_goods", False))
+    days_since_purchase = int(body.get("days_since_purchase", 14))
+
+    # Fingerprint-based similarity scoring: match against archetypal cases
+    _ARCHETYPES = [
+        {
+            "archetype_id": "INR-HIGH-TRACK",
+            "label": "INR with strong tracking",
+            "claim_type": "ITEM_NOT_RECEIVED",
+            "has_tracking": True,
+            "has_delivery_confirmation": True,
+            "typical_outcome": "won",
+            "typical_win_rate": 0.78,
+            "key_evidence": ["Tracking number", "Delivery scan", "Carrier confirmation"],
+        },
+        {
+            "archetype_id": "INR-NO-TRACK",
+            "label": "INR with no tracking",
+            "claim_type": "ITEM_NOT_RECEIVED",
+            "has_tracking": False,
+            "has_delivery_confirmation": False,
+            "typical_outcome": "lost",
+            "typical_win_rate": 0.22,
+            "key_evidence": ["Proof of shipment", "Communication log"],
+        },
+        {
+            "archetype_id": "SNAD-HIGH-AMOUNT",
+            "label": "SNAD high-value item",
+            "claim_type": "SIGNIFICANTLY_NOT_AS_DESCRIBED",
+            "amount_usd_min": 200,
+            "typical_outcome": "settled",
+            "typical_win_rate": 0.35,
+            "key_evidence": ["Original listing", "Photos", "Return policy"],
+        },
+        {
+            "archetype_id": "UNAUTH-DIGITAL",
+            "label": "Unauthorized — digital delivery",
+            "claim_type": "UNAUTHORIZED",
+            "is_digital_goods": True,
+            "typical_outcome": "lost",
+            "typical_win_rate": 0.18,
+            "key_evidence": ["IP logs", "Login records", "2FA confirmation"],
+        },
+        {
+            "archetype_id": "UNAUTH-PHYSICAL",
+            "label": "Unauthorized — physical item",
+            "claim_type": "UNAUTHORIZED",
+            "is_digital_goods": False,
+            "typical_outcome": "settled",
+            "typical_win_rate": 0.28,
+            "key_evidence": ["Signed delivery", "AVS match", "CVV confirmation"],
+        },
+        {
+            "archetype_id": "REPEAT-BUYER",
+            "label": "Repeat dispute buyer",
+            "buyer_disputes_min": 3,
+            "typical_outcome": "won",
+            "typical_win_rate": 0.65,
+            "key_evidence": ["Buyer dispute history", "Pattern documentation"],
+        },
+    ]
+
+    scored_archetypes = []
+    for arch in _ARCHETYPES:
+        score = 0
+        if arch.get("claim_type") == claim_type:
+            score += 40
+        if "has_tracking" in arch and arch["has_tracking"] == has_tracking:
+            score += 20
+        if "has_delivery_confirmation" in arch and arch["has_delivery_confirmation"] == has_delivery_confirmation:
+            score += 15
+        if "is_digital_goods" in arch and arch["is_digital_goods"] == is_digital_goods:
+            score += 15
+        if "amount_usd_min" in arch and amount_usd >= arch["amount_usd_min"]:
+            score += 10
+        if "buyer_disputes_min" in arch and buyer_history_disputes >= arch["buyer_disputes_min"]:
+            score += 20
+        scored_archetypes.append((score, arch))
+
+    scored_archetypes.sort(key=lambda x: x[0], reverse=True)
+    top_matches = [
+        {
+            "archetype_id": a["archetype_id"],
+            "label": a["label"],
+            "similarity_pct": min(100, s),
+            "typical_outcome": a["typical_outcome"],
+            "typical_win_rate": a["typical_win_rate"],
+            "key_evidence_to_gather": a["key_evidence"],
+        }
+        for s, a in scored_archetypes[:3] if s > 0
+    ]
+
+    best_win_rate = top_matches[0]["typical_win_rate"] if top_matches else 0.5
+    if best_win_rate >= 0.6:
+        recommendation = "fight"
+        confidence = "high" if best_win_rate >= 0.7 else "medium"
+    elif best_win_rate >= 0.4:
+        recommendation = "negotiate"
+        confidence = "medium"
+    else:
+        recommendation = "settle"
+        confidence = "high" if best_win_rate < 0.25 else "medium"
+
+    return JSONResponse({
+        "claim_type": claim_type,
+        "amount_usd": amount_usd,
+        "similar_cases": top_matches,
+        "predicted_win_rate": best_win_rate,
+        "recommendation": recommendation,
+        "confidence": confidence,
+        "days_since_purchase": days_since_purchase,
+        "wave": 102,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 103 — Evidence Gap Analyzer  POST /api/oracle/evidence-gap
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/evidence-gap")
+async def api_evidence_gap(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    claim_type = (body.get("claim_type") or "OTHER").upper()
+    has_tracking = bool(body.get("has_tracking", False))
+    has_delivery_confirmation = bool(body.get("has_delivery_confirmation", False))
+    has_refund_policy = bool(body.get("has_refund_policy", False))
+    has_communication_log = bool(body.get("has_communication_log", False))
+    has_photos = bool(body.get("has_photos", False))
+    has_invoice = bool(body.get("has_invoice", False))
+    has_signed_receipt = bool(body.get("has_signed_receipt", False))
+    has_ip_log = bool(body.get("has_ip_log", False))
+    has_login_record = bool(body.get("has_login_record", False))
+
+    _REQUIRED_EVIDENCE: dict = {
+        "ITEM_NOT_RECEIVED": [
+            ("Tracking number", has_tracking, "critical"),
+            ("Delivery confirmation", has_delivery_confirmation, "critical"),
+            ("Communication log with buyer", has_communication_log, "important"),
+            ("Invoice or order confirmation", has_invoice, "supporting"),
+        ],
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": [
+            ("Photos of item as described in listing", has_photos, "critical"),
+            ("Refund / return policy documentation", has_refund_policy, "critical"),
+            ("Invoice showing product specs", has_invoice, "important"),
+            ("Communication log with buyer", has_communication_log, "important"),
+        ],
+        "UNAUTHORIZED": [
+            ("IP address log matching buyer location", has_ip_log, "critical"),
+            ("Login records / account activity", has_login_record, "critical"),
+            ("Signed delivery receipt (if physical)", has_signed_receipt, "important"),
+            ("Communication confirming purchase intent", has_communication_log, "supporting"),
+        ],
+        "OTHER": [
+            ("Invoice or order record", has_invoice, "critical"),
+            ("Communication log with buyer", has_communication_log, "important"),
+            ("Refund policy documentation", has_refund_policy, "supporting"),
+        ],
+    }
+
+    required = _REQUIRED_EVIDENCE.get(claim_type, _REQUIRED_EVIDENCE["OTHER"])
+    gaps = []
+    present = []
+    for label, satisfied, priority in required:
+        if not satisfied:
+            gaps.append({"evidence": label, "priority": priority})
+        else:
+            present.append(label)
+
+    critical_gaps = [g for g in gaps if g["priority"] == "critical"]
+    important_gaps = [g for g in gaps if g["priority"] == "important"]
+
+    if not critical_gaps and not important_gaps:
+        readiness = "ready"
+        readiness_score = 90 + min(10, len(present) * 2)
+    elif not critical_gaps:
+        readiness = "mostly_ready"
+        readiness_score = 70 - len(important_gaps) * 5
+    elif len(critical_gaps) == 1:
+        readiness = "needs_work"
+        readiness_score = 45
+    else:
+        readiness = "not_ready"
+        readiness_score = 20
+
+    readiness_score = max(0, min(100, readiness_score))
+
+    urgent_actions = []
+    for g in critical_gaps:
+        urgent_actions.append(f"CRITICAL: Obtain {g['evidence']} before filing response")
+    for g in important_gaps:
+        urgent_actions.append(f"IMPORTANT: Gather {g['evidence']} to strengthen case")
+
+    return JSONResponse({
+        "claim_type": claim_type,
+        "readiness": readiness,
+        "readiness_score": readiness_score,
+        "evidence_present": present,
+        "gaps": gaps,
+        "critical_gap_count": len(critical_gaps),
+        "important_gap_count": len(important_gaps),
+        "urgent_actions": urgent_actions,
+        "wave": 103,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 104 — Negotiation Script Generator  POST /api/oracle/negotiation-script
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/negotiation-script")
+async def api_negotiation_script(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    claim_type = (body.get("claim_type") or "OTHER").upper()
+    dispute_amount_usd = float(body.get("dispute_amount_usd", 0))
+    buyer_name = body.get("buyer_name") or "valued customer"
+    merchant_name = body.get("merchant_name") or os.getenv("MERCHANT_ID", "our company")
+    offer_partial_refund = bool(body.get("offer_partial_refund", False))
+    partial_refund_pct = float(body.get("partial_refund_pct", 50))
+    tone = (body.get("tone") or "professional").lower()
+
+    # Tone adjustments
+    if tone == "empathetic":
+        opening = f"Dear {buyer_name},\n\nThank you for reaching out. We sincerely understand how frustrating this situation must be, and we genuinely want to resolve this for you."
+    elif tone == "firm":
+        opening = f"Dear {buyer_name},\n\nWe are writing regarding your recent dispute. We have thoroughly reviewed the case and present our position based on documented evidence."
+    else:
+        opening = f"Dear {buyer_name},\n\nThank you for contacting us. We have carefully reviewed your dispute and would like to work toward a resolution."
+
+    claim_body: dict = {
+        "ITEM_NOT_RECEIVED": "Our records indicate your order was shipped with tracking and shows as delivered. We have attached the carrier confirmation and delivery scan for your reference.",
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": "We take product accuracy seriously. Our listing described the item as advertised, and we have attached the original product specification and photos for comparison.",
+        "UNAUTHORIZED": "We have reviewed your account activity and found no evidence of unauthorized access. The transaction aligns with your account's login history and billing address.",
+        "OTHER": "We have carefully reviewed the details of your dispute and gathered the relevant documentation to address your concerns.",
+    }
+    body_text = claim_body.get(claim_type, claim_body["OTHER"])
+
+    if offer_partial_refund and partial_refund_pct > 0:
+        refund_amount = round(dispute_amount_usd * partial_refund_pct / 100, 2)
+        resolution_offer = (
+            f"As a gesture of goodwill, we are prepared to offer a partial refund of ${refund_amount:.2f} "
+            f"({partial_refund_pct:.0f}% of the disputed amount) to resolve this matter promptly."
+        )
+    else:
+        resolution_offer = (
+            "Based on our documentation, we respectfully request that this dispute be closed in our favor. "
+            "We remain available to discuss any additional concerns you may have."
+        )
+
+    closing = f"We appreciate your patience and look forward to resolving this matter. Please do not hesitate to contact us directly at {merchant_name}."
+
+    full_script = f"{opening}\n\n{body_text}\n\n{resolution_offer}\n\n{closing}"
+
+    key_talking_points: dict = {
+        "ITEM_NOT_RECEIVED": ["Confirm tracking was provided", "Reference delivery scan timestamp", "Offer to contact carrier if needed"],
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": ["Reference original listing description", "Acknowledge buyer experience", "Explain return policy"],
+        "UNAUTHORIZED": ["Reference login/IP records", "Confirm billing address match", "Offer account security review"],
+        "OTHER": ["Reference order documentation", "Express willingness to resolve", "Provide contact for follow-up"],
+    }
+    talking_points = key_talking_points.get(claim_type, key_talking_points["OTHER"])
+
+    return JSONResponse({
+        "claim_type": claim_type,
+        "tone": tone,
+        "dispute_amount_usd": dispute_amount_usd,
+        "offer_partial_refund": offer_partial_refund,
+        "partial_refund_amount_usd": round(dispute_amount_usd * partial_refund_pct / 100, 2) if offer_partial_refund else 0,
+        "script": full_script,
+        "key_talking_points": talking_points,
+        "word_count": len(full_script.split()),
+        "wave": 104,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 105 — Dispute Auto-Categorizer  POST /api/oracle/auto-categorize
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/auto-categorize")
+async def api_auto_categorize(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    dispute_note = (body.get("dispute_note") or "").lower()
+    amount_usd = float(body.get("amount_usd", 0))
+    days_until_deadline = int(body.get("days_until_deadline", 10))
+    buyer_dispute_count = int(body.get("buyer_dispute_count", 0))
+
+    # Keyword-based claim type classification
+    inr_keywords = ["not received", "not arrived", "never got", "missing", "lost in transit", "shipped", "tracking"]
+    snad_keywords = ["not as described", "wrong item", "broken", "damaged", "defective", "different", "not what"]
+    unauth_keywords = ["unauthorized", "fraud", "didn't buy", "i didn't", "stolen", "hacked", "not me"]
+
+    inr_score = sum(1 for kw in inr_keywords if kw in dispute_note)
+    snad_score = sum(1 for kw in snad_keywords if kw in dispute_note)
+    unauth_score = sum(1 for kw in unauth_keywords if kw in dispute_note)
+
+    scores = {"ITEM_NOT_RECEIVED": inr_score, "SIGNIFICANTLY_NOT_AS_DESCRIBED": snad_score, "UNAUTHORIZED": unauth_score}
+    best_type = max(scores, key=lambda k: scores[k])
+    best_score = scores[best_type]
+
+    if best_score == 0:
+        inferred_claim_type = "OTHER"
+        classification_confidence = "low"
+    elif best_score >= 3:
+        inferred_claim_type = best_type
+        classification_confidence = "high"
+    else:
+        inferred_claim_type = best_type
+        classification_confidence = "medium"
+
+    # Urgency classification
+    if days_until_deadline <= 2:
+        urgency = "critical"
+    elif days_until_deadline <= 5:
+        urgency = "high"
+    elif days_until_deadline <= 10:
+        urgency = "medium"
+    else:
+        urgency = "low"
+
+    # Complexity classification
+    complexity_score = 0
+    if amount_usd > 500:
+        complexity_score += 2
+    if buyer_dispute_count >= 3:
+        complexity_score += 1
+    if inferred_claim_type == "UNAUTHORIZED":
+        complexity_score += 2
+    if inferred_claim_type == "SIGNIFICANTLY_NOT_AS_DESCRIBED":
+        complexity_score += 1
+
+    if complexity_score >= 4:
+        complexity = "high"
+    elif complexity_score >= 2:
+        complexity = "medium"
+    else:
+        complexity = "low"
+
+    # Routing recommendation
+    if urgency == "critical" or complexity == "high":
+        route_to = "senior_agent"
+        routing_reason = "High urgency or complexity requires senior review"
+    elif inferred_claim_type == "UNAUTHORIZED":
+        route_to = "fraud_team"
+        routing_reason = "Potential fraud case requires fraud team review"
+    else:
+        route_to = "standard_queue"
+        routing_reason = "Standard dispute — normal processing queue"
+
+    return JSONResponse({
+        "inferred_claim_type": inferred_claim_type,
+        "classification_confidence": classification_confidence,
+        "urgency": urgency,
+        "complexity": complexity,
+        "route_to": route_to,
+        "routing_reason": routing_reason,
+        "days_until_deadline": days_until_deadline,
+        "amount_usd": amount_usd,
+        "buyer_dispute_count": buyer_dispute_count,
+        "keyword_scores": scores,
+        "wave": 105,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
