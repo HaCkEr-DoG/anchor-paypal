@@ -1,22 +1,26 @@
 """
-Seller Protection Checker — determine whether a transaction qualifies
-for PayPal Seller Protection and what conditions apply.
+Seller Protection Eligibility Checker — verify eligibility BEFORE fighting.
 
-PayPal Seller Protection rules:
-  - Covers INR (Item Not Received) and Unauthorized transactions
-  - Does NOT cover SNAD (Significantly Not As Described)
-  - Requires item to be a physical, tangible good
-  - Digital / intangible goods: not covered (with narrow exceptions)
-  - Transaction must be:
-    * Paid via PayPal checkout (not PayPal.Me / personal links)
-    * Shipped to the address on the PayPal transaction details
-    * Tracking number uploaded to PayPal before dispute filed
-  - Signature required for ≥$750 (Significant Seller Protection threshold)
-  - Chargeback eligible transactions must have buyer's confirmed address
-  - Item category exclusions: real estate, vehicles, custom-made items,
-    negotiable instruments, gold bullion, digital currency
+PayPal Seller Protection shields merchants from chargebacks and reversals on
+Unauthorized Transactions and Item Not Received (INR) claims — IF the
+transaction meets specific criteria. Fighting an ineligible dispute is pure
+loss: response cost spent, guaranteed reversal anyway.
 
-This is a pure oracle module — no I/O, no persistence.
+This module scores every dispute dimension against PayPal's published Seller
+Protection criteria and returns:
+  - eligibility_status: ELIGIBLE / PARTIALLY_ELIGIBLE / INELIGIBLE / UNCERTAIN
+  - ineligible_reasons: list of exact disqualifiers
+  - recommended_action: FIGHT / CONDITIONAL_FIGHT / REFUND_NOW / ESCALATE
+  - protection_type: UNAUTHORIZED / ITEM_NOT_RECEIVED / NONE
+  - paypal_signal: coaching text for the PayPal seller success team
+
+PayPal benefit:
+  - Reduces spurious dispute escalations from ineligible merchants wasting
+    PayPal's dispute resolution bandwidth
+  - Surfaces merchants who consistently have ineligible transactions
+    (systemic risk signal — wrong fulfillment flow, digital goods mislabeled)
+  - Provides early data on which merchant segments need Seller Protection
+    education (MICRO tier has highest ineligibility rate)
 """
 
 from __future__ import annotations
@@ -26,330 +30,332 @@ from enum import Enum
 from typing import Optional
 
 
-class SPEligibility(str, Enum):
-    ELIGIBLE            = "ELIGIBLE"
-    ELIGIBLE_WITH_GAPS  = "ELIGIBLE_WITH_GAPS"  # Eligible but missing best practice
-    INELIGIBLE          = "INELIGIBLE"
-    PARTIAL             = "PARTIAL"             # Some conditions met, review needed
+class EligibilityStatus(str, Enum):
+    ELIGIBLE            = "ELIGIBLE"           # all criteria met
+    PARTIALLY_ELIGIBLE  = "PARTIALLY_ELIGIBLE" # some criteria met; fight with caution
+    INELIGIBLE          = "INELIGIBLE"         # disqualified — do not fight
+    UNCERTAIN           = "UNCERTAIN"          # missing data; cannot assess
 
 
-class SPRequirement(str, Enum):
-    MET       = "MET"
-    NOT_MET   = "NOT_MET"
-    NOT_APPLICABLE = "NOT_APPLICABLE"
+class ProtectionType(str, Enum):
+    UNAUTHORIZED     = "UNAUTHORIZED"      # Unauthorized Transaction protection
+    ITEM_NOT_RECEIVED = "ITEM_NOT_RECEIVED" # Item Not Received protection
+    NONE             = "NONE"              # ineligible for all protection
 
 
-class DisputeTypeForSP(str, Enum):
-    INR           = "INR"
-    UNAUTHORIZED  = "UNAUTHORIZED"
-    SNAD          = "SNAD"           # Never covered
-    SUBSCRIPTION  = "SUBSCRIPTION"   # Never covered
-    OTHER         = "OTHER"
+class RecommendedAction(str, Enum):
+    FIGHT              = "FIGHT"           # eligible — fight the dispute
+    CONDITIONAL_FIGHT  = "CONDITIONAL_FIGHT"  # partially eligible — fight if evidence strong
+    REFUND_NOW         = "REFUND_NOW"      # ineligible — issue refund immediately
+    ESCALATE           = "ESCALATE"        # uncertain — needs human review
 
 
-# Excluded item categories
-_EXCLUDED_CATEGORIES = {
-    "real_estate", "vehicle", "aircraft", "boat",
-    "custom_made", "negotiable_instrument",
-    "gold_bullion", "precious_metals",
-    "digital_currency", "cryptocurrency",
-    "gambling_winnings",
-}
-
-_SIGNATURE_THRESHOLD = 750.0
-
-
-@dataclass
-class SPRequirementCheck:
-    requirement: str
-    status: SPRequirement
-    detail: str
+class FulfillmentMethod(str, Enum):
+    PHYSICAL_SHIPMENT = "PHYSICAL_SHIPMENT"  # tangible goods shipped
+    DIGITAL_DOWNLOAD  = "DIGITAL_DOWNLOAD"   # software, files, media
+    SERVICE           = "SERVICE"            # consulting, freelance, labor
+    IN_PERSON         = "IN_PERSON"          # face-to-face transaction
+    PICKUP            = "PICKUP"             # buyer picked up at location
+    UNKNOWN           = "UNKNOWN"
 
 
 @dataclass
 class SellerProtectionInput:
-    """Input for Seller Protection eligibility check."""
     dispute_id: str
-    dispute_type: DisputeTypeForSP
+    reason_code: str                      # UNAUTHORIZED / INR / SNAD / SUBSCRIPTION
     transaction_amount: float
 
-    # Payment method
-    paid_via_paypal_checkout: bool = True      # Not via PayPal.Me or personal link
-    is_business_account: bool = True
+    # Fulfillment data
+    fulfillment_method: FulfillmentMethod = FulfillmentMethod.UNKNOWN
+    has_tracking_number: bool = False
+    tracking_carrier: Optional[str] = None  # "USPS" / "UPS" / "FedEx" / etc.
+    delivery_confirmed: bool = False         # carrier confirmed delivery
+    signature_obtained: bool = False         # sig. confirmation for $750+
 
-    # Item type
-    is_physical_tangible_good: bool = True
-    item_category: str = "general"             # From _EXCLUDED_CATEGORIES
+    # Payment data
+    paid_via_paypal_checkout: bool = True    # was PayPal the payment method?
+    buyer_address_confirmed: bool = True     # PayPal address verified
+    intangible_goods: bool = False           # digital goods, services, real estate
 
-    # Shipping / fulfillment
-    shipped_to_paypal_address: bool = True     # Must match transaction detail address
-    tracking_uploaded_to_paypal: bool = False
-    tracking_uploaded_before_dispute: bool = False
-    has_delivery_confirmation: bool = False
-    has_signature_confirmation: bool = False   # Required for ≥$750
+    # Transaction metadata
+    transaction_amount_usd: float = 0.0     # for signature threshold check
+    is_donation: bool = False
+    is_gambling: bool = False
+    is_money_transfer: bool = False         # peer-to-peer (Friends & Family)
+    is_vehicle_purchase: bool = False
 
-    # Buyer address
-    buyer_address_confirmed: bool = True       # PayPal confirmed address
-    buyer_address_mismatch: bool = False       # Shipped to different address
 
-    # Additional context
-    is_digital_goods: bool = False
-    has_ce30_qualification: bool = False       # CE3.0 — changes unauthorized handling
+@dataclass
+class EligibilityFinding:
+    criterion: str
+    met: bool
+    detail: str
+    blocking: bool   # if False → warning only; if True → disqualifier
 
 
 @dataclass
 class SellerProtectionReport:
-    """Seller Protection eligibility report."""
     dispute_id: str
-    dispute_type: DisputeTypeForSP
-    eligibility: SPEligibility
+    reason_code: str
+    eligibility_status: EligibilityStatus
+    protection_type: ProtectionType
+    recommended_action: RecommendedAction
 
-    requirement_checks: list[SPRequirementCheck]
-    blocking_issues: list[str]
-    warnings: list[str]
-    recommendations: list[str]
+    findings: list[EligibilityFinding]
+    ineligible_reasons: list[str]        # human-readable disqualifiers
+    conditional_warnings: list[str]      # non-blocking concerns
 
-    signature_required: bool
-    signature_present: bool
-    ce30_applicable: bool
-
-    win_rate_impact: float   # Additive if covered, negative if not
-    summary: str
+    fight_confidence: float              # 0.0 – 1.0  P(winning IF eligible)
+    paypal_signal: str
+    action_detail: str
 
 
-def check_seller_protection(inp: SellerProtectionInput) -> SellerProtectionReport:
-    """Check whether a transaction qualifies for PayPal Seller Protection."""
-    checks: list[SPRequirementCheck] = []
-    blocking: list[str] = []
-    warnings: list[str] = []
-    recs: list[str] = []
+# ─── Eligibility rules ────────────────────────────────────────────────────────
 
-    # ── Dispute type gate ────────────────────────────────────────
-    if inp.dispute_type == DisputeTypeForSP.SNAD:
-        checks.append(SPRequirementCheck(
-            "Dispute type",
-            SPRequirement.NOT_MET,
-            "SNAD disputes are explicitly excluded from Seller Protection",
+_ALWAYS_INELIGIBLE = {
+    "is_donation":        "Donations are categorically excluded from Seller Protection.",
+    "is_gambling":        "Gambling transactions are excluded from Seller Protection.",
+    "is_money_transfer":  "Peer-to-peer / Friends & Family payments are not covered.",
+    "is_vehicle_purchase":"Vehicle purchases are excluded from Seller Protection.",
+    "intangible_goods":   "Intangible goods (digital downloads, services) do NOT qualify "
+                          "for INR protection; Unauthorized may still apply.",
+}
+
+
+def _check_categorical_exclusions(inp: SellerProtectionInput) -> list[EligibilityFinding]:
+    findings = []
+    for attr, msg in _ALWAYS_INELIGIBLE.items():
+        val = getattr(inp, attr)
+        if attr == "intangible_goods" and inp.reason_code == "UNAUTHORIZED":
+            # intangible goods CAN get Unauthorized protection
+            continue
+        findings.append(EligibilityFinding(
+            criterion=attr,
+            met=(not val),
+            detail=msg if val else f"Transaction is not a {attr.replace('is_', '')}.",
+            blocking=val,
         ))
-        blocking.append("SNAD disputes are never covered by Seller Protection")
-        return SellerProtectionReport(
-            dispute_id=inp.dispute_id,
-            dispute_type=inp.dispute_type,
-            eligibility=SPEligibility.INELIGIBLE,
-            requirement_checks=checks,
-            blocking_issues=blocking,
-            warnings=warnings,
-            recommendations=["Accept dispute or negotiate with buyer — no SP coverage"],
-            signature_required=False,
-            signature_present=False,
-            ce30_applicable=False,
-            win_rate_impact=-0.10,
-            summary=f"SP {inp.dispute_id}: INELIGIBLE — SNAD not covered",
-        )
+    return [f for f in findings if f.blocking or not f.met]
 
-    if inp.dispute_type == DisputeTypeForSP.SUBSCRIPTION:
-        checks.append(SPRequirementCheck(
-            "Dispute type",
-            SPRequirement.NOT_MET,
-            "Subscription/recurring billing disputes not covered by Seller Protection",
-        ))
-        blocking.append("Subscription disputes are not covered by Seller Protection")
-        return SellerProtectionReport(
-            dispute_id=inp.dispute_id,
-            dispute_type=inp.dispute_type,
-            eligibility=SPEligibility.INELIGIBLE,
-            requirement_checks=checks,
-            blocking_issues=blocking,
-            warnings=warnings,
-            recommendations=["Provide cancellation policy and subscription terms"],
-            signature_required=False,
-            signature_present=False,
-            ce30_applicable=False,
-            win_rate_impact=-0.05,
-            summary=f"SP {inp.dispute_id}: INELIGIBLE — subscription not covered",
-        )
 
-    checks.append(SPRequirementCheck(
-        "Dispute type",
-        SPRequirement.MET,
-        f"{inp.dispute_type.value} is covered by Seller Protection",
+def _check_payment_method(inp: SellerProtectionInput) -> EligibilityFinding:
+    return EligibilityFinding(
+        criterion="paid_via_paypal_checkout",
+        met=inp.paid_via_paypal_checkout,
+        detail=(
+            "Payment was made through PayPal checkout — eligible."
+            if inp.paid_via_paypal_checkout
+            else "Transaction was NOT processed through PayPal checkout. "
+                 "Seller Protection only applies to PayPal payments."
+        ),
+        blocking=not inp.paid_via_paypal_checkout,
+    )
+
+
+def _check_inr_criteria(inp: SellerProtectionInput) -> list[EligibilityFinding]:
+    """Item Not Received — physical shipment with proof of delivery."""
+    findings = []
+
+    # Must be physical goods
+    is_physical = inp.fulfillment_method in (
+        FulfillmentMethod.PHYSICAL_SHIPMENT, FulfillmentMethod.UNKNOWN
+    )
+    findings.append(EligibilityFinding(
+        criterion="physical_shipment",
+        met=is_physical,
+        detail=(
+            "Physical shipment method confirmed."
+            if is_physical
+            else f"Fulfillment method '{inp.fulfillment_method.value}' is not a "
+                 f"physical shipment — INR Seller Protection does not apply."
+        ),
+        blocking=not is_physical,
     ))
 
-    # ── Payment method ──────────────────────────────────────────
-    if inp.paid_via_paypal_checkout:
-        checks.append(SPRequirementCheck(
-            "PayPal checkout payment",
-            SPRequirement.MET,
-            "Transaction made through PayPal checkout",
-        ))
-    else:
-        checks.append(SPRequirementCheck(
-            "PayPal checkout payment",
-            SPRequirement.NOT_MET,
-            "Must be paid via PayPal checkout — personal links excluded",
-        ))
-        blocking.append("Payment not made through PayPal checkout")
+    # Must have tracking
+    findings.append(EligibilityFinding(
+        criterion="has_tracking_number",
+        met=inp.has_tracking_number,
+        detail=(
+            f"Tracking number present (carrier: {inp.tracking_carrier or 'unknown'})."
+            if inp.has_tracking_number
+            else "No tracking number. PayPal requires online trackable shipment for INR protection."
+        ),
+        blocking=not inp.has_tracking_number,
+    ))
 
-    # ── Item type ────────────────────────────────────────────────
-    if inp.is_digital_goods:
-        checks.append(SPRequirementCheck(
-            "Physical tangible good",
-            SPRequirement.NOT_MET,
-            "Digital goods are not covered by standard Seller Protection",
-        ))
-        blocking.append("Digital goods not covered by Seller Protection")
-    elif inp.item_category.lower() in _EXCLUDED_CATEGORIES:
-        checks.append(SPRequirementCheck(
-            "Item category",
-            SPRequirement.NOT_MET,
-            f"Item category '{inp.item_category}' is excluded",
-        ))
-        blocking.append(f"Item category '{inp.item_category}' excluded from SP")
-    else:
-        checks.append(SPRequirementCheck(
-            "Physical tangible good",
-            SPRequirement.MET,
-            "Item qualifies as physical tangible good",
+    # Signature for $750+
+    if inp.transaction_amount >= 750.0:
+        findings.append(EligibilityFinding(
+            criterion="signature_required_for_high_value",
+            met=inp.signature_obtained,
+            detail=(
+                "Signature confirmation obtained — required for transactions ≥ $750."
+                if inp.signature_obtained
+                else f"Transaction is ${inp.transaction_amount:.2f} (≥ $750) but NO signature "
+                     "confirmation. PayPal requires signature for high-value INR claims."
+            ),
+            blocking=not inp.signature_obtained,
         ))
 
-    # ── Shipped to PayPal address ────────────────────────────────
-    if inp.shipped_to_paypal_address and not inp.buyer_address_mismatch:
-        checks.append(SPRequirementCheck(
-            "Shipped to PayPal address",
-            SPRequirement.MET,
-            "Shipped to address on PayPal transaction detail",
+    return findings
+
+
+def _check_unauthorized_criteria(inp: SellerProtectionInput) -> list[EligibilityFinding]:
+    """Unauthorized Transaction — buyer's account was compromised."""
+    findings = []
+
+    findings.append(EligibilityFinding(
+        criterion="buyer_address_confirmed",
+        met=inp.buyer_address_confirmed,
+        detail=(
+            "Buyer's shipping address confirmed by PayPal."
+            if inp.buyer_address_confirmed
+            else "Buyer address not confirmed. PayPal requires shipping to a "
+                 "PayPal-confirmed address for Unauthorized protection."
+        ),
+        blocking=not inp.buyer_address_confirmed,
+    ))
+
+    return findings
+
+
+# ─── Main function ────────────────────────────────────────────────────────────
+
+def check_seller_protection(inp: SellerProtectionInput) -> SellerProtectionReport:
+    """
+    Assess whether a dispute transaction qualifies for PayPal Seller Protection
+    and return a detailed eligibility report with recommended action.
+    """
+    all_findings: list[EligibilityFinding] = []
+
+    # 1. Categorical exclusions
+    all_findings.extend(_check_categorical_exclusions(inp))
+
+    # 2. PayPal payment method check
+    pf = _check_payment_method(inp)
+    all_findings.append(pf)
+
+    # 3. Reason-code-specific criteria
+    reason = inp.reason_code.upper()
+    protection_type = ProtectionType.NONE
+
+    if reason == "INR":
+        protection_type = ProtectionType.ITEM_NOT_RECEIVED
+        all_findings.extend(_check_inr_criteria(inp))
+    elif reason == "UNAUTHORIZED":
+        protection_type = ProtectionType.UNAUTHORIZED
+        all_findings.extend(_check_unauthorized_criteria(inp))
+    elif reason == "SNAD":
+        # SNAD (Significantly Not As Described) is NOT covered by Seller Protection
+        all_findings.append(EligibilityFinding(
+            criterion="snad_not_covered",
+            met=False,
+            detail="SNAD (Significantly Not As Described) disputes are NOT covered by "
+                   "PayPal Seller Protection. Consider partial refund or negotiation.",
+            blocking=True,
         ))
     else:
-        checks.append(SPRequirementCheck(
-            "Shipped to PayPal address",
-            SPRequirement.NOT_MET,
-            "Must ship to the address shown on the PayPal transaction",
+        # SUBSCRIPTION and others — no protection
+        all_findings.append(EligibilityFinding(
+            criterion="reason_code_not_covered",
+            met=False,
+            detail=f"Reason code '{reason}' is not covered by Seller Protection. "
+                   "Options: negotiate, offer partial credit, or refund.",
+            blocking=True,
         ))
-        blocking.append("Package not shipped to PayPal transaction address")
 
-    # ── Tracking ─────────────────────────────────────────────────
-    if inp.tracking_uploaded_to_paypal:
-        if inp.tracking_uploaded_before_dispute:
-            checks.append(SPRequirementCheck(
-                "Tracking uploaded to PayPal",
-                SPRequirement.MET,
-                "Tracking uploaded before dispute was filed",
-            ))
+    # Assess eligibility
+    blockers = [f for f in all_findings if f.blocking]
+    warnings = [f for f in all_findings if not f.blocking and not f.met]
+
+    ineligible_reasons = [f.detail for f in blockers]
+    conditional_warnings = [f.detail for f in warnings]
+
+    if blockers:
+        # Check if partially eligible (payment method OK, only fulfillment gaps)
+        hard_blockers = [b for b in blockers if b.criterion not in (
+            "has_tracking_number", "signature_required_for_high_value",
+        )]
+        if hard_blockers:
+            eligibility = EligibilityStatus.INELIGIBLE
         else:
-            checks.append(SPRequirementCheck(
-                "Tracking uploaded before dispute",
-                SPRequirement.NOT_MET,
-                "Tracking must be uploaded before the dispute was filed",
-            ))
-            warnings.append("Tracking uploaded after dispute — may not qualify")
-            recs.append("Always upload tracking to PayPal immediately after shipment")
+            eligibility = EligibilityStatus.PARTIALLY_ELIGIBLE
+    elif warnings:
+        eligibility = EligibilityStatus.PARTIALLY_ELIGIBLE
+    elif inp.fulfillment_method == FulfillmentMethod.UNKNOWN and reason != "UNAUTHORIZED":
+        eligibility = EligibilityStatus.UNCERTAIN
     else:
-        checks.append(SPRequirementCheck(
-            "Tracking uploaded to PayPal",
-            SPRequirement.NOT_MET,
-            "Tracking number not uploaded to PayPal transaction",
-        ))
-        blocking.append("Tracking number not uploaded to PayPal")
-        recs.append("Upload tracking number to the PayPal transaction immediately")
+        eligibility = EligibilityStatus.ELIGIBLE
 
-    # ── Buyer confirmed address ──────────────────────────────────
-    if inp.buyer_address_confirmed:
-        checks.append(SPRequirementCheck(
-            "Buyer confirmed address",
-            SPRequirement.MET,
-            "Buyer's PayPal address is confirmed",
-        ))
+    # Fight confidence
+    if eligibility == EligibilityStatus.ELIGIBLE:
+        fight_confidence = 0.85
+    elif eligibility == EligibilityStatus.PARTIALLY_ELIGIBLE:
+        fight_confidence = 0.45
+    elif eligibility == EligibilityStatus.UNCERTAIN:
+        fight_confidence = 0.40
     else:
-        checks.append(SPRequirementCheck(
-            "Buyer confirmed address",
-            SPRequirement.NOT_MET,
-            "Buyer address is unconfirmed — Seller Protection may not apply",
-        ))
-        warnings.append("Unconfirmed buyer address reduces SP coverage")
+        fight_confidence = 0.05
 
-    # ── Signature (≥$750) ────────────────────────────────────────
-    sig_required = inp.transaction_amount >= _SIGNATURE_THRESHOLD
-    if sig_required:
-        if inp.has_signature_confirmation:
-            checks.append(SPRequirementCheck(
-                "Signature confirmation",
-                SPRequirement.MET,
-                f"Signature obtained for ${inp.transaction_amount:.2f} transaction",
-            ))
-        else:
-            checks.append(SPRequirementCheck(
-                "Signature confirmation",
-                SPRequirement.NOT_MET,
-                f"Signature required for transactions ≥${_SIGNATURE_THRESHOLD:.0f}",
-            ))
-            blocking.append(f"Missing signature confirmation (required ≥${_SIGNATURE_THRESHOLD:.0f})")
-            recs.append("Obtain signed delivery confirmation for high-value shipments")
+    # Recommended action
+    if eligibility == EligibilityStatus.ELIGIBLE:
+        action = RecommendedAction.FIGHT
+        action_detail = (
+            f"Transaction is ELIGIBLE for {protection_type.value} Seller Protection. "
+            f"Submit evidence — expected win confidence: {fight_confidence:.0%}."
+        )
+    elif eligibility == EligibilityStatus.PARTIALLY_ELIGIBLE:
+        action = RecommendedAction.CONDITIONAL_FIGHT
+        action_detail = (
+            f"Partially eligible. Address gaps before submitting: "
+            + "; ".join(ineligible_reasons[:2])
+            + f". Fight only if evidence is strong (confidence: {fight_confidence:.0%})."
+        )
+    elif eligibility == EligibilityStatus.UNCERTAIN:
+        action = RecommendedAction.ESCALATE
+        action_detail = (
+            "Insufficient data to assess eligibility. Human review required before "
+            "deciding whether to fight or refund."
+        )
     else:
-        checks.append(SPRequirementCheck(
-            "Signature confirmation",
-            SPRequirement.NOT_APPLICABLE,
-            f"Not required for transactions below ${_SIGNATURE_THRESHOLD:.0f}",
-        ))
+        action = RecommendedAction.REFUND_NOW
+        action_detail = (
+            f"Transaction is INELIGIBLE for Seller Protection. Issuing a refund now "
+            f"avoids a forced reversal + chargeback fee. Reason(s): "
+            + " | ".join(ineligible_reasons[:3])
+        )
 
-    # ── CE3.0 applicability (unauthorized only) ──────────────────
-    ce30 = (
-        inp.dispute_type == DisputeTypeForSP.UNAUTHORIZED
-        and inp.has_ce30_qualification
-    )
-
-    # ── Eligibility determination ────────────────────────────────
-    met_count      = sum(1 for c in checks if c.status == SPRequirement.MET)
-    not_met_count  = sum(1 for c in checks if c.status == SPRequirement.NOT_MET)
-
-    # Hard blocks on item type or payment method are always INELIGIBLE
-    _hard_block_keywords = ("digital goods", "category", "not made through paypal")
-    has_hard_block = any(
-        any(kw in b.lower() for kw in _hard_block_keywords)
-        for b in blocking
-    )
-
-    if not blocking:
-        if warnings:
-            eligibility = SPEligibility.ELIGIBLE_WITH_GAPS
-        else:
-            eligibility = SPEligibility.ELIGIBLE
-    elif has_hard_block:
-        eligibility = SPEligibility.INELIGIBLE
-    elif not_met_count <= 1 and len(blocking) == 1:
-        eligibility = SPEligibility.PARTIAL
+    # PayPal signal
+    if eligibility == EligibilityStatus.INELIGIBLE:
+        paypal_signal = (
+            f"INELIGIBLE dispute {inp.dispute_id}: merchant cannot win via Seller "
+            f"Protection. Recommend auto-refund to prevent escalation bandwidth waste. "
+            f"Disqualifiers: {', '.join(r[:60] for r in ineligible_reasons[:2])}. "
+            f"Pattern flag if repeated — may indicate wrong fulfillment flow."
+        )
+    elif eligibility == EligibilityStatus.PARTIALLY_ELIGIBLE:
+        paypal_signal = (
+            f"Dispute {inp.dispute_id} partially eligible. Merchant needs "
+            f"{len(blockers)} fulfillment fix(es) to reach full protection. "
+            f"Opportunity: coach merchant on tracking + signature requirements."
+        )
     else:
-        eligibility = SPEligibility.INELIGIBLE
-
-    impact_map = {
-        SPEligibility.ELIGIBLE:           0.15,
-        SPEligibility.ELIGIBLE_WITH_GAPS: 0.08,
-        SPEligibility.PARTIAL:            0.02,
-        SPEligibility.INELIGIBLE:        -0.05,
-    }
-    win_impact = impact_map[eligibility]
-    if ce30:
-        win_impact += 0.18
-
-    if ce30:
-        recs.insert(0, "CE3.0 eligible — reference prior non-disputed transactions in response")
-
-    summary = (
-        f"SP {inp.dispute_id}: "
-        f"{eligibility.value} | blocking={len(blocking)} | "
-        f"warnings={len(warnings)} | ce30={ce30}"
-    )
+        paypal_signal = (
+            f"Dispute {inp.dispute_id}: {'ELIGIBLE' if eligibility == EligibilityStatus.ELIGIBLE else 'UNCERTAIN'} "
+            f"for {protection_type.value} protection. Standard dispute flow."
+        )
 
     return SellerProtectionReport(
         dispute_id=inp.dispute_id,
-        dispute_type=inp.dispute_type,
-        eligibility=eligibility,
-        requirement_checks=checks,
-        blocking_issues=blocking,
-        warnings=warnings,
-        recommendations=recs,
-        signature_required=sig_required,
-        signature_present=inp.has_signature_confirmation,
-        ce30_applicable=ce30,
-        win_rate_impact=win_impact,
-        summary=summary,
+        reason_code=inp.reason_code,
+        eligibility_status=eligibility,
+        protection_type=protection_type,
+        recommended_action=action,
+        findings=all_findings,
+        ineligible_reasons=ineligible_reasons,
+        conditional_warnings=conditional_warnings,
+        fight_confidence=fight_confidence,
+        paypal_signal=paypal_signal,
+        action_detail=action_detail,
     )

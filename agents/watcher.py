@@ -3284,3 +3284,71 @@ async def deadline_prioritizer(request: Request):
         "paypal_capacity_signal": r.paypal_capacity_signal,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/seller-protection")
+async def seller_protection(request: Request):
+    """
+    POST /api/oracle/seller-protection
+    Assess whether a dispute transaction qualifies for PayPal Seller Protection
+    BEFORE the merchant spends response capacity fighting an ineligible case.
+
+    Body: { dispute_id, reason_code, transaction_amount, fulfillment_method?,
+            has_tracking_number?, tracking_carrier?, delivery_confirmed?,
+            signature_obtained?, paid_via_paypal_checkout?, buyer_address_confirmed?,
+            intangible_goods?, is_donation?, is_gambling?, is_money_transfer?,
+            is_vehicle_purchase? }
+    Returns: eligibility_status, protection_type, recommended_action,
+             ineligible_reasons, fight_confidence, paypal_signal, action_detail
+    """
+    from oracle.seller_protection_checker import (
+        check_seller_protection, SellerProtectionInput, FulfillmentMethod,
+    )
+    body = await request.json()
+
+    fm_raw = body.get("fulfillment_method", "UNKNOWN")
+    try:
+        fm = FulfillmentMethod(fm_raw)
+    except ValueError:
+        fm = FulfillmentMethod.UNKNOWN
+
+    inp = SellerProtectionInput(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        reason_code=body.get("reason_code", "INR"),
+        transaction_amount=float(body.get("transaction_amount", 0)),
+        fulfillment_method=fm,
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        tracking_carrier=body.get("tracking_carrier"),
+        delivery_confirmed=bool(body.get("delivery_confirmed", False)),
+        signature_obtained=bool(body.get("signature_obtained", False)),
+        paid_via_paypal_checkout=bool(body.get("paid_via_paypal_checkout", True)),
+        buyer_address_confirmed=bool(body.get("buyer_address_confirmed", True)),
+        intangible_goods=bool(body.get("intangible_goods", False)),
+        transaction_amount_usd=float(body.get("transaction_amount", 0)),
+        is_donation=bool(body.get("is_donation", False)),
+        is_gambling=bool(body.get("is_gambling", False)),
+        is_money_transfer=bool(body.get("is_money_transfer", False)),
+        is_vehicle_purchase=bool(body.get("is_vehicle_purchase", False)),
+    )
+    r = check_seller_protection(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "eligibility_status": r.eligibility_status.value,
+        "protection_type": r.protection_type.value,
+        "recommended_action": r.recommended_action.value,
+        "ineligible_reasons": r.ineligible_reasons,
+        "conditional_warnings": r.conditional_warnings,
+        "fight_confidence": r.fight_confidence,
+        "paypal_signal": r.paypal_signal,
+        "action_detail": r.action_detail,
+        "findings": [
+            {
+                "criterion": f.criterion,
+                "met": f.met,
+                "detail": f.detail,
+                "blocking": f.blocking,
+            }
+            for f in r.findings
+        ],
+    })
