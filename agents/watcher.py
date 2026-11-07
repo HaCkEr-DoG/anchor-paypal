@@ -2807,3 +2807,75 @@ async def api_cross_merchant_intel(request: Request):
         "paypal_should_act": r.paypal_should_act,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/velocity-monitor")
+async def api_velocity_monitor(request: Request):
+    """
+    POST /api/oracle/velocity-monitor
+
+    Monitor dispute filing velocity and detect spikes: fraud waves,
+    product defects, fulfillment failures, subscription churn.
+
+    Inputs: merchant_id, window_hours, baseline_daily_disputes,
+            disputes (list of {reason_code, amount, filed_hour, sku, carrier})
+
+    Returns: spike_type, urgency, is_spike, velocity_multiplier,
+             dominant_reason_code, top_sku, top_carrier,
+             total_exposure, immediate_actions, paypal_notification,
+             key_insight, summary
+    """
+    from oracle.dispute_velocity_monitor import (
+        monitor_dispute_velocity, VelocityInput, DisputeVelocityRecord,
+    )
+    body = await request.json()
+    records = []
+    for i, d in enumerate(body.get("disputes", [])):
+        records.append(DisputeVelocityRecord(
+            dispute_id=d.get("dispute_id", f"D{i}"),
+            reason_code=d.get("reason_code", "SNAD"),
+            amount=float(d.get("amount", 100.0)),
+            filed_hour=int(d.get("filed_hour", 12)),
+            sku=d.get("sku", ""),
+            carrier=d.get("carrier", ""),
+        ))
+    inp = VelocityInput(
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        window_hours=int(body.get("window_hours", 24)),
+        current_window_disputes=records,
+        baseline_daily_disputes=float(body.get("baseline_daily_disputes", 5.0)),
+        baseline_win_rate=float(body.get("baseline_win_rate", 0.55)),
+        high_value_threshold=float(body.get("high_value_threshold", 200.0)),
+    )
+    r = monitor_dispute_velocity(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "window_hours": r.window_hours,
+        "current_dispute_count": r.current_dispute_count,
+        "baseline_rate_per_window": r.baseline_rate_per_window,
+        "velocity_multiplier": r.velocity_multiplier,
+        "spike_type": r.spike_type.value,
+        "urgency": r.urgency.value,
+        "is_spike": r.is_spike,
+        "inr_count": r.inr_count,
+        "snad_count": r.snad_count,
+        "unauthorized_count": r.unauthorized_count,
+        "subscription_count": r.subscription_count,
+        "dominant_reason_code": r.dominant_reason_code,
+        "dominant_reason_pct": r.dominant_reason_pct,
+        "top_sku": r.top_sku,
+        "top_sku_dispute_count": r.top_sku_dispute_count,
+        "top_carrier": r.top_carrier,
+        "top_carrier_dispute_count": r.top_carrier_dispute_count,
+        "hour_cluster": r.hour_cluster,
+        "high_value_dispute_count": r.high_value_dispute_count,
+        "total_exposure": r.total_exposure,
+        "avg_dispute_amount": r.avg_dispute_amount,
+        "immediate_actions": [
+            {"priority": a.priority, "action": a.action, "owner": a.owner, "deadline_hours": a.deadline_hours}
+            for a in r.immediate_actions
+        ],
+        "paypal_notification": r.paypal_notification,
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+    })
