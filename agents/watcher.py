@@ -8990,5 +8990,88 @@ async def api_response_timing(request: Request):
     })
 
 
+# ── Auto-Response Strategy endpoint (wave 113) ───────────────────────────────
+
+@app.post("/api/oracle/auto-response-plan")
+async def api_auto_response_plan(request: Request):
+    from oracle.dispute_auto_responder import (
+        DisputeAutoResponderInput, generate_response_plan,
+    )
+    body = await request.json()
+    inp = DisputeAutoResponderInput(
+        dispute_id=body.get("dispute_id", ""),
+        claim_type=body.get("claim_type", "INR"),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        has_signature_confirmation=bool(body.get("has_signature_confirmation", False)),
+        has_product_photos=bool(body.get("has_product_photos", False)),
+        has_communications=bool(body.get("has_communications", False)),
+        has_refund_policy=bool(body.get("has_refund_policy", False)),
+        has_ip_log=bool(body.get("has_ip_log", False)),
+        has_two_fa_record=bool(body.get("has_two_fa_record", False)),
+        buyer_hostile=bool(body.get("buyer_hostile", False)),
+        buyer_requested_refund=bool(body.get("buyer_requested_refund", False)),
+        days_until_deadline=int(body.get("days_until_deadline", 10)),
+        p_win=float(body.get("p_win", 0.50)),
+        fight_cost=float(body.get("fight_cost", 10.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+        sp_eligible=bool(body.get("sp_eligible", False)),
+        ce30_applicable=bool(body.get("ce30_applicable", False)),
+    )
+    report = generate_response_plan(inp)
+    return JSONResponse({
+        "dispute_id": report.dispute_id,
+        "claim_type": report.claim_type,
+        "strategy": report.strategy.value,
+        "tone": report.tone.value,
+        "evidence_availability": report.evidence_availability.value,
+        "key_points": report.key_points,
+        "evidence_checklist": report.evidence_checklist,
+        "deadline_warning": report.deadline_warning,
+        "sp_note": report.sp_note,
+        "ce30_note": report.ce30_note,
+        "summary": report.summary,
+        "wave": 113,
+    })
+
+
+# ── Appeal Analysis endpoint (wave 114) ───────────────────────────────────────
+
+@app.post("/api/oracle/analyze-appeal")
+async def api_analyze_appeal(request: Request):
+    from oracle.appeal import RulingReason, analyze_appeal
+    body = await request.json()
+    ruling_reason_raw = body.get("ruling_reason", "OTHER").upper()
+    try:
+        ruling_reason = RulingReason(ruling_reason_raw)
+    except ValueError:
+        ruling_reason = RulingReason.OTHER
+    strategy = analyze_appeal(
+        ruling_reason=ruling_reason,
+        dispute_amount=float(body.get("dispute_amount", 0.0)),
+        claim_type=body.get("claim_type", "INR"),
+        ruling_date=body.get("ruling_date", ""),
+        original_evidence_had_tracking=bool(body.get("original_evidence_had_tracking", False)),
+        original_evidence_had_delivery=bool(body.get("original_evidence_had_delivery", False)),
+        can_obtain_signature_confirmation=bool(body.get("can_obtain_signature_confirmation", False)),
+        can_obtain_buyer_communication=bool(body.get("can_obtain_buyer_communication", False)),
+        seller_protection_requirements_met=bool(body.get("seller_protection_requirements_met", False)),
+        seller_hourly_rate=float(body.get("seller_hourly_rate", 50.0)),
+        appeal_handling_hours=float(body.get("appeal_handling_hours", 1.0)),
+    )
+    return JSONResponse({
+        "worthiness": strategy.worthiness.value,
+        "deadline": strategy.deadline,
+        "days_remaining": strategy.days_remaining,
+        "appeal_letter": strategy.appeal_letter,
+        "new_evidence_needed": strategy.new_evidence_needed,
+        "ruling_addressed": strategy.ruling_addressed,
+        "ev_appeal": round(strategy.ev_appeal, 2),
+        "reasoning": strategy.reasoning,
+        "wave": 114,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
