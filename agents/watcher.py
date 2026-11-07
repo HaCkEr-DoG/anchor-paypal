@@ -7084,5 +7084,180 @@ async def api_refund_leakage(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 97 — Dispute Win Rate Benchmarker  POST /api/oracle/win-rate-benchmark
+# ---------------------------------------------------------------------------
+
+# Industry benchmark win rates by claim type (PayPal seller protection context)
+_BENCHMARK_WIN_RATES = {
+    "ITEM_NOT_RECEIVED": {
+        "industry_avg": 0.55,
+        "top_quartile": 0.75,
+        "bottom_quartile": 0.35,
+        "note": "Tracking number evidence strongly improves win rate",
+    },
+    "SIGNIFICANTLY_NOT_AS_DESCRIBED": {
+        "industry_avg": 0.40,
+        "top_quartile": 0.60,
+        "bottom_quartile": 0.20,
+        "note": "Photo/video evidence of item condition is key",
+    },
+    "UNAUTHORIZED": {
+        "industry_avg": 0.30,
+        "top_quartile": 0.50,
+        "bottom_quartile": 0.10,
+        "note": "PayPal Seller Protection covers most unauthorized claims when INR/SNAD eligible",
+    },
+    "OTHER": {
+        "industry_avg": 0.45,
+        "top_quartile": 0.65,
+        "bottom_quartile": 0.25,
+        "note": "Win rate varies widely; strong policy documentation helps",
+    },
+}
+
+
+@app.post("/api/oracle/win-rate-benchmark")
+async def api_win_rate_benchmark(request: Request):
+    """
+    Compare merchant dispute win rates against industry benchmarks.
+
+    Request body:
+      {
+        "merchant_id": str,
+        "results": [
+          {
+            "claim_type": str,     // ITEM_NOT_RECEIVED | SIGNIFICANTLY_NOT_AS_DESCRIBED | UNAUTHORIZED | OTHER
+            "outcome": "won" | "lost" | "settled"
+          }
+        ]
+      }
+
+    Response:
+      {
+        "merchant_id": str,
+        "total_disputes": int,
+        "overall_win_rate": float,
+        "overall_benchmark_avg": float,
+        "overall_percentile": str,          // "above_average" | "average" | "below_average"
+        "by_claim_type": {
+          "<type>": {
+            "count": int,
+            "wins": int,
+            "win_rate": float,
+            "industry_avg": float,
+            "top_quartile": float,
+            "delta_vs_avg": float,
+            "performance": str,
+            "tip": str
+          }
+        },
+        "improvement_opportunities": [str],
+        "strengths": [str]
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    merchant_id = body.get("merchant_id") or os.environ.get("MERCHANT_ID", "default")
+    raw_results = body.get("results", [])
+
+    if not raw_results:
+        return JSONResponse({
+            "merchant_id": merchant_id,
+            "total_disputes": 0,
+            "overall_win_rate": 0.0,
+            "overall_benchmark_avg": 0.47,
+            "overall_percentile": "average",
+            "by_claim_type": {},
+            "improvement_opportunities": ["No dispute history to benchmark."],
+            "strengths": [],
+        })
+
+    # Group by claim type
+    by_type: dict = {}
+    for r in raw_results:
+        ct = str(r.get("claim_type", "OTHER")).upper()
+        if ct not in _BENCHMARK_WIN_RATES:
+            ct = "OTHER"
+        outcome = str(r.get("outcome", "lost")).lower()
+        if ct not in by_type:
+            by_type[ct] = {"count": 0, "wins": 0, "settled": 0}
+        by_type[ct]["count"] += 1
+        if outcome == "won":
+            by_type[ct]["wins"] += 1
+        elif outcome == "settled":
+            by_type[ct]["settled"] += 1
+
+    total = sum(v["count"] for v in by_type.values())
+    total_wins = sum(v["wins"] for v in by_type.values())
+    overall_win_rate = total_wins / total if total > 0 else 0.0
+
+    # Overall benchmark (weighted average of benchmarks by our claim mix)
+    weighted_bench = sum(
+        (v["count"] / total) * _BENCHMARK_WIN_RATES[ct]["industry_avg"]
+        for ct, v in by_type.items()
+    )
+
+    if overall_win_rate > weighted_bench + 0.1:
+        overall_percentile = "above_average"
+    elif overall_win_rate < weighted_bench - 0.1:
+        overall_percentile = "below_average"
+    else:
+        overall_percentile = "average"
+
+    # Per-type analysis
+    type_detail = {}
+    improvements = []
+    strengths = []
+
+    for ct, v in by_type.items():
+        bench = _BENCHMARK_WIN_RATES[ct]
+        win_rate = v["wins"] / v["count"] if v["count"] > 0 else 0.0
+        delta = round(win_rate - bench["industry_avg"], 4)
+
+        if win_rate >= bench["top_quartile"]:
+            perf = "top_quartile"
+            strengths.append(f"{ct}: win rate {win_rate:.0%} (top quartile, avg {bench['industry_avg']:.0%})")
+        elif win_rate >= bench["industry_avg"]:
+            perf = "above_average"
+        elif win_rate >= bench["bottom_quartile"]:
+            perf = "below_average"
+            improvements.append(
+                f"{ct}: win rate {win_rate:.0%} vs avg {bench['industry_avg']:.0%} — {bench['note']}"
+            )
+        else:
+            perf = "bottom_quartile"
+            improvements.append(
+                f"{ct}: win rate {win_rate:.0%} (bottom quartile, avg {bench['industry_avg']:.0%}) — {bench['note']}"
+            )
+
+        type_detail[ct] = {
+            "count": v["count"],
+            "wins": v["wins"],
+            "settled": v["settled"],
+            "win_rate": round(win_rate, 4),
+            "industry_avg": bench["industry_avg"],
+            "top_quartile": bench["top_quartile"],
+            "bottom_quartile": bench["bottom_quartile"],
+            "delta_vs_avg": delta,
+            "performance": perf,
+            "tip": bench["note"],
+        }
+
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "total_disputes": total,
+        "overall_win_rate": round(overall_win_rate, 4),
+        "overall_benchmark_avg": round(weighted_bench, 4),
+        "overall_percentile": overall_percentile,
+        "by_claim_type": type_detail,
+        "improvement_opportunities": improvements,
+        "strengths": strengths,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
