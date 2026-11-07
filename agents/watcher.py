@@ -3841,6 +3841,14 @@ async def openapi_spec():
                     "responses": {"200": {"description": "Percentile rankings, risk flags, coaching"}},
                 }
             },
+            "/api/oracle/response-quality-analyzer": {
+                "post": {
+                    "summary": "Dispute Response Quality Analyzer",
+                    "description": "Grade a merchant's written dispute response before submission — A/B/C/D/F with per-dimension breakdown and improvement suggestions",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "quality_score, grade, dimensions, issues, improvements, submit_ready"}},
+                }
+            },
             "/api/zapier/ingest": {
                 "post": {
                     "summary": "Zapier Dispute Ingest",
@@ -3929,6 +3937,7 @@ async def postman_collection():
                     _pm_post("Seller Protection Checker", f"{base}/api/oracle/seller-protection", {"dispute_id": "D001", "reason_code": "INR", "transaction_amount": 299.0, "has_tracking_number": True, "paid_via_paypal_checkout": True}),
                     _pm_post("Evidence Strength Scorer", f"{base}/api/oracle/evidence-strength", {"dispute_id": "D001", "reason_code": "INR", "transaction_amount": 299.0, "has_tracking_number": True, "has_delivery_scan": True, "has_order_confirmation": True}),
                     _pm_post("Merchant Benchmarker", f"{base}/api/oracle/merchant-benchmark", {"merchant_id": "MERCH_X", "segment": "SMALL_BUSINESS", "category": "ELECTRONICS", "total_orders": 1000, "total_disputes": 12, "disputes_won": 7, "disputes_fought": 12, "disputes_escalated": 1, "preemptive_refunds": 2, "avg_response_days": 3.5, "inr_disputes": 6, "unauthorized_disputes": 2}),
+                    _pm_post("Response Quality Analyzer", f"{base}/api/oracle/response-quality-analyzer", {"dispute_id": "D001", "reason_code": "INR", "response_text": "We shipped the item on Oct 15, 2026. Tracking number 1Z9999W99999999999 confirms delivery Oct 20, 2026. Please find attached the tracking confirmation and delivery scan. We respectfully request closure.", "transaction_amount": 299.0, "has_tracking": True, "has_delivery_scan": True, "has_order_confirmation": True}),
                 ],
             },
             {
@@ -3957,6 +3966,80 @@ async def postman_collection():
         ],
     }
     return JSONResponse(collection)
+
+
+@app.post("/api/oracle/response-quality-analyzer")
+async def api_response_quality_analyzer(request: Request):
+    """
+    POST /api/oracle/response-quality-analyzer
+
+    Wave 72 — Dispute Response Quality Analyzer.
+    Grades a merchant's written dispute response text before they submit it.
+
+    Scores five dimensions: completeness, evidence_citation, tone,
+    specificity, structure — returns letter grade A-F, per-dimension
+    breakdown, issues, improvement suggestions, and estimated win
+    probability boost.
+
+    PayPal benefit: Higher-quality responses resolve faster, reducing
+    dispute resolution team bandwidth and correlating with lower escalation
+    rates across merchant cohorts.
+
+    Request body:
+      dispute_id          str
+      reason_code         str  (INR | SNAD | UNAUTHORIZED | SUBSCRIPTION)
+      response_text       str  — the actual written response draft
+      transaction_amount  float (optional)
+      has_tracking        bool
+      has_delivery_scan   bool
+      has_order_confirmation bool
+      has_product_photos  bool
+      has_buyer_communication bool
+
+    Response:
+      dispute_id, reason_code, quality_score, grade, dimensions[],
+      issues[], improvements[], estimated_win_probability_boost,
+      submit_ready, paypal_signal, recommendation
+    """
+    from oracle.response_quality_analyzer import (
+        analyze_response_quality,
+        ResponseAnalysisInput,
+    )
+    body = await request.json()
+    inp = ResponseAnalysisInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        reason_code=body.get("reason_code", "INR"),
+        response_text=body.get("response_text", ""),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+        has_tracking=bool(body.get("has_tracking", False)),
+        has_delivery_scan=bool(body.get("has_delivery_scan", False)),
+        has_order_confirmation=bool(body.get("has_order_confirmation", False)),
+        has_product_photos=bool(body.get("has_product_photos", False)),
+        has_buyer_communication=bool(body.get("has_buyer_communication", False)),
+    )
+    r = analyze_response_quality(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "quality_score": r.quality_score,
+        "grade": r.grade.value,
+        "dimensions": [
+            {
+                "name": d.name,
+                "score": d.score,
+                "weight": d.weight,
+                "issues": d.issues,
+                "suggestions": d.suggestions,
+            }
+            for d in r.dimensions
+        ],
+        "issues": r.issues,
+        "improvements": r.improvements,
+        "estimated_win_probability_boost": r.estimated_win_probability_boost,
+        "submit_ready": r.submit_ready,
+        "paypal_signal": r.paypal_signal,
+        "recommendation": r.recommendation,
+    })
 
 
 def _pm_post(name: str, url: str, body: dict) -> dict:
