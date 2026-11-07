@@ -4184,6 +4184,60 @@ async def api_dispute_aging(request: Request):
     })
 
 
+@app.post("/api/oracle/refund-timing")
+async def api_refund_timing(request: Request):
+    """
+    POST /api/oracle/refund-timing
+
+    Wave 80 — Refund Timing Optimizer.
+    Computes EV(refund_now), EV(partial_refund), EV(wait_and_fight) adjusted
+    for escalation probability. Recommends REFUND_NOW / PARTIAL_REFUND /
+    WAIT_AND_FIGHT / CONDITIONAL_REFUND based on the optimal EV path.
+
+    PayPal benefit: Merchants who refund before escalation save PayPal the
+    chargeback processing cost. Timing guidance reduces formal chargebacks
+    by an estimated $12/case in PayPal operational savings.
+
+    Request body:
+      dispute_id               str
+      transaction_amount       float
+      p_win                    float  0.0–1.0
+      p_escalation             float  0.0–1.0
+      hours_elapsed            float
+      deadline_hours_total     float
+      response_cost_usd        float  (optional)
+      cb_fee_usd               float  (optional)
+      partial_refund_rate      float  (optional, default 0.50)
+    """
+    from oracle.refund_timing_optimizer import calculate_refund_timing, RefundTimingInput
+    body = await request.json()
+    inp = RefundTimingInput(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        p_win=float(body.get("p_win", 0.50)),
+        p_escalation=float(body.get("p_escalation", 0.20)),
+        hours_elapsed=float(body.get("hours_elapsed", 24.0)),
+        deadline_hours_total=float(body.get("deadline_hours_total", 240.0)),
+        response_cost_usd=float(body.get("response_cost_usd", 15.0)),
+        cb_fee_usd=float(body.get("cb_fee_usd", 20.0)),
+        partial_refund_rate=float(body.get("partial_refund_rate", 0.50)),
+    )
+    r = calculate_refund_timing(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "ev_refund_now": r.ev_refund_now,
+        "ev_wait_and_fight": r.ev_wait_and_fight,
+        "ev_partial_refund": r.ev_partial_refund,
+        "recommended_decision": r.recommended_decision.value,
+        "hours_remaining": r.hours_remaining,
+        "deadline_urgency": r.deadline_urgency,
+        "escalation_adjusted_loss": r.escalation_adjusted_loss,
+        "paypal_savings_usd": r.paypal_savings_usd,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/dispute-clusters")
 async def api_dispute_clusters(request: Request):
     """
