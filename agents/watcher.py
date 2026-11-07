@@ -4184,6 +4184,78 @@ async def api_dispute_aging(request: Request):
     })
 
 
+@app.post("/api/oracle/dispute-clusters")
+async def api_dispute_clusters(request: Request):
+    """
+    POST /api/oracle/dispute-clusters
+
+    Wave 79 — Dispute Cluster Analyzer.
+    Clusters disputes by shared attributes (same buyer, same IP /24, same product,
+    same date, similar amounts) using union-find connected components. Scores each
+    cluster by fraud signal strength and flags HIGH_RISK clusters for immediate review.
+
+    PayPal benefit: Cross-merchant buyer_id patterns only PayPal can see;
+    HIGH_RISK clusters feed PayPal's buyer risk team for account review.
+
+    Request body:
+      merchant_id                   str
+      amount_similarity_threshold   float  (optional, default 0.10)
+      disputes[]  array of:
+        dispute_id          str
+        buyer_id            str
+        product_id          str
+        ip_address          str
+        dispute_date        str  (ISO date)
+        transaction_amount  float
+        reason_code         str
+    """
+    from oracle.dispute_cluster_analyzer import (
+        analyze_dispute_clusters,
+        ClusterAnalysisInput,
+        DisputeRecord,
+    )
+    body = await request.json()
+    disputes = [
+        DisputeRecord(
+            dispute_id=d.get("dispute_id", "UNKNOWN"),
+            buyer_id=d.get("buyer_id", ""),
+            product_id=d.get("product_id", ""),
+            ip_address=d.get("ip_address", ""),
+            dispute_date=d.get("dispute_date", ""),
+            transaction_amount=float(d.get("transaction_amount", 0.0)),
+            reason_code=d.get("reason_code", "INR"),
+        )
+        for d in body.get("disputes", [])
+    ]
+    inp = ClusterAnalysisInput(
+        merchant_id=body.get("merchant_id", "MERCH_DEMO"),
+        disputes=disputes,
+        amount_similarity_threshold=float(body.get("amount_similarity_threshold", 0.10)),
+    )
+    r = analyze_dispute_clusters(inp)
+
+    def _cluster_dict(c):
+        return {
+            "cluster_id": c.cluster_id,
+            "dispute_ids": c.dispute_ids,
+            "shared_attributes": c.shared_attributes,
+            "fraud_score": c.fraud_score,
+            "risk_level": c.risk_level.value,
+            "recommendation": c.recommendation,
+        }
+
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes_analyzed": r.total_disputes_analyzed,
+        "total_clusters_found": r.total_clusters_found,
+        "overall_risk": r.overall_risk,
+        "high_risk_clusters": [_cluster_dict(c) for c in r.high_risk_clusters],
+        "all_clusters": [_cluster_dict(c) for c in r.all_clusters],
+        "unclustered_dispute_ids": r.unclustered_dispute_ids,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/outcome-predictor")
 async def api_outcome_predictor(request: Request):
     """
