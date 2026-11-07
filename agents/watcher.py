@@ -2415,3 +2415,325 @@ async def api_ltv_decision(request: Request):
         "key_insight": r.key_insight,
         "summary": r.summary,
     })
+
+
+# ─── Wave 60 — Sponsor Integrations + PayPal Ecosystem Reporter ───────────────
+
+@app.post("/api/paypal/ecosystem-report")
+async def api_ecosystem_report(request: Request):
+    """
+    POST /api/paypal/ecosystem-report
+
+    Generate a PayPal-facing merchant health report covering dispute rates,
+    fraud signals, compliance flags, and buyer protection health.
+
+    Inputs: merchant_id, report_period_days, total_transactions, total_disputes,
+            disputes_won, disputes_lost, inr_count, snad_count, unauthorized_count,
+            avg_evidence_score, unique_buyers_disputing, suspected_fraud_buyers,
+            total_dispute_amount, total_recovered, prev_period_dispute_rate, ...
+
+    Returns: merchant_health_tier, health_score, dispute_rate, win_rate,
+             dispute_rate_trend, forecast_next_30d_rate, threshold_days_until_breach,
+             buyer_protection_score, compliance_flags, fraud_buyer_signals,
+             network_dispute_rates, merchant_actions, paypal_actions,
+             summary, paypal_summary
+    """
+    from oracle.paypal_ecosystem_reporter import generate_ecosystem_report, EcosystemReportInput
+    body = await request.json()
+    inp = EcosystemReportInput(
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        report_period_days=int(body.get("report_period_days", 90)),
+        total_transactions=int(body.get("total_transactions", 0)),
+        total_disputes=int(body.get("total_disputes", 0)),
+        disputes_won=int(body.get("disputes_won", 0)),
+        disputes_lost=int(body.get("disputes_lost", 0)),
+        disputes_accepted_early=int(body.get("disputes_accepted_early", 0)),
+        disputes_pending=int(body.get("disputes_pending", 0)),
+        inr_count=int(body.get("inr_count", 0)),
+        snad_count=int(body.get("snad_count", 0)),
+        unauthorized_count=int(body.get("unauthorized_count", 0)),
+        subscription_count=int(body.get("subscription_count", 0)),
+        avg_evidence_score=float(body.get("avg_evidence_score", 60.0)),
+        evidence_missing_rate=float(body.get("evidence_missing_rate", 0.0)),
+        unique_buyers_disputing=int(body.get("unique_buyers_disputing", 0)),
+        repeat_disputers=int(body.get("repeat_disputers", 0)),
+        suspected_fraud_buyers=int(body.get("suspected_fraud_buyers", 0)),
+        total_dispute_amount=float(body.get("total_dispute_amount", 0.0)),
+        total_recovered=float(body.get("total_recovered", 0.0)),
+        total_lost=float(body.get("total_lost", 0.0)),
+        total_fees_paid=float(body.get("total_fees_paid", 0.0)),
+        visa_disputes=int(body.get("visa_disputes", 0)),
+        mc_disputes=int(body.get("mc_disputes", 0)),
+        amex_disputes=int(body.get("amex_disputes", 0)),
+        paypal_disputes=int(body.get("paypal_disputes", 0)),
+        avg_response_time_hours=float(body.get("avg_response_time_hours", 24.0)),
+        disputes_responded_on_time=int(body.get("disputes_responded_on_time", 0)),
+        prev_period_dispute_rate=float(body.get("prev_period_dispute_rate", 0.0)),
+        prev_period_win_rate=float(body.get("prev_period_win_rate", 0.0)),
+    )
+    r = generate_ecosystem_report(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "merchant_health_tier": r.merchant_health_tier.value,
+        "health_score": r.health_score,
+        "dispute_rate": r.dispute_rate,
+        "win_rate": r.win_rate,
+        "response_rate": r.response_rate,
+        "dispute_rate_trend": r.dispute_rate_trend,
+        "forecast_next_30d_rate": r.forecast_next_30d_rate,
+        "threshold_days_until_breach": r.threshold_days_until_breach,
+        "buyer_protection_score": r.buyer_protection_score.value,
+        "compliance_flags": [
+            {
+                "code": f.code,
+                "severity": f.severity,
+                "description": f.description,
+                "recommendation": f.recommendation,
+                "affects_paypal": f.affects_paypal,
+            }
+            for f in r.compliance_flags
+        ],
+        "network_dispute_rates": r.network_dispute_rates,
+        "highest_risk_network": r.highest_risk_network,
+        "total_dispute_exposure": r.total_dispute_exposure,
+        "total_recovered": r.total_recovered,
+        "recovery_rate": r.recovery_rate,
+        "avg_evidence_score": r.avg_evidence_score,
+        "evidence_quality_tier": r.evidence_quality_tier,
+        "paypal_processing_efficiency": r.paypal_processing_efficiency,
+        "merchant_actions": r.merchant_actions,
+        "paypal_actions": r.paypal_actions,
+        "summary": r.summary,
+        "paypal_summary": r.paypal_summary,
+    })
+
+
+@app.post("/api/integrations/shopify/enrich")
+async def api_shopify_enrich(request: Request):
+    """
+    POST /api/integrations/shopify/enrich
+
+    Accepts a raw Shopify order payload and returns enriched oracle inputs
+    for all oracle modules (prevention, ltv, risk, fraud DNA).
+
+    Input: Shopify order object (from webhook or REST API)
+    Returns: item_category, delivery_status, carrier_has_tracking,
+             tracking_number, hours_since_purchase, is_digital_product,
+             is_express_shipping, ship_to_billing_match, buyer_ltv_tier,
+             buyer_prior_orders, buyer_total_spent, order_amount,
+             to_prevention_kwargs, to_ltv_kwargs, to_risk_kwargs
+    """
+    from integrations.shopify_enricher import enrich_from_shopify_order
+    body = await request.json()
+    order = body.get("order", body)
+    merchant_id = body.get("merchant_id", "ANCHOR")
+    try:
+        ctx = enrich_from_shopify_order(order, merchant_id=merchant_id)
+        return JSONResponse({
+            "order_id": ctx.order_id,
+            "merchant_id": ctx.merchant_id,
+            "item_category": ctx.item_category,
+            "delivery_status": ctx.delivery_status,
+            "carrier_has_tracking": ctx.carrier_has_tracking,
+            "tracking_number": ctx.tracking_number,
+            "hours_since_purchase": ctx.hours_since_purchase,
+            "is_digital_product": ctx.is_digital_product,
+            "is_express_shipping": ctx.is_express_shipping,
+            "ship_to_billing_match": ctx.ship_to_billing_match,
+            "has_3ds_authentication": ctx.has_3ds_authentication,
+            "buyer_email": ctx.buyer_email,
+            "buyer_account_age_days": ctx.buyer_account_age_days,
+            "buyer_prior_orders": ctx.buyer_prior_orders,
+            "buyer_total_spent": ctx.buyer_total_spent,
+            "buyer_ltv_tier": ctx.buyer_ltv_tier,
+            "order_amount": ctx.order_amount,
+            "currency": ctx.currency,
+            "days_past_expected_delivery": ctx.days_past_expected_delivery,
+            "warnings": ctx.warnings,
+            "oracle_inputs": {
+                "prevention": ctx.to_prevention_kwargs(),
+                "ltv": ctx.to_ltv_kwargs(),
+                "risk": ctx.to_risk_kwargs(),
+                "dna": ctx.to_dna_kwargs(),
+            },
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/integrations/zapier/dispute")
+async def api_zapier_ingest(request: Request):
+    """
+    POST /api/integrations/zapier/dispute
+
+    Zapier webhook endpoint — receives dispute payloads from any e-commerce
+    platform (Stripe, WooCommerce, Square, etc.) and normalizes them for
+    Anchor's oracle pipeline.
+
+    Input: raw Zapier webhook body (platform auto-detected)
+    Returns: normalized dispute + anchor_body for immediate pipeline injection
+    """
+    from integrations.zapier_ingest import normalize_zapier_payload
+    body = await request.json()
+    merchant_id = body.pop("anchor_merchant_id", "ANCHOR")
+    try:
+        dispute = normalize_zapier_payload(body, merchant_id=merchant_id)
+        return JSONResponse({
+            "dispute_id": dispute.dispute_id,
+            "source_platform": dispute.source_platform.value,
+            "transaction_id": dispute.transaction_id,
+            "order_id": dispute.order_id,
+            "amount": dispute.amount,
+            "currency": dispute.currency,
+            "reason_code": dispute.reason_code,
+            "original_reason_code": dispute.original_reason_code,
+            "buyer_email": dispute.buyer_email,
+            "merchant_id": dispute.merchant_id,
+            "network": dispute.network,
+            "has_tracking": dispute.has_tracking,
+            "tracking_number": dispute.tracking_number,
+            "anchor_body": dispute.to_anchor_body(),
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/api/integrations/evidence/score")
+async def api_evidence_score(request: Request):
+    """
+    POST /api/integrations/evidence/score
+
+    Score an evidence package's completeness against PayPal's required
+    evidence for a given dispute reason code.
+
+    Input: dispute_id, order_id, reason_code, files (list of {file_name, mime_type})
+    Returns: completeness_score, is_ready_to_submit, missing_evidence_types,
+             submission_notes, file_count
+    """
+    from integrations.google_drive_evidence import (
+        EvidencePackage, EvidenceFile, EvidenceType, EvidenceSource,
+        classify_drive_file, score_evidence_package,
+    )
+    body = await request.json()
+    pkg = EvidencePackage(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        order_id=body.get("order_id", "UNKNOWN"),
+        reason_code=body.get("reason_code", "SNAD"),
+    )
+    for f in body.get("files", []):
+        ev_type = classify_drive_file(f.get("file_name", ""), f.get("mime_type", ""))
+        pkg.files.append(EvidenceFile(
+            file_id=f.get("file_id", ""),
+            file_name=f.get("file_name", ""),
+            evidence_type=ev_type,
+            source=EvidenceSource.GOOGLE_DRIVE,
+            mime_type=f.get("mime_type", "application/octet-stream"),
+            size_bytes=f.get("size_bytes", 0),
+            drive_url=f.get("drive_url"),
+        ))
+    pkg = score_evidence_package(pkg)
+    return JSONResponse({
+        "dispute_id": pkg.dispute_id,
+        "reason_code": pkg.reason_code,
+        "completeness_score": pkg.completeness_score,
+        "is_ready_to_submit": pkg.is_ready_to_submit,
+        "missing_evidence_types": pkg.missing_evidence_types,
+        "file_count": pkg.file_count,
+        "submission_notes": pkg.submission_notes,
+        "has_tracking_evidence": pkg.has_tracking_evidence,
+        "has_invoice": pkg.has_invoice,
+        "has_policy": pkg.has_policy_evidence,
+        "has_communication": pkg.has_communication_log,
+    })
+
+
+@app.post("/api/integrations/gmail/prevention-draft")
+async def api_gmail_prevention_draft(request: Request):
+    """
+    POST /api/integrations/gmail/prevention-draft
+
+    Compose a buyer outreach email to prevent a chargeback before it's filed.
+    Returns a ready-to-send draft for the Gmail MCP.
+
+    Input: action_type (BUYER_OUTREACH|PARTIAL_REFUND_OFFER|SEND_TRACKING_UPDATE|
+                        EXPEDITE_RESHIPMENT|PROACTIVE_REFUND),
+           buyer_email, buyer_first_name, merchant_name, merchant_support_email,
+           order_id, order_amount, item_name, tracking_number (optional),
+           partial_refund_amount (optional), paypal_dispute_id (optional)
+    Returns: to, subject, body, priority, action_type, send_within_hours
+    """
+    from integrations.gmail_prevention import compose_prevention_email, PreventionEmailContext
+    body = await request.json()
+    ctx = PreventionEmailContext(
+        buyer_email=body.get("buyer_email", ""),
+        buyer_first_name=body.get("buyer_first_name", "Valued Customer"),
+        merchant_name=body.get("merchant_name", ""),
+        merchant_support_email=body.get("merchant_support_email", ""),
+        order_id=body.get("order_id", ""),
+        order_amount=float(body.get("order_amount", 0.0)),
+        item_name=body.get("item_name", "your order"),
+        tracking_number=body.get("tracking_number"),
+        tracking_url=body.get("tracking_url"),
+        partial_refund_amount=body.get("partial_refund_amount"),
+        estimated_delivery=body.get("estimated_delivery"),
+    )
+    action = body.get("action_type", "BUYER_OUTREACH")
+    dispute_id = body.get("paypal_dispute_id")
+    draft = compose_prevention_email(action, ctx, paypal_dispute_id=dispute_id)
+    return JSONResponse({
+        "to": draft.to,
+        "subject": draft.subject,
+        "body": draft.body,
+        "priority": draft.priority.value,
+        "action_type": draft.action_type,
+        "send_within_hours": draft.send_within_hours,
+        "cc_merchant_support": draft.cc_merchant_support,
+        "paypal_dispute_id": draft.paypal_dispute_id,
+    })
+
+
+@app.post("/api/integrations/tracking/parse")
+async def api_tracking_parse(request: Request):
+    """
+    POST /api/integrations/tracking/parse
+
+    Parse carrier tracking page text (from Firecrawl) into a structured
+    delivery status usable as proof-of-delivery in dispute evidence.
+
+    Input: tracking_number, carrier (optional), page_text, scrape_url
+    Returns: status, is_delivered, delivery_date, dispute_defensibility,
+             can_use_as_proof_of_delivery, tracking_url (for Firecrawl)
+    """
+    from integrations.firecrawl_tracker import (
+        detect_carrier, build_tracking_url, parse_tracking_page,
+    )
+    body = await request.json()
+    tracking_number = body.get("tracking_number", "")
+    carrier_hint = body.get("carrier", "")
+    page_text = body.get("page_text", "")
+    scrape_url = body.get("scrape_url", "")
+
+    carrier = detect_carrier(tracking_number, carrier_hint)
+    if not scrape_url:
+        scrape_url = build_tracking_url(tracking_number, carrier)
+
+    if page_text:
+        result = parse_tracking_page(page_text, tracking_number, carrier, scrape_url)
+        return JSONResponse({
+            "tracking_number": result.tracking_number,
+            "carrier": result.carrier.value,
+            "status": result.status.value,
+            "is_delivered": result.is_delivered,
+            "delivery_date": result.delivery_date,
+            "last_event": result.last_event,
+            "dispute_defensibility": result.dispute_defensibility,
+            "can_use_as_proof_of_delivery": result.can_use_as_proof_of_delivery,
+            "scrape_url": result.scrape_url,
+        })
+    else:
+        return JSONResponse({
+            "tracking_number": tracking_number,
+            "carrier": carrier.value,
+            "tracking_url": scrape_url,
+            "message": "Provide page_text from Firecrawl scrape to get delivery status",
+        })
