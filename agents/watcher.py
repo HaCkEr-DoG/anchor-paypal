@@ -4184,6 +4184,77 @@ async def api_dispute_aging(request: Request):
     })
 
 
+@app.post("/api/oracle/chargeback-threshold")
+async def api_chargeback_threshold(request: Request):
+    """
+    POST /api/oracle/chargeback-threshold
+
+    Wave 75 — Chargeback Threshold Alert.
+    Monitors a merchant's dispute rate against PayPal's 1% Chargeback
+    Monitoring Program (CMP) threshold. Returns risk level
+    (SAFE/APPROACHING/NEAR_THRESHOLD/IN_BREACH), trend direction,
+    projected days to breach, preemptive refund count, and top reason codes.
+
+    PayPal benefit: Merchants who breach 1% require costly manual review
+    (~$30/case overhead). Early warning allows merchants to self-correct
+    before entering PayPal's monitoring program, reducing PayPal's
+    dispute resolution workload and merchant relationship risk.
+
+    Request body:
+      merchant_id          str
+      monthly_stats[]      array of:
+        month_label          str  (e.g. "2026-10")
+        transactions         int
+        chargebacks          int
+      reason_code_counts   dict  (e.g. {"INR": 5, "UNAUTHORIZED": 3})
+      avg_transaction_amount  float  (optional, default 100.0)
+      can_preemptive_refund   bool   (optional, default true)
+    """
+    from oracle.chargeback_threshold_alert import (
+        calculate_threshold_alert,
+        ThresholdAlertInput,
+        MonthlyStats,
+    )
+    body = await request.json()
+    monthly_stats = [
+        MonthlyStats(
+            month_label=m.get("month_label", "2026-01"),
+            transactions=int(m.get("transactions", 0)),
+            chargebacks=int(m.get("chargebacks", 0)),
+        )
+        for m in body.get("monthly_stats", [])
+    ]
+    inp = ThresholdAlertInput(
+        merchant_id=body.get("merchant_id", "MERCH_DEMO"),
+        monthly_stats=monthly_stats,
+        reason_code_counts=body.get("reason_code_counts", {}),
+        avg_transaction_amount=float(body.get("avg_transaction_amount", 100.0)),
+        can_preemptive_refund=bool(body.get("can_preemptive_refund", True)),
+    )
+    r = calculate_threshold_alert(inp)
+
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "current_rate_pct": r.current_rate_pct,
+        "risk_level": r.risk_level.value,
+        "trend_direction": r.trend_direction,
+        "projected_days_to_breach": r.projected_days_to_breach,
+        "chargebacks_to_add_before_breach": r.chargebacks_to_add_before_breach,
+        "preemptive_refunds_recommended": r.preemptive_refunds_recommended,
+        "top_reason_codes": [
+            {
+                "reason_code": rc.reason_code,
+                "count": rc.count,
+                "pct_of_chargebacks": rc.pct_of_chargebacks,
+            }
+            for rc in r.top_reason_codes
+        ],
+        "paypal_overhead_savings_usd": r.paypal_overhead_savings_usd,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/refund-roi")
 async def api_refund_roi(request: Request):
     """
