@@ -3352,3 +3352,70 @@ async def seller_protection(request: Request):
             for f in r.findings
         ],
     })
+
+
+@app.post("/api/oracle/evidence-strength")
+async def evidence_strength(request: Request):
+    """
+    POST /api/oracle/evidence-strength
+    Score the quality of a merchant's evidence package before submission.
+
+    Body: { dispute_id, reason_code, transaction_amount, has_tracking_number?,
+            has_delivery_scan?, has_signature_proof?, has_order_confirmation?,
+            has_product_photos?, has_item_description_match?, has_buyer_communication?,
+            has_billing_notification?, has_terms_acceptance?, has_prior_renewal_history?,
+            has_address_match_proof?, has_fraud_prevention_evidence?, ... }
+    Returns: overall_score, strength_tier, missing_critical, missing_beneficial,
+             estimated_win_probability, submit_ready, recommendation, paypal_signal
+    """
+    from oracle.evidence_strength_scorer import score_evidence, EvidencePackage
+    body = await request.json()
+
+    pkg = EvidencePackage(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        reason_code=body.get("reason_code", "INR"),
+        transaction_amount=float(body.get("transaction_amount", 0)),
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        tracking_number=body.get("tracking_number"),
+        has_delivery_scan=bool(body.get("has_delivery_scan", False)),
+        has_signature_proof=bool(body.get("has_signature_proof", False)),
+        has_carrier_confirmation_letter=bool(body.get("has_carrier_confirmation_letter", False)),
+        has_order_confirmation=bool(body.get("has_order_confirmation", False)),
+        has_product_photos=bool(body.get("has_product_photos", False)),
+        has_item_description_match=bool(body.get("has_item_description_match", False)),
+        has_inspection_record=bool(body.get("has_inspection_record", False)),
+        has_buyer_communication=bool(body.get("has_buyer_communication", False)),
+        has_prior_resolution_attempt=bool(body.get("has_prior_resolution_attempt", False)),
+        has_refund_policy_acceptance=bool(body.get("has_refund_policy_acceptance", False)),
+        has_billing_notification=bool(body.get("has_billing_notification", False)),
+        has_terms_acceptance=bool(body.get("has_terms_acceptance", False)),
+        has_prior_renewal_history=bool(body.get("has_prior_renewal_history", False)),
+        has_ip_address_match=bool(body.get("has_ip_address_match", False)),
+        has_device_fingerprint=bool(body.get("has_device_fingerprint", False)),
+        has_address_match_proof=bool(body.get("has_address_match_proof", False)),
+        has_fraud_prevention_evidence=bool(body.get("has_fraud_prevention_evidence", False)),
+        has_policy_documentation=bool(body.get("has_policy_documentation", False)),
+    )
+    r = score_evidence(pkg)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "overall_score": r.overall_score,
+        "strength_tier": r.strength_tier.value,
+        "missing_critical": r.missing_critical,
+        "missing_beneficial": r.missing_beneficial,
+        "estimated_win_probability": r.estimated_win_probability,
+        "submit_ready": r.submit_ready,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+        "items": [
+            {
+                "name": i.name,
+                "status": i.status.value,
+                "weight": i.weight,
+                "critical": i.critical,
+                "description": i.description,
+            }
+            for i in r.items
+        ],
+    })
