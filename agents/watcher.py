@@ -3867,3 +3867,110 @@ async def openapi_spec():
         },
     }
     return JSONResponse(spec)
+
+
+# ─── Render Health + Deploy Info ──────────────────────────────────────────────
+# Render provides always-on hosting for Anchor. This endpoint exposes deploy
+# metadata so the Render dashboard can track service health and the demo video
+# can show "running live on Render."
+
+@app.get("/api/render/health")
+async def render_health():
+    """
+    GET /api/render/health
+    Extended health check for the Render deployment.
+    Shows service version, uptime, oracle count, and sponsor integrations.
+    """
+    return JSONResponse({
+        "status": "healthy",
+        "service": "anchor-paypal",
+        "platform": "Render",
+        "version": "72",
+        "oracle_endpoints": 11,
+        "sponsor_integrations": ["Render", "AG Grid", "Bryntum", "Zapier", "Elastic", "APIMatic"],
+        "features": {
+            "autonomous_dispute_processing": True,
+            "ai_oracle_pipeline": True,
+            "bryntum_scheduler_dashboard": True,
+            "zapier_webhooks": True,
+            "elastic_search_index": True,
+            "apimatic_openapi_spec": True,
+            "ag_studio_analytics": True,
+        },
+        "uptime_seconds": int(time.time() - _start_time) if "_start_time" in globals() else 0,
+    })
+
+
+# ─── Postman Collection Export ────────────────────────────────────────────────
+# Returns a Postman Collection v2.1 JSON that testers and judges can import
+# directly into Postman to try every Anchor endpoint.
+
+@app.get("/api/postman/collection")
+async def postman_collection():
+    """
+    GET /api/postman/collection
+    Postman Collection v2.1 — import into Postman to test all Anchor endpoints.
+    """
+    base = "https://anchor-paypal.onrender.com"
+    collection = {
+        "info": {
+            "name": "Anchor — PayPal Dispute Management",
+            "_postman_id": "anchor-paypal-v72",
+            "description": "Complete Anchor API — 11 oracle endpoints + sponsor integrations",
+            "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+        "item": [
+            {
+                "name": "Oracle",
+                "item": [
+                    _pm_post("Refund ROI Calculator", f"{base}/api/oracle/refund-roi", {"dispute_id": "D001", "amount": 299.0, "reason_code": "INR", "win_probability": 0.65, "merchant_segment": "SMALL_BUSINESS", "ltv": 800.0}),
+                    _pm_post("Buyer Satisfaction Risk", f"{base}/api/oracle/buyer-satisfaction-risk", {"dispute_id": "D001", "resolution": "MERCHANT_WIN", "amount": 150.0, "reason_code": "SNAD", "is_repeat_buyer": True}),
+                    _pm_post("Deadline Prioritizer", f"{base}/api/oracle/deadline-prioritizer", {"merchant_id": "MERCH_X", "minutes_available_today": 240, "disputes": [{"dispute_id": "D001", "amount": 299.0, "reason_code": "INR", "deadline": "2026-11-08", "win_probability": 0.65, "expected_value": 150.0}]}),
+                    _pm_post("Seller Protection Checker", f"{base}/api/oracle/seller-protection", {"dispute_id": "D001", "reason_code": "INR", "transaction_amount": 299.0, "has_tracking_number": True, "paid_via_paypal_checkout": True}),
+                    _pm_post("Evidence Strength Scorer", f"{base}/api/oracle/evidence-strength", {"dispute_id": "D001", "reason_code": "INR", "transaction_amount": 299.0, "has_tracking_number": True, "has_delivery_scan": True, "has_order_confirmation": True}),
+                    _pm_post("Merchant Benchmarker", f"{base}/api/oracle/merchant-benchmark", {"merchant_id": "MERCH_X", "segment": "SMALL_BUSINESS", "category": "ELECTRONICS", "total_orders": 1000, "total_disputes": 12, "disputes_won": 7, "disputes_fought": 12, "disputes_escalated": 1, "preemptive_refunds": 2, "avg_response_days": 3.5, "inr_disputes": 6, "unauthorized_disputes": 2}),
+                ],
+            },
+            {
+                "name": "Zapier",
+                "item": [
+                    _pm_post("Subscribe Webhook", f"{base}/api/zapier/subscribe", {"hookUrl": "https://hooks.zapier.com/hooks/catch/YOUR_HOOK"}),
+                    _pm_post("Ingest Dispute", f"{base}/api/zapier/ingest", {"dispute_id": "ZAP-001", "amount": 150.0, "reason_code": "INR", "merchant_id": "MERCH_X", "days_until_deadline": 3, "win_probability": 0.65}),
+                    {"name": "Sample Dispute", "request": {"method": "GET", "url": f"{base}/api/zapier/sample-dispute"}},
+                ],
+            },
+            {
+                "name": "Elastic",
+                "item": [
+                    _pm_post("Search Disputes", f"{base}/api/elastic/search", {"query": {"match": {"reason_code": "INR"}}, "sort": [{"urgency_score": "desc"}], "size": 5}),
+                    {"name": "Elastic Stats", "request": {"method": "GET", "url": f"{base}/api/elastic/stats"}},
+                ],
+            },
+            {
+                "name": "System",
+                "item": [
+                    {"name": "Stats", "request": {"method": "GET", "url": f"{base}/api/stats"}},
+                    {"name": "Render Health", "request": {"method": "GET", "url": f"{base}/api/render/health"}},
+                    {"name": "OpenAPI Spec (APIMatic)", "request": {"method": "GET", "url": f"{base}/api/openapi.json"}},
+                ],
+            },
+        ],
+    }
+    return JSONResponse(collection)
+
+
+def _pm_post(name: str, url: str, body: dict) -> dict:
+    import json as _json
+    return {
+        "name": name,
+        "request": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {"mode": "raw", "raw": _json.dumps(body, indent=2)},
+            "url": url,
+        },
+    }
+
+
+# Track start time for Render health endpoint
+_start_time = time.time()
