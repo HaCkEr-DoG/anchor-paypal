@@ -1651,6 +1651,108 @@ async def paypal_disputes(request: Request, state: str = "REQUIRED_ACTION", page
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ── Dispute Action endpoints ─────────────────────────────────────────────────
+
+@app.post("/api/paypal/disputes/{dispute_id}/accept")
+async def api_accept_dispute(dispute_id: str, request: Request):
+    """
+    Accept a dispute claim on behalf of the merchant.
+    Body (optional JSON): { "note": "...", "refund_amount": {"value": "50.00", "currency_code": "USD"} }
+    Requires X-API-Key header.
+    """
+    _require_api_key(request)
+    from agents.paypal_client import get_client
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"demo": True, "status": "accepted", "dispute_id": dispute_id})
+    try:
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        result = await client.accept_claim(
+            dispute_id,
+            note=body.get("note", "Merchant accepts this claim."),
+            refund_amount=body.get("refund_amount"),
+        )
+        _metric_events.append({
+            "event_id": f"accept-{dispute_id}-{int(datetime.now(timezone.utc).timestamp())}",
+            "event_type": "dispute_accepted",
+            "merchant_id": os.environ.get("MERCHANT_ID", "default"),
+            "dispute_id": dispute_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        return JSONResponse({"status": "accepted", "dispute_id": dispute_id, "paypal_response": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/paypal/disputes/{dispute_id}/provide-evidence")
+async def api_provide_evidence(dispute_id: str, request: Request):
+    """
+    Submit evidence for a dispute.
+    Body: { "evidence_type": "PROOF_OF_FULFILLMENT", "notes": "...", "documents": [] }
+    Requires X-API-Key header.
+    """
+    _require_api_key(request)
+    from agents.paypal_client import get_client
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"demo": True, "status": "submitted", "dispute_id": dispute_id})
+    try:
+        body = await request.json()
+        result = await client.provide_evidence(
+            dispute_id,
+            evidence_type=body.get("evidence_type", "PROOF_OF_FULFILLMENT"),
+            notes=body.get("notes", ""),
+            documents=body.get("documents"),
+        )
+        return JSONResponse({"status": "submitted", "dispute_id": dispute_id, "paypal_response": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/paypal/disputes/{dispute_id}/send-message")
+async def api_send_dispute_message(dispute_id: str, request: Request):
+    """
+    Send a message to the buyer/PayPal on a dispute thread.
+    Body: { "message": "..." }
+    Requires X-API-Key header.
+    """
+    _require_api_key(request)
+    from agents.paypal_client import get_client
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"demo": True, "status": "sent", "dispute_id": dispute_id})
+    try:
+        body = await request.json()
+        result = await client.send_message(dispute_id, message=body.get("message", ""))
+        return JSONResponse({"status": "sent", "dispute_id": dispute_id, "paypal_response": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/paypal/disputes/{dispute_id}/appeal")
+async def api_appeal_dispute(dispute_id: str, request: Request):
+    """
+    File an appeal on a lost/closed dispute.
+    Body: { "evidences": [{"evidence_type": "...", "notes": "...", "documents": [...]}] }
+    Requires X-API-Key header.
+    """
+    _require_api_key(request)
+    from agents.paypal_client import get_client
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"demo": True, "status": "appealed", "dispute_id": dispute_id})
+    try:
+        body = await request.json()
+        result = await client.appeal_dispute(dispute_id, evidences=body.get("evidences", []))
+        return JSONResponse({"status": "appealed", "dispute_id": dispute_id, "paypal_response": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── Bryntum Scheduler endpoints ──────────────────────────────────────────────
 
 @app.get("/api/bryntum/status")
@@ -2540,7 +2642,10 @@ async def api_account_health(merchant_id: str, open_disputes: int = 0):
       > 3%    — critical (suspension risk)
     """
     from agents.risk_monitor import get_account_health
-    health = await get_account_health(merchant_id, open_disputes=open_disputes)
+    health = await get_account_health(
+        merchant_id, open_disputes=open_disputes,
+        memory_events=_metric_events if _metric_events else None,
+    )
     return JSONResponse({
         "merchant_id": health.merchant_id,
         "threshold_status": health.threshold_status,
