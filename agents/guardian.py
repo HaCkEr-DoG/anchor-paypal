@@ -173,6 +173,46 @@ class Guardian:
         except Exception as _exc:
             print(f"[Guardian] FraudDNA error (non-fatal): {_exc}")
 
+        # Chargeback Prevention — prescribe proactive steps before dispute escalates
+        try:
+            from oracle.chargeback_prevention_advisor import advise_chargeback_prevention, PreventionInput
+            _prev = advise_chargeback_prevention(PreventionInput(
+                transaction_id=transaction_id or dispute_id,
+                merchant_id="anchor",
+                reason_code=reason_code,
+                amount=dispute_amount,
+                hours_since_purchase=72.0,
+                is_inquiry_stage=True,
+            ))
+            print(
+                f"[Guardian] Prevention {dispute_id}: "
+                f"urgency={_prev.urgency.value} prob={_prev.prevention_probability:.0%} "
+                f"action={_prev.primary_action.value}"
+            )
+        except Exception as _exc:
+            print(f"[Guardian] Prevention error (non-fatal): {_exc}")
+
+        # Buyer LTV — override fight/accept if relationship value changes the calculus
+        try:
+            from oracle.buyer_ltv_decision_engine import calculate_ltv_decision, LTVDecisionInput
+            _ltv_oracle = calculate_ltv_decision(LTVDecisionInput(
+                dispute_id=dispute_id,
+                buyer_id="unknown",
+                dispute_amount=dispute_amount,
+                oracle_ev_fight=self._last_ev_fight,
+                oracle_win_probability=self._last_win_prob,
+                oracle_recommendation=decision.recommendation if hasattr(decision, "recommendation") else "FIGHT",
+            ))
+            if _ltv_oracle.overrides_oracle:
+                print(
+                    f"[Guardian] LTV override {dispute_id}: "
+                    f"oracle={_ltv_oracle.oracle_recommendation} → "
+                    f"ltv_rec={_ltv_oracle.ltv_recommendation.value} "
+                    f"(RAEV=${_ltv_oracle.raev:.0f})"
+                )
+        except Exception as _exc:
+            print(f"[Guardian] LTV error (non-fatal): {_exc}")
+
         # ── Dispute Rate Protection (account survival) ───────────────────────────
         # This is the most important guardrail: even if Oracle says FIGHT (EV > 0),
         # crossing PayPal's 1% threshold triggers account limitations that cost more

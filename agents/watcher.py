@@ -2282,3 +2282,136 @@ async def api_dispute_category(request: Request):
         "rationale": r.rationale,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/prevention")
+async def api_chargeback_prevention(request: Request):
+    """
+    Chargeback Prevention Advisor — prescribe proactive steps to prevent an
+    inquiry from escalating to a chargeback (0-72h window).
+
+    Accepts: transaction_id, merchant_id, reason_code, amount,
+             hours_since_purchase, delivery_status, days_past_expected_delivery,
+             carrier_has_tracking, buyer_tier, buyer_contacted_support,
+             buyer_complaint_unresolved, is_inquiry_stage, is_digital_product,
+             response_cost, chargeback_fee
+
+    Returns: urgency, prevention_probability, primary_action, steps,
+             prevention_roi, chargeback_cost_if_lost, relationship_risk,
+             key_insight, summary
+    """
+    from oracle.chargeback_prevention_advisor import advise_chargeback_prevention, PreventionInput
+    body = await request.json()
+    inp = PreventionInput(
+        transaction_id=body.get("transaction_id", "DEMO"),
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        reason_code=body.get("reason_code", "INR"),
+        amount=float(body.get("amount", 100.0)),
+        hours_since_purchase=float(body.get("hours_since_purchase", 24.0)),
+        delivery_status=body.get("delivery_status", "UNKNOWN"),
+        days_past_expected_delivery=int(body.get("days_past_expected_delivery", 0)),
+        carrier_has_tracking=bool(body.get("carrier_has_tracking", False)),
+        buyer_tier=body.get("buyer_tier", "UNKNOWN"),
+        buyer_contacted_support=bool(body.get("buyer_contacted_support", False)),
+        buyer_complaint_unresolved=bool(body.get("buyer_complaint_unresolved", False)),
+        hours_since_buyer_contact=float(body.get("hours_since_buyer_contact", 0.0)),
+        is_inquiry_stage=bool(body.get("is_inquiry_stage", True)),
+        has_active_inquiry=bool(body.get("has_active_inquiry", False)),
+        is_digital_product=bool(body.get("is_digital_product", False)),
+        digital_access_active=bool(body.get("digital_access_active", True)),
+        response_cost=float(body.get("response_cost", 15.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+    )
+    r = advise_chargeback_prevention(inp)
+    return JSONResponse({
+        "transaction_id": r.transaction_id,
+        "urgency": r.urgency.value,
+        "prevention_probability": r.prevention_probability,
+        "primary_action": r.primary_action.value,
+        "steps": [
+            {
+                "step_number": s.step_number,
+                "action": s.action.value,
+                "rationale": s.rationale,
+                "time_to_complete": s.time_to_complete,
+                "expected_outcome": s.expected_outcome,
+                "cost_estimate": s.cost_estimate,
+            }
+            for s in r.recommended_steps
+        ],
+        "prevention_roi": r.prevention_roi,
+        "chargeback_cost_if_lost": r.chargeback_cost_if_lost,
+        "buyer_tier": r.buyer_tier.value,
+        "relationship_risk": r.relationship_risk,
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+    })
+
+
+@app.post("/api/oracle/ltv-decision")
+async def api_ltv_decision(request: Request):
+    """
+    Buyer LTV Decision Engine — override fight/accept recommendations by
+    incorporating buyer lifetime value and churn probability into the EV.
+
+    Accepts: dispute_id, buyer_id, dispute_amount, oracle_ev_fight,
+             oracle_win_probability, oracle_recommendation,
+             buyer_ltv_estimate, buyer_ltv_tier, buyer_total_spend,
+             buyer_dispute_history_count, buyer_last_purchase_days_ago,
+             response_cost, chargeback_fee, can_offer_partial, partial_refund_pct
+
+    Returns: ltv_recommendation, overrides_oracle, raev, oracle_ev_fight,
+             buyer_ltv_tier, buyer_ltv_estimate, ltv_at_risk,
+             scenario_fight, scenario_accept, scenario_partial,
+             key_insight, summary
+    """
+    from oracle.buyer_ltv_decision_engine import calculate_ltv_decision, LTVDecisionInput
+    body = await request.json()
+    inp = LTVDecisionInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        buyer_id=body.get("buyer_id", "unknown"),
+        dispute_amount=float(body.get("dispute_amount", 100.0)),
+        oracle_ev_fight=float(body.get("oracle_ev_fight", 0.0)),
+        oracle_win_probability=float(body.get("oracle_win_probability", 0.5)),
+        oracle_recommendation=body.get("oracle_recommendation", "FIGHT"),
+        buyer_ltv_estimate=float(body.get("buyer_ltv_estimate", 0.0)),
+        buyer_ltv_tier=body.get("buyer_ltv_tier", "UNKNOWN"),
+        buyer_total_spend=float(body.get("buyer_total_spend", 0.0)),
+        buyer_dispute_history_count=int(body.get("buyer_dispute_history_count", 0)),
+        buyer_last_purchase_days_ago=int(body.get("buyer_last_purchase_days_ago", 90)),
+        response_cost=float(body.get("response_cost", 15.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+        can_offer_partial=bool(body.get("can_offer_partial", True)),
+        partial_refund_pct=float(body.get("partial_refund_pct", 0.65)),
+    )
+    r = calculate_ltv_decision(inp)
+
+    def _scenario(s):
+        if s is None:
+            return None
+        return {
+            "action": s.action.value,
+            "churn_probability": s.churn_probability,
+            "expected_ltv_loss": s.expected_ltv_loss,
+            "dispute_ev": s.dispute_ev,
+            "relationship_adjusted_ev": s.relationship_adjusted_ev,
+            "cost_to_execute": s.cost_to_execute,
+            "reasoning": s.reasoning,
+        }
+
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "ltv_recommendation": r.ltv_recommendation.value,
+        "overrides_oracle": r.overrides_oracle,
+        "oracle_recommendation": r.oracle_recommendation,
+        "raev": r.raev,
+        "oracle_ev_fight": r.oracle_ev_fight,
+        "buyer_ltv_tier": r.buyer_ltv_tier.value,
+        "buyer_ltv_estimate": r.buyer_ltv_estimate,
+        "ltv_at_risk": r.ltv_at_risk,
+        "scenario_fight": _scenario(r.scenario_fight),
+        "scenario_accept": _scenario(r.scenario_accept),
+        "scenario_partial": _scenario(r.scenario_partial),
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+    })
