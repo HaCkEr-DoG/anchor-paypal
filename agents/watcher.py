@@ -7475,5 +7475,174 @@ async def api_response_quality_score(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 99 — Chargeback Prevention Score  POST /api/oracle/chargeback-prevention
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/chargeback-prevention")
+async def api_chargeback_prevention(request: Request):
+    """
+    Score how well a transaction was set up to prevent a chargeback.
+
+    Request body:
+      {
+        "transaction_id": str,
+        "amount_usd": float,
+        "used_3d_secure": bool,          // 3DS/Verified by Visa etc.
+        "address_verified": bool,         // AVS match
+        "cvv_matched": bool,
+        "shipping_tracked": bool,
+        "signature_required": bool,
+        "product_description_clear": bool, // clear item description at checkout
+        "terms_accepted_at_checkout": bool,
+        "customer_email_confirmed": bool,
+        "is_digital_goods": bool,
+        "ip_country_matches_billing": bool
+      }
+
+    Response:
+      {
+        "transaction_id": str,
+        "amount_usd": float,
+        "prevention_score": float,         // 0–100
+        "protection_level": "minimal" | "basic" | "standard" | "strong" | "maximum",
+        "protections_in_place": [str],
+        "gaps": [str],
+        "chargeback_risk_estimate": "low" | "medium" | "high",
+        "recommendations": [str]
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    transaction_id = body.get("transaction_id", "UNKNOWN")
+    amount = float(body.get("amount_usd", 0.0))
+    amount = max(0.0, amount)
+
+    used_3ds = bool(body.get("used_3d_secure", False))
+    avs = bool(body.get("address_verified", False))
+    cvv = bool(body.get("cvv_matched", False))
+    tracked = bool(body.get("shipping_tracked", False))
+    signature = bool(body.get("signature_required", False))
+    clear_desc = bool(body.get("product_description_clear", False))
+    terms = bool(body.get("terms_accepted_at_checkout", False))
+    email_confirmed = bool(body.get("customer_email_confirmed", False))
+    is_digital = bool(body.get("is_digital_goods", False))
+    ip_match = bool(body.get("ip_country_matches_billing", False))
+
+    score = 0.0
+    protections = []
+    gaps = []
+    recs = []
+
+    # 3D Secure — most powerful protection (25pts)
+    if used_3ds:
+        score += 25
+        protections.append("3D Secure authentication (liability shift to card issuer)")
+    else:
+        gaps.append("No 3D Secure — liability stays with merchant")
+        recs.append("Enable 3D Secure for all card transactions to shift liability")
+
+    # AVS (10pts)
+    if avs:
+        score += 10
+        protections.append("Address Verification (AVS) matched")
+    else:
+        gaps.append("No AVS check — billing address unverified")
+        recs.append("Require AVS verification at checkout")
+
+    # CVV (10pts)
+    if cvv:
+        score += 10
+        protections.append("CVV/CVC matched")
+    else:
+        gaps.append("CVV not verified")
+        recs.append("Require CVV at checkout")
+
+    # Shipping tracking (15pts for physical goods)
+    if not is_digital:
+        if tracked:
+            score += 15
+            protections.append("Shipment tracked with carrier")
+            if signature:
+                score += 5
+                protections.append("Signature required on delivery")
+            else:
+                if amount >= 500:
+                    gaps.append("Signature not required — recommended for orders ≥$500")
+                    recs.append("Require signature on orders ≥$500")
+        else:
+            gaps.append("No shipment tracking")
+            recs.append("Always ship with tracking number")
+    else:
+        # Digital goods: different protections apply
+        if email_confirmed:
+            score += 10
+            protections.append("Customer email confirmed (digital delivery)")
+        else:
+            gaps.append("Email not confirmed before digital delivery")
+            recs.append("Confirm customer email before delivering digital goods")
+
+    # Clear product description (10pts)
+    if clear_desc:
+        score += 10
+        protections.append("Clear product description at checkout")
+    else:
+        gaps.append("Product description may be unclear")
+        recs.append("Ensure product title/description matches what buyer receives")
+
+    # Terms accepted (10pts)
+    if terms:
+        score += 10
+        protections.append("Customer accepted T&C at checkout")
+    else:
+        gaps.append("No T&C acceptance logged")
+        recs.append("Add a mandatory T&C checkbox at checkout")
+
+    # Email confirmed (5pts)
+    if email_confirmed and not is_digital:
+        score += 5
+        protections.append("Customer email confirmed")
+
+    # IP/billing country match (5pts)
+    if ip_match:
+        score += 5
+        protections.append("IP country matches billing country")
+    else:
+        gaps.append("IP country doesn't match billing address — possible card-not-present fraud signal")
+
+    score = min(100.0, score)
+
+    # Protection level
+    if score >= 80:
+        level = "maximum"
+        risk = "low"
+    elif score >= 60:
+        level = "strong"
+        risk = "low"
+    elif score >= 40:
+        level = "standard"
+        risk = "medium"
+    elif score >= 20:
+        level = "basic"
+        risk = "high"
+    else:
+        level = "minimal"
+        risk = "high"
+
+    return JSONResponse({
+        "transaction_id": transaction_id,
+        "amount_usd": amount,
+        "prevention_score": round(score, 1),
+        "protection_level": level,
+        "chargeback_risk_estimate": risk,
+        "protections_in_place": protections,
+        "gaps": gaps,
+        "recommendations": recs,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
