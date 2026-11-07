@@ -10789,5 +10789,150 @@ async def api_analyze_buyer_pattern(request: Request):
     })
 
 
+@app.post("/api/oracle/analyze-response-quality")
+async def api_analyze_response_quality(request: Request):
+    from oracle.response_quality_analyzer import (
+        ResponseAnalysisInput, analyze_response_quality,
+    )
+    body = await request.json()
+    inp = ResponseAnalysisInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        response_text=body.get("response_text", ""),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+        has_tracking=bool(body.get("has_tracking", False)),
+        has_delivery_scan=bool(body.get("has_delivery_scan", False)),
+        has_order_confirmation=bool(body.get("has_order_confirmation", False)),
+        has_product_photos=bool(body.get("has_product_photos", False)),
+        has_buyer_communication=bool(body.get("has_buyer_communication", False)),
+    )
+    r = analyze_response_quality(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "quality_score": r.quality_score,
+        "grade": r.grade.value,
+        "dimensions": [
+            {
+                "name": d.name,
+                "score": d.score,
+                "weight": d.weight,
+                "issues": d.issues,
+                "suggestions": d.suggestions,
+            }
+            for d in r.dimensions
+        ],
+        "issues": r.issues,
+        "improvements": r.improvements,
+        "estimated_win_probability_boost": r.estimated_win_probability_boost,
+        "submit_ready": r.submit_ready,
+        "paypal_signal": r.paypal_signal,
+        "recommendation": r.recommendation,
+        "wave": 150,
+    })
+
+
+@app.post("/api/oracle/estimate-dispute-complexity")
+async def api_estimate_dispute_complexity(request: Request):
+    from oracle.dispute_complexity_estimator import (
+        DisputeComplexityInput, estimate_dispute_complexity,
+    )
+    body = await request.json()
+    inp = DisputeComplexityInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        evidence_completeness_score=int(body.get("evidence_completeness_score", 50)),
+        num_evidence_types_required=int(body.get("num_evidence_types_required", 3)),
+        has_cross_border_transaction=bool(body.get("has_cross_border_transaction", False)),
+        has_digital_goods=bool(body.get("has_digital_goods", False)),
+        is_arbitration_risk=bool(body.get("is_arbitration_risk", False)),
+        network_has_pre_arb=bool(body.get("network_has_pre_arb", False)),
+        is_high_value=bool(body.get("is_high_value", False)),
+        is_class_action_risk=bool(body.get("is_class_action_risk", False)),
+        buyer_risk_class=body.get("buyer_risk_class", "NORMAL"),
+        buyer_dispute_count=int(body.get("buyer_dispute_count", 0)),
+        buyer_represented=bool(body.get("buyer_represented", False)),
+        is_ce3_applicable=bool(body.get("is_ce3_applicable", False)),
+        is_subscription=bool(body.get("is_subscription", False)),
+        num_prior_appeals=int(body.get("num_prior_appeals", 0)),
+        days_remaining=int(body.get("days_remaining", 20)),
+        is_in_pre_arb=bool(body.get("is_in_pre_arb", False)),
+        is_in_arbitration=bool(body.get("is_in_arbitration", False)),
+    )
+    r = estimate_dispute_complexity(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "total_score": r.total_score,
+        "complexity_tier": r.complexity_tier.value,
+        "driver_scores": [
+            {
+                "driver": ds.driver.value,
+                "score": ds.score,
+                "max_score": ds.max_score,
+                "rationale": ds.rationale,
+            }
+            for ds in r.driver_scores
+        ],
+        "estimated_staff_hours": r.estimated_staff_hours,
+        "recommended_assignee": r.recommended_assignee,
+        "sla_hours": r.sla_hours,
+        "complexity_flags": r.complexity_flags,
+        "summary": r.summary,
+        "wave": 151,
+    })
+
+
+@app.post("/api/oracle/score-merchant-risk")
+async def api_score_merchant_risk(request: Request):
+    from oracle.merchant_risk_scorer import (
+        MerchantRiskInput, score_merchant_risk,
+    )
+    body = await request.json()
+    inp = MerchantRiskInput(
+        merchant_id=body.get("merchant_id", "M-001"),
+        total_transactions_90d=int(body.get("total_transactions_90d", 1000)),
+        total_transaction_value_90d=float(body.get("total_transaction_value_90d", 100000.0)),
+        total_disputes_90d=int(body.get("total_disputes_90d", 10)),
+        open_disputes=int(body.get("open_disputes", 5)),
+        disputes_won_90d=int(body.get("disputes_won_90d", 4)),
+        disputes_lost_90d=int(body.get("disputes_lost_90d", 4)),
+        disputes_accepted_90d=int(body.get("disputes_accepted_90d", 2)),
+        total_transactions_prior=int(body.get("total_transactions_prior", 0)),
+        total_disputes_prior=int(body.get("total_disputes_prior", 0)),
+        open_dispute_value=float(body.get("open_dispute_value", 0.0)),
+        chargeback_fee_per_dispute=float(body.get("chargeback_fee_per_dispute", 20.0)),
+        avg_response_time_days=float(body.get("avg_response_time_days", 5.0)),
+        pct_responded_on_time=float(body.get("pct_responded_on_time", 1.0)),
+    )
+    r = score_merchant_risk(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "dispute_rate_90d": r.dispute_rate_90d,
+        "hdr_tier": r.hdr_tier.value,
+        "hdr_tier_next": r.hdr_tier_next.value,
+        "fee_exposure_per_dispute": r.fee_exposure_per_dispute,
+        "dimensions": [
+            {
+                "dimension": d.dimension.value,
+                "score": d.score,
+                "label": d.label,
+                "finding": d.finding,
+            }
+            for d in r.dimensions
+        ],
+        "overall_risk_score": r.overall_risk_score,
+        "trend": r.trend.value,
+        "trend_dispute_rate_prior": r.trend_dispute_rate_prior,
+        "revenue_at_risk": r.revenue_at_risk,
+        "projected_fees_if_current_rate": r.projected_fees_if_current_rate,
+        "recommendations": r.recommendations,
+        "urgent_actions": r.urgent_actions,
+        "summary": r.summary,
+        "wave": 152,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
