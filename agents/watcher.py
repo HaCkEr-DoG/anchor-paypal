@@ -7259,5 +7259,221 @@ async def api_win_rate_benchmark(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 98 — Dispute Response Quality Scorer  POST /api/oracle/response-quality-score
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/response-quality-score")
+async def api_response_quality_score(request: Request):
+    """
+    Score a dispute response text on a rubric before submission.
+
+    Request body:
+      {
+        "dispute_id": str,
+        "claim_type": str,
+        "response_text": str,
+        "has_tracking_number": bool,    // optional
+        "has_photo_evidence": bool,     // optional
+        "has_delivery_confirmation": bool, // optional
+        "has_communication_log": bool,  // optional
+        "has_refund_policy_link": bool  // optional
+      }
+
+    Response:
+      {
+        "dispute_id": str,
+        "overall_score": float,          // 0–100
+        "grade": "A" | "B" | "C" | "D" | "F",
+        "rubric": {
+          "clarity": { "score": int, "max": int, "feedback": str },
+          "evidence_references": { "score": int, "max": int, "feedback": str },
+          "policy_compliance": { "score": int, "max": int, "feedback": str },
+          "professionalism": { "score": int, "max": int, "feedback": str },
+          "completeness": { "score": int, "max": int, "feedback": str }
+        },
+        "missing_elements": [str],
+        "suggestions": [str],
+        "submit_ready": bool
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    dispute_id = body.get("dispute_id", "UNKNOWN")
+    claim_type = str(body.get("claim_type", "OTHER")).upper()
+    text = str(body.get("response_text", ""))
+    has_tracking = bool(body.get("has_tracking_number", False))
+    has_photo = bool(body.get("has_photo_evidence", False))
+    has_delivery = bool(body.get("has_delivery_confirmation", False))
+    has_comms = bool(body.get("has_communication_log", False))
+    has_policy = bool(body.get("has_refund_policy_link", False))
+
+    text_lower = text.lower()
+    words = text.split()
+    word_count = len(words)
+    sentences = [s.strip() for s in text.replace("?", ".").replace("!", ".").split(".") if s.strip()]
+
+    missing = []
+    suggestions = []
+    rubric = {}
+
+    # --- Clarity (20 pts) ---
+    clarity = 0
+    clarity_fb = []
+    if word_count >= 50:
+        clarity += 8
+    elif word_count >= 20:
+        clarity += 4
+        clarity_fb.append("Response is brief; consider expanding with more detail")
+    else:
+        clarity_fb.append("Response is too short — aim for at least 50 words")
+        missing.append("Detailed explanation of your position")
+
+    if len(sentences) >= 3:
+        clarity += 7
+    elif len(sentences) >= 1:
+        clarity += 3
+        clarity_fb.append("Use multiple sentences to structure your argument")
+
+    if any(w in text_lower for w in ["buyer", "customer", "order", "purchase", "item", "product"]):
+        clarity += 5
+    else:
+        clarity_fb.append("Reference the specific order/item/purchase")
+        missing.append("Reference to the specific order or item")
+
+    rubric["clarity"] = {
+        "score": clarity, "max": 20,
+        "feedback": "; ".join(clarity_fb) if clarity_fb else "Clear and well-structured",
+    }
+
+    # --- Evidence References (25 pts) ---
+    evidence = 0
+    ev_fb = []
+    if has_tracking or any(w in text_lower for w in ["tracking", "shipment", "shipped", "carrier"]):
+        evidence += 10
+    else:
+        ev_fb.append("Include tracking number or shipment reference")
+        if claim_type in ("ITEM_NOT_RECEIVED",):
+            missing.append("Tracking number / shipment proof")
+
+    if has_photo or any(w in text_lower for w in ["photo", "image", "picture", "screenshot", "attached"]):
+        evidence += 8
+    else:
+        if claim_type in ("SIGNIFICANTLY_NOT_AS_DESCRIBED",):
+            ev_fb.append("Attach photo evidence of item condition")
+            missing.append("Photo evidence of item as shipped/described")
+
+    if has_delivery or any(w in text_lower for w in ["delivered", "delivery", "signed", "confirmed"]):
+        evidence += 7
+    else:
+        if claim_type == "ITEM_NOT_RECEIVED":
+            ev_fb.append("Include delivery confirmation")
+
+    rubric["evidence_references"] = {
+        "score": evidence, "max": 25,
+        "feedback": "; ".join(ev_fb) if ev_fb else "Good evidence coverage",
+    }
+
+    # --- Policy Compliance (20 pts) ---
+    policy = 0
+    pol_fb = []
+    if has_policy or any(w in text_lower for w in ["policy", "terms", "return", "refund"]):
+        policy += 10
+    else:
+        pol_fb.append("Reference your return/refund policy")
+        missing.append("Reference to refund/return policy")
+
+    if any(w in text_lower for w in ["paypal", "seller protection", "unauthorized"]):
+        policy += 5
+
+    if any(w in text_lower for w in ["dispute", "claim", "investigation", "resolve"]):
+        policy += 5
+
+    rubric["policy_compliance"] = {
+        "score": policy, "max": 20,
+        "feedback": "; ".join(pol_fb) if pol_fb else "Policy references present",
+    }
+
+    # --- Professionalism (20 pts) ---
+    professionalism = 15  # start positive, deduct for red flags
+    prof_fb = []
+    _negative_words = ["fraud", "scam", "liar", "stupid", "unfair", "ridiculous", "idiot"]
+    found_neg = [w for w in _negative_words if w in text_lower]
+    if found_neg:
+        professionalism -= 10
+        prof_fb.append(f"Avoid inflammatory language: {', '.join(found_neg)}")
+        suggestions.append("Replace accusatory language with neutral, factual statements")
+
+    _caps_words = [w for w in words if len(w) > 3 and w.isupper()]
+    if len(_caps_words) >= 3:
+        professionalism -= 5
+        prof_fb.append("Avoid excessive CAPS — it reads as aggressive")
+
+    professionalism = max(0, min(20, professionalism))
+    rubric["professionalism"] = {
+        "score": professionalism, "max": 20,
+        "feedback": "; ".join(prof_fb) if prof_fb else "Tone is professional",
+    }
+
+    # --- Completeness (15 pts) ---
+    completeness = 0
+    comp_fb = []
+    if has_comms or any(w in text_lower for w in ["contact", "email", "message", "communication", "responded"]):
+        completeness += 8
+    else:
+        comp_fb.append("Include communication history with buyer")
+        missing.append("Buyer communication log or attempted resolution")
+
+    if any(w in text_lower for w in ["date", "day", "week", "month", "when", "time"]):
+        completeness += 4
+    else:
+        comp_fb.append("Add specific dates/timeline")
+
+    if any(w in text_lower for w in ["conclusion", "request", "asking", "ask", "resolve", "close"]):
+        completeness += 3
+
+    rubric["completeness"] = {
+        "score": completeness, "max": 15,
+        "feedback": "; ".join(comp_fb) if comp_fb else "Response is comprehensive",
+    }
+
+    total_score = sum(v["score"] for v in rubric.values())
+    max_score = sum(v["max"] for v in rubric.values())
+    pct = round(100.0 * total_score / max_score, 1) if max_score else 0.0
+
+    if pct >= 90:
+        grade = "A"
+    elif pct >= 80:
+        grade = "B"
+    elif pct >= 65:
+        grade = "C"
+    elif pct >= 50:
+        grade = "D"
+    else:
+        grade = "F"
+
+    submit_ready = pct >= 65 and len(missing) <= 1
+
+    if not suggestions:
+        if pct >= 80:
+            suggestions.append("Strong response — ensure all evidence files are attached before submitting")
+        else:
+            suggestions.append("Address the missing elements above before submitting")
+
+    return JSONResponse({
+        "dispute_id": dispute_id,
+        "claim_type": claim_type,
+        "overall_score": pct,
+        "grade": grade,
+        "rubric": rubric,
+        "missing_elements": missing,
+        "suggestions": suggestions,
+        "submit_ready": submit_ready,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
