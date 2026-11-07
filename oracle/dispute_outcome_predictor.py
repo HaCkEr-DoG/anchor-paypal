@@ -1,293 +1,237 @@
 """
-Dispute Outcome Predictor — synthesize all available oracle signals into
-a final prediction and actionable recommendation for a single dispute.
+Dispute Outcome Predictor — probabilistic outcome distribution for a dispute.
 
-This is the top-level orchestration oracle — it aggregates:
-  - Win rate estimate
-  - EV calculation (fight vs. accept)
-  - HDR impact of fighting vs. accepting
-  - Opportunity cost of management time
-  - Deadline urgency
+Combines multiple dispute characteristics into a P(WIN), P(PARTIAL_WIN), and
+P(LOSE) estimate using an additive logistic scoring model. The probabilities
+feed directly into EV calculations (Wave 73 ROI Calculator) and can replace
+manual win_probability inputs that merchants currently have to guess.
 
-Output: a final FIGHT / ACCEPT / ESCALATE / NEGOTIATE recommendation
-with full supporting rationale.
+Scoring factors and their contributions to win probability baseline (0.50):
 
-This is a pure oracle module — no I/O, no persistence.
+  reason_code_base:          INR→+0.10  SNAD→-0.05  UNAUTHORIZED→-0.15  SUBSCRIPTION→+0.08
+  evidence_coverage (0–1):   full coverage → +0.20  partial → pro-rated
+  response_speed:            responded ≤24h → +0.07  25-72h → 0  >72h → -0.10
+  transaction_age_days:      ≤7d → +0.05  8-30d → 0  >30d → -0.05
+  seller_protection:         eligible → +0.15
+  merchant_tier:             GOLD → +0.08  SILVER → +0.03  BRONZE → 0  REVIEW/SUSPEND → -0.10
+  buyer_history_flag:        repeat_disputer → -0.08  first_time → 0
+
+Final P(WIN) is clamped 0.05–0.95.
+
+P(PARTIAL_WIN) models a partial refund or reduced settlement outcome:
+  - Highest when P(WIN) is in the ambiguous middle (40–60%)
+  - Modeled as min(P(WIN), 1-P(WIN)) × 0.60
+
+P(LOSE) = 1 - P(WIN) - P(PARTIAL_WIN)
+
+PayPal benefit:
+  - Replaces merchant's subjective win probability input with an objective estimate
+  - Outcome predictions can be audited post-resolution to calibrate the model
+  - Merchants with low P(WIN) + high amount = highest EV pressure to refund early
+  - PayPal can use aggregate predictions to forecast dispute program costs
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
 
-class FinalAction(str, Enum):
-    FIGHT       = "FIGHT"       # File dispute response
-    ACCEPT      = "ACCEPT"      # Accept loss, no response
-    NEGOTIATE   = "NEGOTIATE"   # Offer partial refund before dispute escalates
-    ESCALATE    = "ESCALATE"    # Escalate to arbitration / account manager
-    DEFER       = "DEFER"       # Wait for more evidence before deciding
+class MerchantTier(str, Enum):
+    GOLD    = "GOLD"
+    SILVER  = "SILVER"
+    BRONZE  = "BRONZE"
+    REVIEW  = "REVIEW"
+    SUSPEND = "SUSPEND"
 
 
-class OutcomeConfidence(str, Enum):
-    HIGH   = "HIGH"
-    MEDIUM = "MEDIUM"
-    LOW    = "LOW"
+class PredictedOutcome(str, Enum):
+    WIN          = "WIN"
+    PARTIAL_WIN  = "PARTIAL_WIN"
+    LOSE         = "LOSE"
 
 
-class DecisionStrength(str, Enum):
-    STRONG      = "STRONG"       # Clear winner by multiple criteria
-    MODERATE    = "MODERATE"     # Leans one way with caveats
-    BORDERLINE  = "BORDERLINE"   # Could go either way
-    DEFER       = "DEFER"        # Not enough information
+_REASON_CODE_DELTA: dict = {
+    "INR":          +0.10,
+    "SNAD":         -0.05,
+    "UNAUTHORIZED": -0.15,
+    "SUBSCRIPTION": +0.08,
+}
+
+_TIER_DELTA: dict = {
+    MerchantTier.GOLD:    +0.08,
+    MerchantTier.SILVER:  +0.03,
+    MerchantTier.BRONZE:   0.00,
+    MerchantTier.REVIEW:  -0.10,
+    MerchantTier.SUSPEND: -0.10,
+}
+
+_BASELINE: float = 0.50
 
 
 @dataclass
 class OutcomePredictorInput:
-    """All signals for the final outcome prediction."""
     dispute_id: str
     reason_code: str
-    network: str
-    transaction_amount: float
-
-    # From win_rate_estimator
-    win_probability: float = 0.50
-
-    # Costs
-    fight_cost: float = 15.0        # Staff time + system cost to fight
-    chargeback_fee: float = 20.0    # Fee charged if we lose (card networks)
-    negotiation_cost: float = 5.0   # Cost to offer partial refund
-
-    # Partial refund option
-    can_offer_partial_refund: bool = False
-    partial_refund_amount: float = 0.0   # Amount we'd refund to avoid dispute
-
-    # HDR impact
-    hdr_tier: str = "NORMAL"
-    hdr_dispute_rate_current: float = 0.0   # Current rolling rate (0–1)
-    hdr_dispute_rate_threshold: float = 0.01
-
-    # Deadline
-    days_until_deadline: int = 10
-    has_missed_deadline: bool = False
-
-    # Evidence state
-    evidence_strength: Optional[str] = None    # COMPELLING/STRONG/ADEQUATE/WEAK/INSUFFICIENT
-    can_file_dispute: bool = True
-
-    # Buyer context
-    buyer_lifetime_value: float = 0.0
-    is_vip_buyer: bool = False
-
-    # Seller Protection
-    seller_protection_eligible: bool = False
-    ce30_applicable: bool = False
+    evidence_coverage: float        # 0.0–1.0 (from EvidenceGapDetector coverage_score)
+    response_hours: float           # hours until merchant responded (0 if not yet)
+    transaction_age_days: int       # days since the original transaction
+    seller_protection_eligible: bool
+    merchant_tier: MerchantTier = MerchantTier.SILVER
+    buyer_is_repeat_disputer: bool = False
+    transaction_amount: float = 100.0
 
 
 @dataclass
-class FinancialBreakdown:
-    """EV comparison between fight and accept scenarios."""
-    # Fight scenario
-    fight_ev: float
-    fight_cost: float
-    fight_win_payout: float
-    fight_loss_cost: float
-
-    # Accept scenario
-    accept_cost: float    # Usually just transaction amount (revenue lost)
-    accept_churn_cost: float  # Estimated LTV churn risk
-
-    # Negotiate scenario
-    negotiate_cost: float  # Partial refund + management time
-
-    # Comparison
-    fight_vs_accept_advantage: float   # fight_ev - (-accept_cost)
-    recommended_ev: float
+class FactorContribution:
+    factor: str
+    delta: float
+    description: str
 
 
 @dataclass
-class OutcomePrediction:
-    """Final dispute outcome prediction and recommendation."""
+class OutcomePredictionReport:
     dispute_id: str
-    reason_code: str
-
-    final_action: FinalAction
-    decision_strength: DecisionStrength
-    confidence: OutcomeConfidence
-
-    win_probability: float
-    financial: FinancialBreakdown
-
-    rationale: list[str]       # Ordered list of key reasons
-    risks: list[str]           # Risks with the recommended action
-    alternatives: list[str]    # Other viable options
-
-    deadline_urgent: bool
-    hdr_concern: bool
-
-    summary: str
+    p_win: float
+    p_partial_win: float
+    p_lose: float
+    predicted_outcome: PredictedOutcome
+    confidence: str                     # HIGH / MEDIUM / LOW
+    factor_contributions: list          # List[FactorContribution]
+    win_probability_for_ev: float       # P(WIN) + 0.5*P(PARTIAL_WIN) for EV calc
+    paypal_signal: str
 
 
-def _compute_ev_fight(p: float, amount: float,
-                       fight_cost: float, cb_fee: float) -> float:
-    return p * amount - fight_cost - (1 - p) * cb_fee
+def _response_speed_delta(hours: float) -> tuple:
+    if hours <= 24:
+        return +0.07, "Responded within 24h (+0.07)"
+    if hours <= 72:
+        return 0.00, "Responded 24–72h (neutral)"
+    return -0.10, "Responded after 72h (−0.10)"
 
 
-def _compute_ev_accept(amount: float, ltv: float,
-                        is_vip: bool) -> tuple[float, float]:
-    """Return (direct_loss, churn_risk)."""
-    churn_risk = 0.0
-    if is_vip:
-        churn_risk = ltv * 0.15
-    elif ltv > 200:
-        churn_risk = ltv * 0.05
-    return amount, churn_risk
+def _transaction_age_delta(days: int) -> tuple:
+    if days <= 7:
+        return +0.05, "Transaction ≤7 days old (+0.05)"
+    if days <= 30:
+        return 0.00, "Transaction 8–30 days old (neutral)"
+    return -0.05, "Transaction >30 days old (−0.05)"
 
 
-def _compute_ev_negotiate(partial: float, neg_cost: float,
-                           amount: float) -> float:
-    """Cost = partial refund + negotiation time, savings = amount - partial."""
-    return -(partial + neg_cost)
+def predict_outcome(inp: OutcomePredictorInput) -> OutcomePredictionReport:
+    factors = []
 
+    # Baseline
+    score = _BASELINE
 
-def predict_dispute_outcome(inp: OutcomePredictorInput) -> OutcomePrediction:
-    """Synthesize all signals into a final dispute action recommendation."""
-    p = inp.win_probability
+    # Reason code
+    rc_delta = _REASON_CODE_DELTA.get(inp.reason_code.upper(), 0.0)
+    score += rc_delta
+    factors.append(FactorContribution(
+        factor="reason_code",
+        delta=rc_delta,
+        description=f"Reason code {inp.reason_code.upper()} base delta: {rc_delta:+.2f}",
+    ))
 
-    # ── EV calculations ──────────────────────────────────────────
-    ev_fight = _compute_ev_fight(p, inp.transaction_amount,
-                                  inp.fight_cost, inp.chargeback_fee)
-    accept_loss, churn = _compute_ev_accept(
-        inp.transaction_amount, inp.buyer_lifetime_value, inp.is_vip_buyer)
-    ev_accept = -(accept_loss + churn)   # Net cost of accepting (negative)
+    # Evidence coverage: 0% → 0 bonus; 100% → +0.20
+    ev_delta = round(inp.evidence_coverage * 0.20, 4)
+    score += ev_delta
+    factors.append(FactorContribution(
+        factor="evidence_coverage",
+        delta=ev_delta,
+        description=f"Evidence coverage {inp.evidence_coverage:.0%} → {ev_delta:+.2f}",
+    ))
 
-    ev_negotiate = 0.0
-    if inp.can_offer_partial_refund:
-        ev_negotiate = _compute_ev_negotiate(
-            inp.partial_refund_amount, inp.negotiation_cost,
-            inp.transaction_amount)
+    # Response speed
+    rs_delta, rs_desc = _response_speed_delta(inp.response_hours)
+    score += rs_delta
+    factors.append(FactorContribution(factor="response_speed", delta=rs_delta, description=rs_desc))
 
-    fight_vs_accept = ev_fight - ev_accept
-    recommended_ev = max(ev_fight, ev_accept,
-                          ev_negotiate if inp.can_offer_partial_refund else -9999)
+    # Transaction age
+    age_delta, age_desc = _transaction_age_delta(inp.transaction_age_days)
+    score += age_delta
+    factors.append(FactorContribution(factor="transaction_age", delta=age_delta, description=age_desc))
 
-    fin = FinancialBreakdown(
-        fight_ev=round(ev_fight, 2),
-        fight_cost=inp.fight_cost,
-        fight_win_payout=round(p * inp.transaction_amount, 2),
-        fight_loss_cost=round((1 - p) * inp.chargeback_fee, 2),
-        accept_cost=round(accept_loss, 2),
-        accept_churn_cost=round(churn, 2),
-        negotiate_cost=round(inp.partial_refund_amount + inp.negotiation_cost, 2),
-        fight_vs_accept_advantage=round(fight_vs_accept, 2),
-        recommended_ev=round(recommended_ev, 2),
-    )
+    # Seller protection
+    sp_delta = +0.15 if inp.seller_protection_eligible else 0.0
+    score += sp_delta
+    factors.append(FactorContribution(
+        factor="seller_protection",
+        delta=sp_delta,
+        description=f"Seller Protection eligible: {sp_delta:+.2f}" if sp_delta else "No Seller Protection",
+    ))
 
-    rationale: list[str] = []
-    risks: list[str] = []
-    alternatives: list[str] = []
+    # Merchant tier
+    tier_delta = _TIER_DELTA.get(inp.merchant_tier, 0.0)
+    score += tier_delta
+    factors.append(FactorContribution(
+        factor="merchant_tier",
+        delta=tier_delta,
+        description=f"Merchant tier {inp.merchant_tier.value}: {tier_delta:+.2f}",
+    ))
 
-    hdr_concern = (inp.hdr_dispute_rate_current >=
-                   inp.hdr_dispute_rate_threshold * 0.80)
-
-    deadline_urgent = inp.days_until_deadline <= 3
-
-    # ── Can't file? ───────────────────────────────────────────────
-    if inp.has_missed_deadline or not inp.can_file_dispute:
-        action = FinalAction.ACCEPT
-        strength = DecisionStrength.STRONG
-        rationale.append("Cannot file dispute response — deadline missed or insufficient evidence")
-        risks.append("No recourse available")
-        confidence = OutcomeConfidence.HIGH
+    # Buyer history
+    bh_delta = -0.08 if inp.buyer_is_repeat_disputer else 0.0
+    score += bh_delta
+    if bh_delta:
+        factors.append(FactorContribution(
+            factor="buyer_history",
+            delta=bh_delta,
+            description=f"Buyer is repeat disputer: {bh_delta:+.2f}",
+        ))
     else:
-        # ── Decision logic ────────────────────────────────────────
-        if p >= 0.70 and ev_fight > 20:
-            action = FinalAction.FIGHT
-            strength = DecisionStrength.STRONG
-            rationale.append(f"High win probability ({p:.0%}) with positive EV (${ev_fight:+.0f})")
-            if inp.seller_protection_eligible:
-                rationale.append("Seller Protection coverage strengthens position")
-            if inp.ce30_applicable:
-                rationale.append("CE3.0 applies — +18pp boost from prior transactions")
-            risks.append("Still ~{:.0%} chance of losing + chargeback fee".format(1 - p))
+        factors.append(FactorContribution(
+            factor="buyer_history",
+            delta=0.0,
+            description="Buyer has no prior dispute flag",
+        ))
 
-        elif p >= 0.55 and ev_fight > 0:
-            action = FinalAction.FIGHT
-            strength = DecisionStrength.MODERATE
-            rationale.append(f"Positive EV (${ev_fight:+.0f}) with {p:.0%} win odds — worth fighting")
-            if inp.can_offer_partial_refund and ev_negotiate > ev_fight - 5:
-                alternatives.append("Negotiate partial refund as low-risk alternative")
-            risks.append(f"Win odds below 60% — outcome uncertain")
+    # Clamp
+    p_win = round(min(0.95, max(0.05, score)), 4)
 
-        elif inp.can_offer_partial_refund and ev_negotiate > ev_fight + 5:
-            action = FinalAction.NEGOTIATE
-            strength = DecisionStrength.MODERATE
-            rationale.append("Partial refund offers better net outcome than fighting")
-            rationale.append(f"Saves dispute escalation cost and preserves buyer relationship")
-            alternatives.append(f"Fight with {p:.0%} win odds if buyer refuses negotiation")
-            risks.append("Buyer may still escalate after partial refund")
+    # Partial win: highest in ambiguous middle
+    ambiguity = min(p_win, 1.0 - p_win)
+    p_partial = round(min(0.30, ambiguity * 0.60), 4)
 
-        elif ev_fight < -10 and p < 0.40:
-            action = FinalAction.ACCEPT
-            strength = DecisionStrength.MODERATE
-            rationale.append(f"Negative EV (${ev_fight:+.0f}) with low win odds ({p:.0%})")
-            if inp.can_offer_partial_refund:
-                alternatives.append("Offer partial refund to show good faith")
-            risks.append("Accepting sets precedent for future disputes from this buyer")
+    # Normalize so they sum to 1
+    total = p_win + p_partial + (1.0 - p_win - p_partial)
+    p_lose = round(1.0 - p_win - p_partial, 4)
 
-        elif inp.evidence_strength == "INSUFFICIENT":
-            action = FinalAction.DEFER
-            strength = DecisionStrength.MODERATE
-            rationale.append("Evidence insufficient to file credible response — gather more first")
-            risks.append("Deadline pressure may force premature action")
-            alternatives.append("Fight with what's available if deadline imminent")
+    # Predicted outcome = highest probability
+    if p_win >= p_partial and p_win >= p_lose:
+        outcome = PredictedOutcome.WIN
+    elif p_lose >= p_win and p_lose >= p_partial:
+        outcome = PredictedOutcome.LOSE
+    else:
+        outcome = PredictedOutcome.PARTIAL_WIN
 
-        else:
-            action = FinalAction.FIGHT if ev_fight > ev_accept else FinalAction.ACCEPT
-            strength = DecisionStrength.BORDERLINE
-            rationale.append(f"Borderline decision: fight_ev=${ev_fight:+.0f}, accept_cost=${-ev_accept:+.0f}")
-            alternatives.append("Negotiate partial refund to split the difference")
+    # Confidence
+    max_prob = max(p_win, p_partial, p_lose)
+    if max_prob >= 0.70:
+        confidence = "HIGH"
+    elif max_prob >= 0.50:
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
 
-        # HDR modifier
-        if hdr_concern and action == FinalAction.FIGHT:
-            rationale.append(
-                f"Note: HDR rate approaching threshold ({inp.hdr_dispute_rate_current:.2%}) — "
-                "each additional dispute costs points"
-            )
-            risks.append("Additional disputes push HDR closer to FEE_TIER")
+    # EV-adjusted win probability: gives partial wins half weight
+    ev_p_win = round(p_win + 0.5 * p_partial, 4)
 
-        if deadline_urgent and action == FinalAction.DEFER:
-            action = FinalAction.FIGHT
-            rationale.append("Deadline urgent — filing now despite evidence gaps")
-
-        # VIP buyer logic
-        if inp.is_vip_buyer and action == FinalAction.ACCEPT:
-            alternatives.append(f"VIP buyer (LTV ${inp.buyer_lifetime_value:.0f}) — "
-                                 "consider negotiating rather than fighting to preserve relationship")
-
-        confidence = (OutcomeConfidence.HIGH if len(rationale) >= 2
-                      else OutcomeConfidence.MEDIUM)
-
-    summary = (
-        f"Outcome {inp.dispute_id}: "
-        f"action={action.value} | strength={strength.value} | "
-        f"p={p:.2f} | ev_fight=${ev_fight:+.0f} | "
-        f"deadline={inp.days_until_deadline}d"
+    paypal_signal = (
+        f"Dispute {inp.dispute_id} [{inp.reason_code.upper()}]: "
+        f"P(WIN)={p_win:.0%}, P(PARTIAL)={p_partial:.0%}, P(LOSE)={p_lose:.0%}, "
+        f"outcome={outcome.value}, confidence={confidence}."
     )
 
-    return OutcomePrediction(
+    return OutcomePredictionReport(
         dispute_id=inp.dispute_id,
-        reason_code=inp.reason_code,
-        final_action=action,
-        decision_strength=strength,
+        p_win=p_win,
+        p_partial_win=p_partial,
+        p_lose=p_lose,
+        predicted_outcome=outcome,
         confidence=confidence,
-        win_probability=p,
-        financial=fin,
-        rationale=rationale,
-        risks=risks,
-        alternatives=alternatives,
-        deadline_urgent=deadline_urgent,
-        hdr_concern=hdr_concern,
-        summary=summary,
+        factor_contributions=factors,
+        win_probability_for_ev=ev_p_win,
+        paypal_signal=paypal_signal,
     )

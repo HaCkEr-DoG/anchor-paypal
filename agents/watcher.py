@@ -4184,6 +4184,75 @@ async def api_dispute_aging(request: Request):
     })
 
 
+@app.post("/api/oracle/outcome-predictor")
+async def api_outcome_predictor(request: Request):
+    """
+    POST /api/oracle/outcome-predictor
+
+    Wave 78 — Dispute Outcome Predictor.
+    Scores 7 dispute factors into P(WIN)/P(PARTIAL_WIN)/P(LOSE) using an
+    additive logistic model. Outputs the dominant predicted outcome, a
+    confidence rating (HIGH/MEDIUM/LOW), per-factor deltas, and an
+    EV-adjusted win probability for use in the ROI Calculator.
+
+    PayPal benefit: Replaces merchants' subjective win probability input
+    with an objective estimate. Aggregate predictions can forecast PayPal
+    dispute program costs and flag cases at high risk of becoming chargebacks.
+
+    Request body:
+      dispute_id                   str
+      reason_code                  str  (INR/SNAD/UNAUTHORIZED/SUBSCRIPTION)
+      evidence_coverage            float  0.0–1.0
+      response_hours               float
+      transaction_age_days         int
+      seller_protection_eligible   bool
+      merchant_tier                str  (GOLD/SILVER/BRONZE/REVIEW/SUSPEND)
+      buyer_is_repeat_disputer     bool   (optional)
+      transaction_amount           float  (optional)
+    """
+    from oracle.dispute_outcome_predictor import (
+        predict_outcome,
+        OutcomePredictorInput,
+        MerchantTier,
+    )
+    body = await request.json()
+    tier_str = body.get("merchant_tier", "SILVER").upper()
+    try:
+        tier = MerchantTier(tier_str)
+    except ValueError:
+        tier = MerchantTier.SILVER
+    inp = OutcomePredictorInput(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        reason_code=body.get("reason_code", "INR"),
+        evidence_coverage=float(body.get("evidence_coverage", 0.5)),
+        response_hours=float(body.get("response_hours", 24.0)),
+        transaction_age_days=int(body.get("transaction_age_days", 7)),
+        seller_protection_eligible=bool(body.get("seller_protection_eligible", False)),
+        merchant_tier=tier,
+        buyer_is_repeat_disputer=bool(body.get("buyer_is_repeat_disputer", False)),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+    )
+    r = predict_outcome(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "p_win": r.p_win,
+        "p_partial_win": r.p_partial_win,
+        "p_lose": r.p_lose,
+        "predicted_outcome": r.predicted_outcome.value,
+        "confidence": r.confidence,
+        "win_probability_for_ev": r.win_probability_for_ev,
+        "factor_contributions": [
+            {
+                "factor": f.factor,
+                "delta": f.delta,
+                "description": f.description,
+            }
+            for f in r.factor_contributions
+        ],
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/evidence-gaps")
 async def api_evidence_gaps(request: Request):
     """
