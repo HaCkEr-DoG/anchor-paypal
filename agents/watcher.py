@@ -19,9 +19,11 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -35,6 +37,12 @@ from agents.invoice import InvoiceCollector
 from agents.guardian import Guardian
 from agents.recovery import RecoveryAgent
 import agents.onboarding as onboarding_module
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+_log = logging.getLogger("watcher")
 
 _scheduler = AsyncIOScheduler()
 
@@ -197,8 +205,74 @@ async def _auto_register_webhook() -> None:
         print(f"[Watcher] Auto-webhook registration exception (non-fatal): {exc}")
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    title="Anchor — PayPal Dispute Intelligence",
+    description=(
+        "Autonomous PayPal dispute management service with 158+ oracle endpoints "
+        "for evidence scoring, risk assessment, dispute classification, and "
+        "response generation. Oracle endpoints honour X-Oracle-Key when "
+        "ORACLE_API_KEY env var is configured."
+    ),
+    version="1.0.0",
+    contact={"name": "Anchor", "url": "https://anchor-paypal.onrender.com"},
+    openapi_tags=[
+        {"name": "oracle", "description": "Pure business-logic decision endpoints (stateless, no I/O)"},
+        {"name": "admin", "description": "Internal admin & scheduler endpoints — require X-API-Key"},
+        {"name": "webhooks", "description": "PayPal webhook ingestion"},
+        {"name": "health", "description": "Health check and status"},
+    ],
+)
 onboarding_module.register_routes(app)
+
+# ---------------------------------------------------------------------------
+# Oracle API key (optional — set ORACLE_API_KEY to enforce auth on /api/oracle/*)
+# ---------------------------------------------------------------------------
+_ORACLE_SECRET = os.environ.get("ORACLE_API_KEY", "")
+if not _ORACLE_SECRET:
+    _log.warning("ORACLE_API_KEY not set — oracle endpoints are unauthenticated")
+
+
+@app.middleware("http")
+async def _request_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+    start = time.perf_counter()
+
+    # Optional oracle key gate — only enforced when ORACLE_API_KEY is set
+    if _ORACLE_SECRET and request.url.path.startswith("/api/oracle/"):
+        key = request.headers.get("X-Oracle-Key", "")
+        if not hmac.compare_digest(key, _ORACLE_SECRET):
+            return JSONResponse(
+                status_code=401,
+                content={"error": "unauthorized", "detail": "Invalid or missing X-Oracle-Key header"},
+                headers={"X-Request-ID": request_id},
+            )
+
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 1)
+    _log.info(
+        '{"req_id":"%s","method":"%s","path":"%s","status":%d,"ms":%.1f}',
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    _log.error("Unhandled exception on %s", request.url.path, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "detail": str(exc),
+            "path": str(request.url.path),
+        },
+    )
 
 # Dashboard HTML — read once at startup
 import pathlib
@@ -259,6 +333,22 @@ def _require_api_key(request: Request) -> None:
     key = request.headers.get("X-API-Key", "")
     if not hmac.compare_digest(key, _API_SECRET):
         raise HTTPException(401, "Unauthorized")
+
+
+@app.get("/api/oracle/catalog", tags=["oracle"], summary="List all oracle endpoints")
+async def oracle_catalog():
+    """Return every /api/oracle/* route registered on this app."""
+    routes = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if path.startswith("/api/oracle/") and path != "/api/oracle/catalog":
+            routes.append({
+                "path": path,
+                "methods": sorted(getattr(route, "methods", ["GET"])),
+                "name": getattr(route, "name", ""),
+            })
+    routes.sort(key=lambda r: r["path"])
+    return {"total": len(routes), "endpoints": routes}
 
 
 # ---------------------------------------------------------------------------
