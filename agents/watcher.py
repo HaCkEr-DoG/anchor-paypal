@@ -9609,5 +9609,142 @@ async def api_score_friendly_fraud(request: Request):
     })
 
 
+# ── Buyer Communication Analyzer endpoint (wave 126) ─────────────────────────
+
+@app.post("/api/oracle/analyze-buyer-communication")
+async def api_analyze_buyer_communication(request: Request):
+    from oracle.buyer_communication_analyzer import (
+        BuyerCommunicationInput, MessageRecord, MessageSender,
+        analyze_buyer_communication,
+    )
+    body = await request.json()
+    raw_msgs = body.get("messages", [])
+    messages = []
+    for i, m in enumerate(raw_msgs):
+        try:
+            sender = MessageSender(m.get("sender", "BUYER").upper())
+        except ValueError:
+            sender = MessageSender.BUYER
+        messages.append(MessageRecord(
+            sender=sender,
+            content=str(m.get("content", "")),
+            timestamp_epoch=int(m.get("timestamp_epoch", 0)),
+            message_index=i,
+        ))
+    inp = BuyerCommunicationInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        messages=messages,
+        buyer_prior_disputes=int(body.get("buyer_prior_disputes", 0)),
+        buyer_won_prior=int(body.get("buyer_won_prior", 0)),
+        dispute_reason_code=body.get("dispute_reason_code", "INR"),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+    )
+    r = analyze_buyer_communication(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "buyer_tone": r.buyer_tone.value,
+        "fraud_signal_level": r.fraud_signal_level.value,
+        "escalation_risk": r.escalation_risk.value,
+        "legal_threat_detected": r.legal_threat_detected,
+        "social_media_threat_detected": r.social_media_threat_detected,
+        "delivery_acknowledged_by_buyer": r.delivery_acknowledged_by_buyer,
+        "message_burst_detected": r.message_burst_detected,
+        "total_messages": r.total_messages,
+        "buyer_message_count": r.buyer_message_count,
+        "merchant_message_count": r.merchant_message_count,
+        "negotiation_leverage": r.negotiation_leverage,
+        "suggested_response_tone": r.suggested_response_tone,
+        "summary": r.summary,
+        "wave": 126,
+    })
+
+
+# ── Seller Protection Checker endpoint (wave 127) ────────────────────────────
+
+@app.post("/api/oracle/check-seller-protection")
+async def api_check_seller_protection(request: Request):
+    from oracle.seller_protection_checker import (
+        SellerProtectionInput, FulfillmentMethod, check_seller_protection,
+    )
+    body = await request.json()
+    try:
+        fm = FulfillmentMethod(body.get("fulfillment_method", "UNKNOWN").upper())
+    except ValueError:
+        fm = FulfillmentMethod.UNKNOWN
+    inp = SellerProtectionInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+        fulfillment_method=fm,
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        tracking_carrier=body.get("tracking_carrier"),
+        delivery_confirmed=bool(body.get("delivery_confirmed", False)),
+        signature_obtained=bool(body.get("signature_obtained", False)),
+        paid_via_paypal_checkout=bool(body.get("paid_via_paypal_checkout", True)),
+        buyer_address_confirmed=bool(body.get("buyer_address_confirmed", True)),
+        intangible_goods=bool(body.get("intangible_goods", False)),
+        transaction_amount_usd=float(body.get("transaction_amount_usd", body.get("transaction_amount", 0.0))),
+        is_donation=bool(body.get("is_donation", False)),
+        is_gambling=bool(body.get("is_gambling", False)),
+        is_money_transfer=bool(body.get("is_money_transfer", False)),
+        is_vehicle_purchase=bool(body.get("is_vehicle_purchase", False)),
+    )
+    r = check_seller_protection(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "eligibility_status": r.eligibility_status.value,
+        "protection_type": r.protection_type.value,
+        "recommended_action": r.recommended_action.value,
+        "fight_confidence": r.fight_confidence,
+        "ineligible_reasons": r.ineligible_reasons,
+        "conditional_warnings": r.conditional_warnings,
+        "paypal_signal": r.paypal_signal,
+        "action_detail": r.action_detail,
+        "wave": 127,
+    })
+
+
+# ── Refund Optimizer endpoint (wave 128) ─────────────────────────────────────
+
+@app.post("/api/oracle/optimize-refund")
+async def api_optimize_refund(request: Request):
+    from oracle.refund_optimizer import RefundInput, evaluate_refund
+    body = await request.json()
+    inp = RefundInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        claim_type=body.get("claim_type", "INR"),
+        dispute_amount=float(body.get("dispute_amount", 100.0)),
+        p_win=float(body.get("p_win", 0.5)),
+        was_delivered=bool(body.get("was_delivered", False)),
+        partial_delivery_pct=float(body.get("partial_delivery_pct", 1.0)),
+        is_digital_product=bool(body.get("is_digital_product", False)),
+        buyer_dispute_count_90d=int(body.get("buyer_dispute_count_90d", 0)),
+        buyer_purchase_history_count=int(body.get("buyer_purchase_history_count", 1)),
+        buyer_is_long_term_customer=bool(body.get("buyer_is_long_term_customer", False)),
+        fight_cost=float(body.get("fight_cost", 25.0)),
+        is_hdr_contributing=bool(body.get("is_hdr_contributing", True)),
+        days_until_deadline=int(body.get("days_until_deadline", 10)),
+        is_formal_dispute=bool(body.get("is_formal_dispute", True)),
+        hdr_pressure_level=int(body.get("hdr_pressure_level", 0)),
+    )
+    r = evaluate_refund(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "recommended_strategy": r.recommended_strategy.value,
+        "recommended_refund_amount": r.recommended_refund_amount,
+        "recommended_refund_pct": r.recommended_refund_pct,
+        "ev_fight": r.ev_fight,
+        "min_profitable_refund": r.min_profitable_refund,
+        "max_acceptable_refund": r.max_acceptable_refund,
+        "triggers": [t.value for t in r.triggers],
+        "proactive_advantage": r.proactive_advantage,
+        "hdr_saving_days": r.hdr_saving_days,
+        "buyer_message": r.buyer_message,
+        "summary": r.summary,
+        "wave": 128,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
