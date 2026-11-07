@@ -3211,3 +3211,76 @@ async def refund_roi(request: Request):
         "key_insight": r.key_insight,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/deadline-prioritizer")
+async def deadline_prioritizer(request: Request):
+    """
+    POST /api/oracle/deadline-prioritizer
+    Rank open disputes by composite urgency × EV score and return a
+    time-budgeted work queue with per-dispute recommended actions.
+
+    Body: { merchant_id, minutes_available_today, disputes: [...] }
+    Returns: items (ranked), critical_count, deferred_disputes,
+             paypal_capacity_signal, summary
+    """
+    from oracle.deadline_prioritizer import (
+        prioritize_disputes, PrioritizerInput, OpenDispute,
+    )
+    from datetime import date
+    body = await request.json()
+    raw_disputes = body.get("disputes", [])
+    disputes = []
+    for rd in raw_disputes:
+        dl = rd.get("deadline")
+        if isinstance(dl, str):
+            dl = date.fromisoformat(dl)
+        elif dl is None:
+            dl = date.today()
+        disputes.append(OpenDispute(
+            dispute_id=rd.get("dispute_id", ""),
+            amount=float(rd.get("amount", 0)),
+            reason_code=rd.get("reason_code", "INR"),
+            deadline=dl,
+            win_probability=float(rd.get("win_probability", 0.5)),
+            expected_value=float(rd.get("expected_value", 0)),
+            evidence_ready=bool(rd.get("evidence_ready", False)),
+            estimated_response_minutes=int(rd.get("estimated_response_minutes", 60)),
+        ))
+    inp = PrioritizerInput(
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        disputes=disputes,
+        minutes_available_today=int(body.get("minutes_available_today", 240)),
+    )
+    r = prioritize_disputes(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes": r.total_disputes,
+        "total_minutes_required": r.total_minutes_required,
+        "critical_count": r.critical_count,
+        "high_count": r.high_count,
+        "can_complete_all_today": r.can_complete_all_today,
+        "minutes_available_today": r.minutes_available_today,
+        "deferred_disputes": r.deferred_disputes,
+        "items": [
+            {
+                "dispute_id": x.dispute_id,
+                "amount": x.amount,
+                "reason_code": x.reason_code,
+                "deadline": x.deadline.isoformat(),
+                "days_remaining": x.days_remaining,
+                "priority": x.priority.value,
+                "urgency_score": x.urgency_score,
+                "deadline_component": x.deadline_component,
+                "ev_component": x.ev_component,
+                "win_component": x.win_component,
+                "recommended_action": x.recommended_action.value,
+                "action_detail": x.action_detail,
+                "estimated_minutes": x.estimated_minutes,
+                "paypal_signal": x.paypal_signal,
+            }
+            for x in r.items
+        ],
+        "paypal_capacity_signal": r.paypal_capacity_signal,
+        "summary": r.summary,
+    })
