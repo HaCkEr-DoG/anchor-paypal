@@ -9073,5 +9073,138 @@ async def api_analyze_appeal(request: Request):
     })
 
 
+# ── Pre-Dispute Interceptor endpoint (wave 115) ───────────────────────────────
+
+@app.post("/api/oracle/preempt-scan")
+async def api_preempt_scan(request: Request):
+    from oracle.preempt import scan_message
+    body = await request.json()
+    result = scan_message(
+        message_text=body.get("message_text", ""),
+        order_amount=float(body.get("order_amount", 0.0)),
+        days_since_purchase=int(body.get("days_since_purchase", 0)),
+        buyer_prior_disputes=int(body.get("buyer_prior_disputes", 0)),
+        dispute_rate_current=float(body.get("dispute_rate_current", 0.0)),
+        dispute_rate_next_threshold=float(body.get("dispute_rate_next_threshold", 0.01)),
+        seller_hourly_rate=float(body.get("seller_hourly_rate", 50.0)),
+        dispute_fee=float(body.get("dispute_fee", 15.0)),
+    )
+    return JSONResponse({
+        "dispute_probability": result.dispute_probability,
+        "action": result.action.value,
+        "detected_signals": [
+            {
+                "signal_type": s.signal_type.value,
+                "matched_phrase": s.matched_phrase,
+                "severity": s.severity,
+                "weight": s.weight,
+            }
+            for s in result.detected_signals
+        ],
+        "response_script": result.response_script,
+        "ev_analysis": result.ev_analysis,
+        "reasoning": result.reasoning,
+        "urgency_hours": result.urgency_hours,
+        "wave": 115,
+    })
+
+
+# ── Buyer Fraud Detector endpoint (wave 116) ──────────────────────────────────
+
+@app.post("/api/oracle/detect-buyer-fraud")
+async def api_detect_buyer_fraud(request: Request):
+    from oracle.buyer_fraud_detector import BuyerFraudInput, detect_buyer_fraud
+    body = await request.json()
+    inp = BuyerFraudInput(
+        dispute_id=body.get("dispute_id", ""),
+        buyer_id=body.get("buyer_id", ""),
+        claim_type=body.get("claim_type", "INR"),
+        dispute_amount=float(body.get("dispute_amount", 0.0)),
+        total_lifetime_orders=int(body.get("total_lifetime_orders", 1)),
+        total_lifetime_disputes=int(body.get("total_lifetime_disputes", 0)),
+        months_as_buyer=int(body.get("months_as_buyer", 1)),
+        has_prior_fraud_flag=bool(body.get("has_prior_fraud_flag", False)),
+        hours_until_dispute_filed=int(body.get("hours_until_dispute_filed", 72)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        delivery_address_matches_account=bool(body.get("delivery_address_matches_account", True)),
+        buyer_story_changed=bool(body.get("buyer_story_changed", False)),
+        escalated_within_24h=bool(body.get("escalated_within_24h", False)),
+        dispute_rate_last_12m=float(body.get("dispute_rate_last_12m", 0.0)),
+        orders_above_threshold=int(body.get("orders_above_threshold", 0)),
+        networks_used=int(body.get("networks_used", 1)),
+        is_first_order_with_merchant=bool(body.get("is_first_order_with_merchant", False)),
+    )
+    report = detect_buyer_fraud(inp, base_p_win=float(body.get("base_p_win", 0.55)))
+    return JSONResponse({
+        "dispute_id": report.dispute_id,
+        "buyer_id": report.buyer_id,
+        "fraud_score": report.fraud_score,
+        "risk_level": report.risk_level.value,
+        "active_signals": report.active_signals,
+        "anti_fraud_signals": report.anti_fraud_signals,
+        "base_p_win": report.base_p_win,
+        "adjusted_p_win": report.adjusted_p_win,
+        "p_win_boost": report.p_win_boost,
+        "rationale": report.rationale,
+        "recommendation": report.recommendation,
+        "summary": report.summary,
+        "wave": 116,
+    })
+
+
+# ── Chargeback Prevention Advisor endpoint (wave 117) ─────────────────────────
+
+@app.post("/api/oracle/prevent-chargeback")
+async def api_prevent_chargeback(request: Request):
+    from oracle.chargeback_prevention_advisor import PreventionInput, advise_chargeback_prevention
+    body = await request.json()
+    inp = PreventionInput(
+        transaction_id=body.get("transaction_id", ""),
+        merchant_id=body.get("merchant_id", ""),
+        reason_code=body.get("reason_code", "INR"),
+        amount=float(body.get("amount", 0.0)),
+        hours_since_purchase=float(body.get("hours_since_purchase", 0.0)),
+        delivery_status=body.get("delivery_status", "UNKNOWN"),
+        days_past_expected_delivery=int(body.get("days_past_expected_delivery", 0)),
+        carrier_has_tracking=bool(body.get("carrier_has_tracking", False)),
+        buyer_tier=body.get("buyer_tier", "UNKNOWN"),
+        buyer_contacted_support=bool(body.get("buyer_contacted_support", False)),
+        buyer_complaint_unresolved=bool(body.get("buyer_complaint_unresolved", False)),
+        hours_since_buyer_contact=float(body.get("hours_since_buyer_contact", 0.0)),
+        is_inquiry_stage=bool(body.get("is_inquiry_stage", True)),
+        has_active_inquiry=bool(body.get("has_active_inquiry", False)),
+        is_digital_product=bool(body.get("is_digital_product", False)),
+        digital_access_active=bool(body.get("digital_access_active", True)),
+        response_cost=float(body.get("response_cost", 15.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+    )
+    report = advise_chargeback_prevention(inp)
+    return JSONResponse({
+        "transaction_id": report.transaction_id,
+        "merchant_id": report.merchant_id,
+        "urgency": report.urgency.value,
+        "prevention_probability": report.prevention_probability,
+        "primary_action": report.primary_action.value,
+        "recommended_steps": [
+            {
+                "step_number": s.step_number,
+                "action": s.action.value,
+                "rationale": s.rationale,
+                "time_to_complete": s.time_to_complete,
+                "expected_outcome": s.expected_outcome,
+                "cost_estimate": s.cost_estimate,
+            }
+            for s in report.recommended_steps
+        ],
+        "prevention_roi": report.prevention_roi,
+        "chargeback_cost_if_lost": report.chargeback_cost_if_lost,
+        "buyer_tier": report.buyer_tier.value,
+        "relationship_risk": report.relationship_risk,
+        "key_insight": report.key_insight,
+        "summary": report.summary,
+        "wave": 117,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
