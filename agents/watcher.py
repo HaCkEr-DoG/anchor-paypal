@@ -2737,3 +2737,73 @@ async def api_tracking_parse(request: Request):
             "tracking_url": scrape_url,
             "message": "Provide page_text from Firecrawl scrape to get delivery status",
         })
+
+
+@app.post("/api/paypal/cross-merchant-intel")
+async def api_cross_merchant_intel(request: Request):
+    """
+    POST /api/paypal/cross-merchant-intel
+
+    Analyze dispute records across multiple merchants to detect fraud networks.
+    Produces PayPal Risk team alerts for serial disputers, coordinated fraud,
+    address reuse, copy-paste scripts, and chargeback washing.
+
+    Input: records (list), analysis_window_days, min_merchants_for_network
+    Returns: network_alerts, high_risk_buyer_ids, high_risk_zip_codes,
+             paypal_should_act, summary
+    """
+    from oracle.cross_merchant_intel import (
+        analyze_cross_merchant_intel, CrossMerchantIntelInput, MerchantDisputeRecord,
+    )
+    body = await request.json()
+    records = []
+    for rec in body.get("records", []):
+        records.append(MerchantDisputeRecord(
+            merchant_id=rec.get("merchant_id", ""),
+            dispute_id=rec.get("dispute_id", ""),
+            buyer_id=rec.get("buyer_id", ""),
+            buyer_email_domain=rec.get("buyer_email_domain", ""),
+            shipping_zip=rec.get("shipping_zip", ""),
+            dispute_amount=float(rec.get("dispute_amount", 0.0)),
+            reason_code=rec.get("reason_code", "SNAD"),
+            dispute_date=rec.get("dispute_date", ""),
+            was_resolved_refund=bool(rec.get("was_resolved_refund", False)),
+            dispute_text_hash=rec.get("dispute_text_hash", ""),
+        ))
+    inp = CrossMerchantIntelInput(
+        records=records,
+        analysis_window_days=int(body.get("analysis_window_days", 30)),
+        min_merchants_for_network=int(body.get("min_merchants_for_network", 2)),
+    )
+    r = analyze_cross_merchant_intel(inp)
+    return JSONResponse({
+        "total_records_analyzed": r.total_records_analyzed,
+        "unique_merchants": r.unique_merchants,
+        "unique_buyer_ids": r.unique_buyer_ids,
+        "network_alerts": [
+            {
+                "alert_id": a.alert_id,
+                "network_type": a.network_type.value,
+                "threat_level": a.threat_level.value,
+                "merchants_affected": a.merchants_affected,
+                "merchant_count": a.merchant_count,
+                "total_dispute_amount": a.total_dispute_amount,
+                "dispute_count": a.dispute_count,
+                "buyer_ids_involved": a.buyer_ids_involved,
+                "common_reason_codes": a.common_reason_codes,
+                "zip_codes_involved": a.zip_codes_involved,
+                "date_range": a.date_range,
+                "confidence": a.confidence,
+                "recommended_paypal_action": a.recommended_paypal_action,
+                "recommended_merchant_action": a.recommended_merchant_action,
+                "summary": a.summary,
+                "paypal_alert_text": a.paypal_alert_text,
+            }
+            for a in r.network_alerts
+        ],
+        "high_risk_buyer_ids": r.high_risk_buyer_ids,
+        "high_risk_zip_codes": r.high_risk_zip_codes,
+        "coordinated_wave_detected": r.coordinated_wave_detected,
+        "paypal_should_act": r.paypal_should_act,
+        "summary": r.summary,
+    })
