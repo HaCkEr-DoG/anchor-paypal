@@ -4184,6 +4184,61 @@ async def api_dispute_aging(request: Request):
     })
 
 
+@app.post("/api/oracle/evidence-gaps")
+async def api_evidence_gaps(request: Request):
+    """
+    POST /api/oracle/evidence-gaps
+
+    Wave 77 — Evidence Gap Detector.
+    Analyzes submitted evidence against the canonical checklist for the
+    dispute's reason code. Returns coverage score, gap severity breakdown
+    (CRITICAL/MAJOR/MINOR), win probability cost per gap, and a ranked
+    close-first action list.
+
+    PayPal benefit: Merchants with complete evidence resolve disputes faster,
+    reducing PayPal case load. Gap scores can feed PayPal's triage queue —
+    disputes with critical gaps can be pre-flagged for outcome risk.
+
+    Request body:
+      dispute_id               str
+      reason_code              str  (INR/SNAD/UNAUTHORIZED/SUBSCRIPTION)
+      submitted_evidence_keys  list[str]
+      deadline_hours_remaining float  (optional)
+      transaction_amount       float  (optional)
+    """
+    from oracle.evidence_gap_detector import detect_evidence_gaps, EvidenceGapInput
+    body = await request.json()
+    inp = EvidenceGapInput(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        reason_code=body.get("reason_code", "INR"),
+        submitted_evidence_keys=body.get("submitted_evidence_keys", []),
+        deadline_hours_remaining=float(body.get("deadline_hours_remaining", 120.0)),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+    )
+    r = detect_evidence_gaps(inp)
+
+    def _gap_dict(g):
+        return {
+            "evidence_key": g.evidence_key,
+            "weight": g.weight,
+            "severity": g.severity.value,
+            "win_probability_cost": g.win_probability_cost,
+            "action_description": g.action_description,
+        }
+
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "total_gap_score": r.total_gap_score,
+        "coverage_score": r.coverage_score,
+        "is_submission_ready": r.is_submission_ready,
+        "critical_gaps": [_gap_dict(g) for g in r.critical_gaps],
+        "all_gaps": [_gap_dict(g) for g in r.all_gaps],
+        "close_first_recommendation": r.close_first_recommendation,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/merchant-reputation")
 async def api_merchant_reputation(request: Request):
     """
