@@ -16,6 +16,7 @@ PayPal webhook events we handle:
 """
 
 import asyncio
+from collections import deque
 import hashlib
 import hmac
 import json
@@ -48,18 +49,36 @@ _log = logging.getLogger("watcher")
 # ---------------------------------------------------------------------------
 # Service-level constants — tunable via env vars
 # ---------------------------------------------------------------------------
-_RATE_LIMIT = int(os.environ.get("ORACLE_RATE_LIMIT", "120"))  # max oracle reqs/min per IP
+_RATE_LIMIT = int(os.environ.get("ORACLE_RATE_LIMIT", "120"))   # max oracle reqs/min per IP
 _MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(512 * 1024)))  # 512 KB default
+_ORACLE_TIMEOUT = float(os.environ.get("ORACLE_TIMEOUT_SECONDS", "10.0"))  # per-request timeout
+_LOCKOUT_THRESHOLD = int(os.environ.get("AUTH_LOCKOUT_THRESHOLD", "10"))   # failures before IP ban
+_LOCKOUT_WINDOW_S = float(os.environ.get("AUTH_LOCKOUT_WINDOW_SECONDS", "300.0"))  # ban window (s)
 
 # In-memory rate-limit buckets: ip → [monotonic timestamps in last 60 s]
 _rate_buckets: dict[str, list[float]] = {}
 
-# Per-path request metrics (count, errors, cumulative ms, peak ms)
+# Brute-force lockout: ip → [failure timestamps in lockout window]
+_auth_failures: dict[str, list[float]] = {}
+
+# Per-path request metrics (count, errors, client_errors, cumulative ms, peak ms)
 _path_metrics: dict[str, dict] = {}
+
+# P95 latency: last 200 durations per path
+_path_latencies: dict[str, deque] = {}
 
 # Service start time — used for uptime reporting
 _APP_START = time.monotonic()
 _APP_START_DT = datetime.now(timezone.utc)
+
+# Hardened security headers injected on every response
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-XSS-Protection": "1; mode=block",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+}
 
 _scheduler = AsyncIOScheduler()
 
@@ -244,10 +263,21 @@ onboarding_module.register_routes(app)
 
 # ---------------------------------------------------------------------------
 # Oracle API key (optional — set ORACLE_API_KEY to enforce auth on /api/oracle/*)
+# ORACLE_API_KEY_2 enables zero-downtime key rotation: both keys accepted in parallel.
 # ---------------------------------------------------------------------------
 _ORACLE_SECRET = os.environ.get("ORACLE_API_KEY", "")
+_ORACLE_SECRET_2 = os.environ.get("ORACLE_API_KEY_2", "")
 if not _ORACLE_SECRET:
     _log.warning("ORACLE_API_KEY not set — oracle endpoints are unauthenticated")
+
+
+def _p95(latencies) -> float:
+    """Return 95th-percentile of a collection of latency values in ms."""
+    if not latencies:
+        return 0.0
+    s = sorted(latencies)
+    idx = max(0, int(len(s) * 0.95) - 1)
+    return round(s[idx], 1)
 
 
 @app.middleware("http")
@@ -255,9 +285,9 @@ async def _request_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
     start = time.perf_counter()
     path = request.url.path
-    client_ip = (request.client.host if request.client else "unknown")
+    client_ip = request.client.host if request.client else "unknown"
 
-    # 1. Body-size guard — reject oversized payloads before they reach a handler
+    # 1. Body-size guard — checked via Content-Length before body is read
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > _MAX_BODY_BYTES:
         _log.warning(
@@ -271,12 +301,30 @@ async def _request_middleware(request: Request, call_next):
                 "detail": f"Body exceeds the {_MAX_BODY_BYTES}-byte limit",
                 "limit_bytes": _MAX_BODY_BYTES,
             },
-            headers={"X-Request-ID": request_id},
+            headers={"X-Request-ID": request_id, **_SECURITY_HEADERS},
         )
 
-    # 2. IP-based rate limiting on oracle endpoints (sliding 60-second window)
     if path.startswith("/api/oracle/"):
         now_mono = time.monotonic()
+
+        # 2. Brute-force lockout — block IPs with too many recent auth failures
+        recent_fails = [t for t in _auth_failures.get(client_ip, []) if t > now_mono - _LOCKOUT_WINDOW_S]
+        if len(recent_fails) >= _LOCKOUT_THRESHOLD:
+            _log.warning(
+                '{"event":"ip_locked","ip":"%s","path":"%s","failures":%d}',
+                client_ip, path, len(recent_fails),
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "ip_locked",
+                    "detail": f"Too many failed auth attempts. Locked for {int(_LOCKOUT_WINDOW_S)}s.",
+                    "retry_after_seconds": int(_LOCKOUT_WINDOW_S),
+                },
+                headers={"X-Request-ID": request_id, **_SECURITY_HEADERS},
+            )
+
+        # 3. Sliding-window rate limit (per IP, per minute)
         cutoff = now_mono - 60.0
         bucket = [t for t in _rate_buckets.get(client_ip, []) if t > cutoff]
         if len(bucket) >= _RATE_LIMIT:
@@ -291,38 +339,74 @@ async def _request_middleware(request: Request, call_next):
                     "detail": f"Max {_RATE_LIMIT} oracle requests per minute per IP",
                     "retry_after_seconds": 60,
                 },
-                headers={"X-Request-ID": request_id, "Retry-After": "60"},
+                headers={"X-Request-ID": request_id, "Retry-After": "60", **_SECURITY_HEADERS},
             )
         bucket.append(now_mono)
         _rate_buckets[client_ip] = bucket
 
-    # 3. Oracle API key gate — enforced only when ORACLE_API_KEY is configured
-    if _ORACLE_SECRET and path.startswith("/api/oracle/"):
-        key = request.headers.get("X-Oracle-Key", "")
-        if not hmac.compare_digest(key, _ORACLE_SECRET):
-            _log.warning(
-                '{"event":"auth_fail","ip":"%s","path":"%s"}',
-                client_ip, path,
-            )
-            return JSONResponse(
-                status_code=401,
-                content={"error": "unauthorized", "detail": "Invalid or missing X-Oracle-Key header"},
-                headers={"X-Request-ID": request_id},
-            )
+        # 4. Oracle API key gate with secondary-key rotation support
+        if _ORACLE_SECRET:
+            key = request.headers.get("X-Oracle-Key", "")
+            valid = hmac.compare_digest(key, _ORACLE_SECRET)
+            if not valid and _ORACLE_SECRET_2:
+                valid = hmac.compare_digest(key, _ORACLE_SECRET_2)
+            if not valid:
+                now2 = time.monotonic()
+                fails = [t for t in _auth_failures.get(client_ip, []) if t > now2 - _LOCKOUT_WINDOW_S]
+                fails.append(now2)
+                _auth_failures[client_ip] = fails
+                _log.warning(
+                    '{"event":"auth_fail","ip":"%s","path":"%s","consecutive":%d}',
+                    client_ip, path, len(fails),
+                )
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "unauthorized", "detail": "Invalid or missing X-Oracle-Key header"},
+                    headers={"X-Request-ID": request_id, **_SECURITY_HEADERS},
+                )
 
-    response = await call_next(request)
+    # 5. Dispatch with per-oracle timeout
+    try:
+        if path.startswith("/api/oracle/") and _ORACLE_TIMEOUT > 0:
+            response = await asyncio.wait_for(call_next(request), timeout=_ORACLE_TIMEOUT)
+        else:
+            response = await call_next(request)
+    except asyncio.TimeoutError:
+        _log.error(
+            '{"event":"timeout","path":"%s","timeout_s":%.1f}',
+            path, _ORACLE_TIMEOUT,
+        )
+        return JSONResponse(
+            status_code=504,
+            content={
+                "error": "gateway_timeout",
+                "detail": f"Request exceeded the {_ORACLE_TIMEOUT}s timeout",
+                "path": path,
+            },
+            headers={"X-Request-ID": request_id, **_SECURITY_HEADERS},
+        )
+
     duration_ms = round((time.perf_counter() - start) * 1000, 1)
 
-    # 4. Per-path metrics (non-locking; GIL protects simple dict mutations)
-    m = _path_metrics.setdefault(path, {"count": 0, "errors": 0, "total_ms": 0.0, "max_ms": 0.0})
+    # 6. Per-path metrics (GIL-safe for simple mutations)
+    m = _path_metrics.setdefault(
+        path,
+        {"count": 0, "errors": 0, "client_errors": 0, "total_ms": 0.0, "max_ms": 0.0},
+    )
     m["count"] += 1
     m["total_ms"] += duration_ms
     if duration_ms > m["max_ms"]:
         m["max_ms"] = duration_ms
     if response.status_code >= 500:
         m["errors"] += 1
+    elif response.status_code >= 400:
+        m["client_errors"] += 1
 
-    # 5. Slow-request warning
+    # 7. P95 latency sliding window
+    lat_q = _path_latencies.setdefault(path, deque(maxlen=200))
+    lat_q.append(duration_ms)
+
+    # 8. Slow-request warning
     if duration_ms > 1000:
         _log.warning(
             '{"event":"slow_request","path":"%s","ms":%.1f}',
@@ -333,7 +417,10 @@ async def _request_middleware(request: Request, call_next):
         '{"req_id":"%s","method":"%s","path":"%s","status":%d,"ms":%.1f}',
         request_id, request.method, path, response.status_code, duration_ms,
     )
+    # 9. Security headers + request-ID on every response
     response.headers["X-Request-ID"] = request_id
+    for k, v in _SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
     return response
 
 
@@ -453,21 +540,28 @@ async def oracle_catalog():
 
 @app.get("/metrics", tags=["health"], summary="Per-path request metrics")
 async def metrics_endpoint():
-    """Live per-path call counts, error counts, avg/max latency."""
+    """Live per-path call counts, error rates, avg/max/p95 latency."""
     uptime_s = round(time.monotonic() - _APP_START, 1)
     rows = []
     for path, m in sorted(_path_metrics.items(), key=lambda x: -x[1]["count"]):
-        avg_ms = round(m["total_ms"] / m["count"], 1) if m["count"] else 0.0
+        cnt = m["count"]
+        avg_ms = round(m["total_ms"] / cnt, 1) if cnt else 0.0
+        err_rate = round(m["errors"] / cnt * 100, 1) if cnt else 0.0
         rows.append({
             "path": path,
-            "count": m["count"],
+            "count": cnt,
             "errors": m["errors"],
+            "client_errors": m.get("client_errors", 0),
+            "error_rate_pct": err_rate,
             "avg_ms": avg_ms,
             "max_ms": round(m["max_ms"], 1),
+            "p95_ms": _p95(_path_latencies.get(path, [])),
         })
+    total_auth_failures = sum(len(v) for v in _auth_failures.values())
     return {
         "uptime_seconds": uptime_s,
         "total_requests": sum(m["count"] for m in _path_metrics.values()),
+        "total_auth_failures": total_auth_failures,
         "paths": rows,
     }
 
@@ -490,6 +584,7 @@ async def api_status():
         "DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
         "RENDER_EXTERNAL_URL": bool(os.environ.get("RENDER_EXTERNAL_URL")),
     }
+    total_auth_failures = sum(len(v) for v in _auth_failures.values())
     return {
         "status": "ok",
         "version": "1.0.0",
@@ -498,6 +593,11 @@ async def api_status():
         "oracle_endpoints": oracle_count,
         "rate_limit_per_minute": _RATE_LIMIT,
         "max_body_bytes": _MAX_BODY_BYTES,
+        "oracle_timeout_seconds": _ORACLE_TIMEOUT,
+        "lockout_threshold": _LOCKOUT_THRESHOLD,
+        "lockout_window_seconds": _LOCKOUT_WINDOW_S,
+        "secondary_key_configured": bool(_ORACLE_SECRET_2),
+        "total_auth_failures_in_window": total_auth_failures,
         "env": env_check,
     }
 
@@ -549,9 +649,35 @@ async def _is_duplicate(event_id: str) -> bool:
     return False
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/health/live", tags=["health"], summary="Liveness probe — is the process alive?")
+async def health_live():
+    """Always 200 while the process is running. Use for Kubernetes/Render liveness checks."""
+    return {"status": "alive", "uptime_seconds": round(time.monotonic() - _APP_START, 1)}
+
+
+@app.get("/health/ready", tags=["health"], summary="Readiness probe — is the service ready to serve?")
+async def health_ready():
+    """Returns 200 when all critical sub-systems are operational, 503 when degraded."""
+    checks = {
+        "scheduler_running": _scheduler.running,
+        "paypal_creds_configured": bool(
+            os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_CLIENT_SECRET")
+        ),
+    }
+    ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={
+            "status": "ready" if ready else "degraded",
+            "checks": checks,
+            "uptime_seconds": round(time.monotonic() - _APP_START, 1),
+        },
+    )
 
 
 @app.post("/webhooks/paypal/{merchant_id}")
