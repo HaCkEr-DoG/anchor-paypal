@@ -906,6 +906,7 @@
             <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Due Date</th>
             <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Days Left</th>
             <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Oracle Decision</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Actions</th>
           </tr>
         </thead>
         <tbody id="disputes-tbody">
@@ -1547,6 +1548,12 @@
         `<span style="font-size:12px;">${(d.due_date||d.seller_response_due_date||'—').replace('T',' ').substring(0,16)}</span>`,
         _deadlineBadge(days),
         _oracleBadge(oracleEntry),
+        `<span style="display:flex;gap:5px;flex-wrap:wrap;">
+          <button onclick="disputeAccept('${d.dispute_id}')" title="Accept claim and issue refund"
+            style="font-size:11px;padding:3px 8px;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:4px;cursor:pointer;font-weight:600;">Accept</button>
+          <button onclick="disputeMessage('${d.dispute_id}')" title="Send message to buyer or PayPal"
+            style="font-size:11px;padding:3px 8px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:4px;cursor:pointer;font-weight:600;">Message</button>
+         </span>`,
       ];
 
       tr.innerHTML = cells.map(c => `<td style="padding:10px 12px;vertical-align:middle;">${c}</td>`).join('');
@@ -1635,6 +1642,52 @@
       bar.textContent = `Error: ${e.message}`;
     }
   }
+
+  // ── Dispute action helpers ────────────────────────────────────────────────
+
+  async function _disputeAction(disputeId, path, body, confirmMsg) {
+    if (!confirm(confirmMsg)) return;
+    const apiKey = _getApiKey();
+    if (!apiKey) { alert('Enter your X-API-Key first.'); return; }
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const r = await fetch(`/api/paypal/disputes/${disputeId}/${path}`, {
+        method: 'POST',
+        headers: { 'X-API-Key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20000),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        btn.textContent = '✓ Done';
+        btn.style.background = '#d1fae5';
+        btn.style.color = '#065f46';
+        setTimeout(() => loadLiveDisputes(), 2000);
+      } else {
+        alert(`Error: ${data.error || r.statusText}`);
+        btn.disabled = false;
+        btn.textContent = path.includes('accept') ? 'Accept' : 'Message';
+      }
+    } catch(e) {
+      alert(`Request failed: ${e.message}`);
+      btn.disabled = false;
+      btn.textContent = path.includes('accept') ? 'Accept' : 'Message';
+    }
+  }
+
+  window.disputeAccept = function(disputeId) {
+    _disputeAction(disputeId, 'accept', { note: 'Merchant accepts this claim via Anchor dashboard.' },
+      `Accept claim ${disputeId} and issue refund? This cannot be undone.`);
+  };
+
+  window.disputeMessage = function(disputeId) {
+    const msg = prompt(`Message to buyer/PayPal for dispute ${disputeId}:`);
+    if (!msg || !msg.trim()) return;
+    _disputeAction(disputeId, 'send-message', { message: msg.trim() },
+      `Send this message on dispute ${disputeId}?`);
+  };
 
   // Load connections when that panel is first opened
   let _connectionsLoaded = false;
