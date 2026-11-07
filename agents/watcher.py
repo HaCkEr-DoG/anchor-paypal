@@ -3088,3 +3088,63 @@ async def dispute_response_writer(request: Request):
         "submission_note": r.submission_note,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/buyer-satisfaction-risk")
+async def buyer_satisfaction_risk(request: Request):
+    """
+    POST /api/oracle/buyer-satisfaction-risk
+    Score the risk that a resolved dispute leads to buyer churn, negative review,
+    or bank chargeback.
+
+    Body: ResolvedDisputeContext fields
+    Returns: churn_probability, bank_chargeback_probability, risk_tier,
+             retention_actions, key_insight, summary
+    """
+    from oracle.buyer_satisfaction_risk import (
+        score_buyer_satisfaction_risk, ResolvedDisputeContext,
+        DisputeOutcome, BuyerLTVTier,
+    )
+    body = await request.json()
+    ctx = ResolvedDisputeContext(
+        dispute_id=body.get("dispute_id", ""),
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        buyer_id=body.get("buyer_id", ""),
+        reason_code=body.get("reason_code", "INR"),
+        dispute_outcome=DisputeOutcome(body.get("dispute_outcome", "FULL_REFUND")),
+        dispute_amount=float(body.get("dispute_amount", 100.0)),
+        days_to_resolution=int(body.get("days_to_resolution", 5)),
+        buyer_ltv_tier=BuyerLTVTier(body.get("buyer_ltv_tier", "MEDIUM")),
+        buyer_total_orders_at_merchant=int(body.get("buyer_total_orders_at_merchant", 1)),
+        buyer_prior_disputes_at_merchant=int(body.get("buyer_prior_disputes_at_merchant", 0)),
+        buyer_lifetime_spend=float(body.get("buyer_lifetime_spend", 0.0)),
+        merchant_responded_before_escalation=bool(body.get("merchant_responded_before_escalation", True)),
+        days_until_refund_issued=int(body.get("days_until_refund_issued", 0)),
+        was_tone_empathetic=bool(body.get("was_tone_empathetic", True)),
+        buyer_contacted_merchant_first=bool(body.get("buyer_contacted_merchant_first", True)),
+        partial_refund_amount=float(body.get("partial_refund_amount", 0.0)),
+        is_repeat_issue=bool(body.get("is_repeat_issue", False)),
+    )
+    r = score_buyer_satisfaction_risk(ctx)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "merchant_id": r.merchant_id,
+        "buyer_id": r.buyer_id,
+        "churn_probability": r.churn_probability,
+        "negative_review_probability": r.negative_review_probability,
+        "bank_chargeback_probability": r.bank_chargeback_probability,
+        "overall_satisfaction_risk": r.overall_satisfaction_risk,
+        "risk_tier": r.risk_tier.value,
+        "outcome_signal": r.outcome_signal,
+        "response_speed_signal": r.response_speed_signal,
+        "empathy_signal": r.empathy_signal,
+        "ltv_signal": r.ltv_signal,
+        "prior_dispute_signal": r.prior_dispute_signal,
+        "retention_actions": [
+            {"action_type": a.action_type.value, "urgency": a.urgency,
+             "description": a.description, "expected_impact": a.expected_impact}
+            for a in r.retention_actions
+        ],
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+    })
