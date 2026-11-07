@@ -6909,5 +6909,180 @@ async def api_dispute_cost(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 96 — Refund Leakage Detector  POST /api/oracle/refund-leakage
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/refund-leakage")
+async def api_refund_leakage(request: Request):
+    """
+    Detect refund policy abuse patterns from a buyer's refund history.
+
+    Request body:
+      {
+        "buyer_email": str,
+        "refunds": [
+          {
+            "dispute_id": str,
+            "claim_type": str,
+            "amount_usd": float,
+            "days_after_purchase": int,   // how many days post-purchase
+            "outcome": "refunded" | "denied" | "partial",
+            "item_returned": bool
+          }
+        ],
+        "lookback_days": int    // optional, default 365
+      }
+
+    Response:
+      {
+        "buyer_email": str,
+        "total_refunds_analyzed": int,
+        "total_refunded_usd": float,
+        "leakage_score": float,          // 0–100
+        "leakage_level": "none" | "low" | "medium" | "high" | "policy_abuse",
+        "patterns": [str],
+        "refund_rate_pct": float,
+        "avg_days_after_purchase": float,
+        "last_minute_refunds": int,       // refunds on day 29–30 of 30-day window
+        "no_return_refunds": int,
+        "recommendation": str,
+        "block_refunds": bool
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    buyer_email = body.get("buyer_email", "unknown")
+    raw_refunds = body.get("refunds", [])
+    lookback_days = int(body.get("lookback_days", 365))
+
+    # Normalize refunds
+    refunds = []
+    for r in raw_refunds:
+        refunds.append({
+            "dispute_id": str(r.get("dispute_id", "")),
+            "claim_type": str(r.get("claim_type", "OTHER")).upper(),
+            "amount_usd": float(r.get("amount_usd", 0.0)),
+            "days_after_purchase": int(r.get("days_after_purchase", 0)),
+            "outcome": str(r.get("outcome", "refunded")).lower(),
+            "item_returned": bool(r.get("item_returned", False)),
+        })
+
+    total = len(refunds)
+    if total == 0:
+        return JSONResponse({
+            "buyer_email": buyer_email,
+            "total_refunds_analyzed": 0,
+            "total_refunded_usd": 0.0,
+            "leakage_score": 0.0,
+            "leakage_level": "none",
+            "patterns": [],
+            "refund_rate_pct": 0.0,
+            "avg_days_after_purchase": 0.0,
+            "last_minute_refunds": 0,
+            "no_return_refunds": 0,
+            "recommendation": "No refund history to analyze.",
+            "block_refunds": False,
+        })
+
+    refunded = [r for r in refunds if r["outcome"] == "refunded"]
+    total_refunded_usd = sum(r["amount_usd"] for r in refunded)
+    refund_rate = len(refunded) / total if total > 0 else 0.0
+    avg_days = (sum(r["days_after_purchase"] for r in refunded) / len(refunded)) if refunded else 0.0
+
+    # Pattern detection
+    score = 0.0
+    patterns = []
+
+    # --- High refund rate ---
+    if refund_rate >= 0.80:
+        score += 30
+        patterns.append(f"Extreme refund rate ({refund_rate:.0%}) — {len(refunded)}/{total} refunds granted")
+    elif refund_rate >= 0.50:
+        score += 18
+        patterns.append(f"High refund rate ({refund_rate:.0%})")
+    elif refund_rate >= 0.30:
+        score += 8
+
+    # --- Last-minute refunds (within last 10% of protection window) ---
+    # Assume 30-day return window; "last-minute" = day 27–30
+    last_minute = [r for r in refunded if r["days_after_purchase"] >= 27]
+    if len(last_minute) >= 2:
+        score += 20
+        patterns.append(f"{len(last_minute)} last-minute refunds (day 27–30) — timing abuse pattern")
+    elif len(last_minute) == 1:
+        score += 8
+
+    # --- Refunds without item return ---
+    no_return = [r for r in refunded if not r["item_returned"]]
+    no_return_count = len(no_return)
+    if no_return_count >= 3:
+        score += 25
+        patterns.append(f"{no_return_count} refunds without item return")
+    elif no_return_count >= 1:
+        score += 10 + (no_return_count - 1) * 3
+        patterns.append(f"{no_return_count} refund(s) without item return")
+
+    # --- Repeat claim type (single type dominates → pattern) ---
+    type_counts: dict = {}
+    for r in refunded:
+        type_counts[r["claim_type"]] = type_counts.get(r["claim_type"], 0) + 1
+    if type_counts:
+        dominant_type = max(type_counts, key=lambda k: type_counts[k])
+        dominant_count = type_counts[dominant_type]
+        if dominant_count >= 3 and dominant_count / max(len(refunded), 1) >= 0.75:
+            score += 15
+            patterns.append(f"Repeated same claim type '{dominant_type}' in {dominant_count}/{len(refunded)} refunds")
+
+    # --- Large total refunded ---
+    if total_refunded_usd >= 500:
+        score += 10
+        patterns.append(f"Large total refunded: ${total_refunded_usd:.2f}")
+    elif total_refunded_usd >= 200:
+        score += 5
+
+    score = max(0.0, min(100.0, score))
+
+    # Leakage level
+    if score >= 65:
+        level = "policy_abuse"
+        rec = "Block automatic refund approvals. Flag account for manual review. Consider requiring photo evidence for all future claims."
+        block = True
+    elif score >= 40:
+        level = "high"
+        rec = "Require manual review for all future refund requests from this buyer. Document denial rationale."
+        block = False
+    elif score >= 20:
+        level = "medium"
+        rec = "Monitor closely. Request item return evidence on next claim."
+        block = False
+    elif score > 0:
+        level = "low"
+        rec = "Minor signals detected. Normal processing acceptable."
+        block = False
+    else:
+        level = "none"
+        rec = "No abuse patterns detected."
+        block = False
+
+    return JSONResponse({
+        "buyer_email": buyer_email,
+        "total_refunds_analyzed": total,
+        "total_refunded_usd": round(total_refunded_usd, 2),
+        "leakage_score": round(score, 1),
+        "leakage_level": level,
+        "patterns": patterns,
+        "refund_rate_pct": round(refund_rate * 100, 2),
+        "avg_days_after_purchase": round(avg_days, 1),
+        "last_minute_refunds": len(last_minute),
+        "no_return_refunds": no_return_count,
+        "recommendation": rec,
+        "block_refunds": block,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
