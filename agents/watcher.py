@@ -75,8 +75,116 @@ async def lifespan(app: FastAPI):
     )
     _scheduler.start()
     print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
+
+    # Auto-register PayPal webhook if PAYPAL_WEBHOOK_ID is not already set
+    if not os.environ.get("PAYPAL_WEBHOOK_ID"):
+        await _auto_register_webhook()
+
     yield
     _scheduler.shutdown()
+
+
+async def _auto_register_webhook() -> None:
+    """
+    Auto-register the PayPal webhook at startup when PAYPAL_WEBHOOK_ID is not set.
+
+    Priority order:
+      1. Check PostgreSQL service_config for a previously registered webhook_id
+      2. If found, set os.environ so the running app uses it immediately
+      3. If not found, call the PayPal API to register and persist the new id
+    Falls back gracefully when PayPal credentials or RENDER_EXTERNAL_URL are absent.
+    """
+    # Step 1: check PG for a stored webhook_id
+    stored_id = None
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as pg_store
+            stored_id = await asyncio.to_thread(pg_store.get_config_value, "paypal_webhook_id")
+        except Exception as _exc:
+            print(f"[Watcher] Could not read webhook_id from PG: {_exc}")
+
+    if stored_id:
+        os.environ["PAYPAL_WEBHOOK_ID"] = stored_id
+        print(f"[Watcher] Loaded PAYPAL_WEBHOOK_ID from PG: {stored_id}")
+        return
+
+    # Step 2: register with PayPal
+    client_id = os.environ.get("PAYPAL_CLIENT_ID", "")
+    client_secret = os.environ.get("PAYPAL_CLIENT_SECRET", "")
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    merchant_id = os.environ.get("MERCHANT_ID", "")
+
+    if not client_id or not client_secret or not base_url:
+        print("[Watcher] Auto-webhook skipped: PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, or RENDER_EXTERNAL_URL not set")
+        return
+
+    webhook_url = (
+        f"{base_url}/webhooks/paypal/{merchant_id}"
+        if merchant_id
+        else f"{base_url}/webhooks/paypal"
+    )
+    event_types = [
+        "CUSTOMER.DISPUTE.CREATED",
+        "CUSTOMER.DISPUTE.UPDATED",
+        "CHECKOUT.ORDER.APPROVED",
+        "INVOICING.INVOICE.PAYMENT.PAID",
+        "INVOICING.INVOICE.UPDATED",
+        "PAYMENT.CAPTURE.COMPLETED",
+        "BILLING.SUBSCRIPTION.PAYMENT.FAILED",
+    ]
+
+    try:
+        from agents.paypal_client import get_client
+        import httpx
+        token = await get_client().get_token()
+        paypal_base = (
+            "https://api-m.sandbox.paypal.com"
+            if os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox"
+            else "https://api-m.paypal.com"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(
+                f"{paypal_base}/v1/notifications/webhooks",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"url": webhook_url, "event_types": [{"name": e} for e in event_types]},
+            )
+        if r.status_code in (200, 201):
+            webhook_id = r.json().get("id", "")
+            if webhook_id:
+                os.environ["PAYPAL_WEBHOOK_ID"] = webhook_id
+                if os.environ.get("DATABASE_URL"):
+                    try:
+                        import agents.pg_store as pg_store
+                        await asyncio.to_thread(pg_store.set_config_value, "paypal_webhook_id", webhook_id)
+                    except Exception as _exc:
+                        print(f"[Watcher] Could not persist webhook_id to PG: {_exc}")
+                print(f"[Watcher] Auto-registered PayPal webhook: {webhook_id} → {webhook_url}")
+        elif r.status_code == 422 and "WEBHOOK_URL_ALREADY_EXISTS" in r.text:
+            # Already registered — list webhooks and use the existing id
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as c:
+                    lr = await c.get(
+                        f"{paypal_base}/v1/notifications/webhooks",
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+                for wh in lr.json().get("webhooks", []):
+                    if wh.get("url", "").rstrip("/") == webhook_url.rstrip("/"):
+                        webhook_id = wh["id"]
+                        os.environ["PAYPAL_WEBHOOK_ID"] = webhook_id
+                        if os.environ.get("DATABASE_URL"):
+                            try:
+                                import agents.pg_store as pg_store
+                                await asyncio.to_thread(pg_store.set_config_value, "paypal_webhook_id", webhook_id)
+                            except Exception:
+                                pass
+                        print(f"[Watcher] Reused existing PayPal webhook: {webhook_id}")
+                        break
+            except Exception as _exc:
+                print(f"[Watcher] Could not retrieve existing webhook: {_exc}")
+        else:
+            print(f"[Watcher] Auto-webhook registration failed: {r.status_code} {r.text[:200]}")
+    except Exception as exc:
+        print(f"[Watcher] Auto-webhook registration exception (non-fatal): {exc}")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -419,6 +527,18 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     )
 
     print(f"[Watcher] New dispute {dispute_id}: ${dispute_amount} ({reason})")
+
+    # Record dispute velocity for spike detection
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as _pg
+            await asyncio.to_thread(
+                _pg.record_dispute_velocity,
+                merchant_id or os.environ.get("MERCHANT_ID", "default"),
+                dispute_amount,
+            )
+        except Exception:
+            pass
 
     # Deadline tracking: store dispute so we never miss the response window
     try:
@@ -2205,6 +2325,119 @@ async def api_register_webhook(request: Request):
         )
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/api/webhook/health")
+async def api_webhook_health():
+    """
+    GET /api/webhook/health
+
+    Returns the current PayPal webhook registration status.
+    Reports whether the webhook_id is set, its source (env var, pg, auto-registered),
+    and the last received event timestamp from the outbox.
+    No auth required — this is a health/diagnostics endpoint.
+    """
+    webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    source = "none"
+    if webhook_id:
+        source = "env_var"
+        if os.environ.get("DATABASE_URL"):
+            try:
+                import agents.pg_store as pg_store
+                pg_id = await asyncio.to_thread(pg_store.get_config_value, "paypal_webhook_id")
+                if pg_id == webhook_id:
+                    source = "postgresql"
+            except Exception:
+                pass
+
+    # Last received event from outbox
+    last_event_at = None
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as pg_store
+            import psycopg2.extras
+            conn_fn = pg_store._get_conn
+            def _last_event():
+                conn = conn_fn()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT received_utc FROM webhook_outbox ORDER BY received_utc DESC LIMIT 1"
+                    )
+                    row = cur.fetchone()
+                return row[0].isoformat() if row and hasattr(row[0], "isoformat") else None
+            last_event_at = await asyncio.to_thread(_last_event)
+        except Exception:
+            pass
+
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    merchant_id = os.environ.get("MERCHANT_ID", "")
+    expected_url = (
+        f"{base_url}/webhooks/paypal/{merchant_id}"
+        if merchant_id and base_url
+        else f"{base_url}/webhooks/paypal" if base_url else None
+    )
+    return JSONResponse({
+        "webhook_registered": bool(webhook_id),
+        "webhook_id": webhook_id or None,
+        "source": source,
+        "expected_url": expected_url,
+        "last_event_received_at": last_event_at,
+        "paypal_env": os.environ.get("PAYPAL_ENV", "sandbox"),
+    })
+
+
+@app.get("/api/velocity/disputes")
+async def api_dispute_velocity(hours: int = 168):
+    """
+    GET /api/velocity/disputes?hours=168
+
+    Returns hourly dispute velocity for the last N hours.
+    Includes spike detection: flags hours where count > 2× the rolling baseline.
+    Useful for detecting fraud waves or unusual buyer activity.
+    No auth required — aggregate data only, no PII.
+    """
+    if not os.environ.get("DATABASE_URL"):
+        return JSONResponse({"available": False, "reason": "DATABASE_URL not configured"})
+
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    try:
+        import agents.pg_store as pg_store
+        buckets = await asyncio.to_thread(pg_store.get_dispute_velocity, merchant_id, hours)
+    except Exception as exc:
+        return JSONResponse({"available": False, "reason": str(exc)}, status_code=500)
+
+    if not buckets:
+        return JSONResponse({
+            "available": True,
+            "merchant_id": merchant_id,
+            "hours": hours,
+            "total_disputes": 0,
+            "total_amount": 0.0,
+            "buckets": [],
+            "spike_hours": [],
+        })
+
+    counts = [b["dispute_count"] for b in buckets]
+    total = sum(counts)
+    avg = total / len(counts) if counts else 0
+
+    # Flag hours where count > 2× average as spikes
+    spike_threshold = max(2.0 * avg, 2)
+    spike_hours = [
+        b["bucket_utc"] for b in buckets if b["dispute_count"] >= spike_threshold
+    ]
+
+    return JSONResponse({
+        "available": True,
+        "merchant_id": merchant_id,
+        "hours": hours,
+        "total_disputes": total,
+        "total_amount": round(sum(b["amount_total"] for b in buckets), 2),
+        "avg_per_hour": round(avg, 2),
+        "spike_threshold": round(spike_threshold, 1),
+        "spike_hours": spike_hours,
+        "buckets": buckets,
+    })
 
 
 @app.get("/api/safety/check")

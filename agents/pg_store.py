@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS webhook_outbox (
     payload         JSONB NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS service_config (
+    key             TEXT PRIMARY KEY,
+    value           TEXT NOT NULL,
+    updated_utc     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS dispute_velocity (
+    bucket_utc      TIMESTAMPTZ NOT NULL,
+    merchant_id     TEXT NOT NULL,
+    dispute_count   INTEGER NOT NULL DEFAULT 1,
+    amount_total    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (bucket_utc, merchant_id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     entry_id                TEXT PRIMARY KEY,
     dispute_id              TEXT NOT NULL,
@@ -196,6 +210,105 @@ def append_audit_entry(entry: dict) -> bool:
         except Exception:
             pass
         return False
+
+
+def get_config_value(key: str) -> Optional[str]:
+    """Read a service-level config value from service_config table."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM service_config WHERE key=%s", (key,))
+            row = cur.fetchone()
+        return row[0] if row else None
+    except Exception as exc:
+        logger.error("pg_store: get_config_value(%s) failed: %s", key, exc)
+        return None
+
+
+def set_config_value(key: str, value: str) -> bool:
+    """Upsert a service-level config value."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO service_config (key, value, updated_utc)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (key) DO UPDATE
+                    SET value=EXCLUDED.value, updated_utc=NOW()
+                """,
+                (key, value),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.error("pg_store: set_config_value(%s) failed: %s", key, exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
+def record_dispute_velocity(merchant_id: str, amount: float = 0.0) -> bool:
+    """
+    Increment the per-hour dispute count for the given merchant.
+    Uses date_trunc('hour', NOW()) as the bucket so queries are fast.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO dispute_velocity (bucket_utc, merchant_id, dispute_count, amount_total)
+                VALUES (date_trunc('hour', NOW()), %s, 1, %s)
+                ON CONFLICT (bucket_utc, merchant_id) DO UPDATE
+                    SET dispute_count = dispute_velocity.dispute_count + 1,
+                        amount_total  = dispute_velocity.amount_total + EXCLUDED.amount_total
+                """,
+                (merchant_id, amount),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.error("pg_store: record_dispute_velocity failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
+def get_dispute_velocity(merchant_id: str, hours: int = 168) -> List[Dict[str, Any]]:
+    """
+    Return hourly dispute velocity for the last `hours` hours.
+    Result is sorted ascending (oldest first) for time-series rendering.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT bucket_utc, dispute_count, amount_total
+                FROM dispute_velocity
+                WHERE merchant_id=%s
+                  AND bucket_utc >= NOW() - (%s || ' hours')::INTERVAL
+                ORDER BY bucket_utc ASC
+                """,
+                (merchant_id, str(hours)),
+            )
+            rows = cur.fetchall()
+        return [
+            {
+                "bucket_utc": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "dispute_count": r[1],
+                "amount_total": float(r[2]),
+            }
+            for r in rows
+        ]
+    except Exception as exc:
+        logger.error("pg_store: get_dispute_velocity failed: %s", exc)
+        return []
 
 
 def get_audit_entries(limit: int = 50) -> List[Dict[str, Any]]:
