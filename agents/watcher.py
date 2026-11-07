@@ -4115,6 +4115,75 @@ async def api_response_quality_analyzer(request: Request):
     })
 
 
+@app.post("/api/oracle/dispute-aging")
+async def api_dispute_aging(request: Request):
+    """
+    POST /api/oracle/dispute-aging
+
+    Wave 74 — Dispute Aging Monitor.
+    Scans a merchant's open disputes for aging patterns and returns
+    tier breakdown (FRESH/ACTIVE/AGING/CRITICAL/OVERDUE), inaction risk
+    scores, escalation flags, and an overall merchant health rating.
+
+    PayPal benefit: Early detection of stale disputes reduces default
+    judgment rate. Aging distribution is a leading indicator of merchant
+    operational health — merchants with many CRITICAL disputes are
+    candidates for proactive outreach by PayPal's merchant success team.
+
+    Request body:
+      merchant_id  str
+      disputes[]   array of:
+        dispute_id            str
+        amount                float
+        reason_code           str
+        opened_hours_ago      float
+        deadline_hours_total  float
+        last_action_hours_ago float
+    """
+    from oracle.dispute_aging_monitor import monitor_aging, AgingMonitorInput, OpenDisputeAge
+    body = await request.json()
+    disputes = [
+        OpenDisputeAge(
+            dispute_id=d.get("dispute_id", "UNKNOWN"),
+            amount=float(d.get("amount", 0.0)),
+            reason_code=d.get("reason_code", "INR"),
+            opened_hours_ago=float(d.get("opened_hours_ago", 0.0)),
+            deadline_hours_total=float(d.get("deadline_hours_total", 240.0)),
+            last_action_hours_ago=float(d.get("last_action_hours_ago", 0.0)),
+        )
+        for d in body.get("disputes", [])
+    ]
+    inp = AgingMonitorInput(
+        merchant_id=body.get("merchant_id", "MERCH_DEMO"),
+        disputes=disputes,
+    )
+    r = monitor_aging(inp)
+
+    def _aged_dict(a):
+        return {
+            "dispute_id": a.dispute_id,
+            "amount": a.amount,
+            "reason_code": a.reason_code,
+            "age_hours": a.age_hours,
+            "age_tier": a.age_tier.value,
+            "hours_until_deadline": a.hours_until_deadline,
+            "inaction_risk_score": a.inaction_risk_score,
+            "escalation_flag": a.escalation_flag,
+            "recommendation": a.recommendation,
+        }
+
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_open": r.total_open,
+        "tier_counts": r.tier_counts,
+        "total_at_risk_usd": r.total_at_risk_usd,
+        "overall_health": r.overall_health,
+        "critical_cases": [_aged_dict(a) for a in r.critical_cases],
+        "all_disputes": [_aged_dict(a) for a in r.all_disputes],
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/refund-roi")
 async def api_refund_roi(request: Request):
     """
