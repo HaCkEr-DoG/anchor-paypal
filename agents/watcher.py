@@ -11118,5 +11118,170 @@ async def api_analyze_dispute_clusters(request: Request):
     })
 
 
+@app.post("/api/oracle/score-unauthorized-transaction")
+async def api_score_unauthorized_transaction(request: Request):
+    from oracle.unauthorized_transaction_scorer import (
+        UnauthorizedTransactionInput, AuthVerificationResult,
+        score_unauthorized_transaction,
+    )
+    body = await request.json()
+    def _avr(key, default="NOT_RUN"):
+        raw = body.get(key, default).upper()
+        try:
+            return AuthVerificationResult(raw)
+        except ValueError:
+            return AuthVerificationResult.NOT_RUN
+    inp = UnauthorizedTransactionInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        network=body.get("network", "PAYPAL"),
+        reason_code=body.get("reason_code", "UNAUTHORIZED"),
+        three_d_secure_result=_avr("three_d_secure_result"),
+        cvv_result=_avr("cvv_result"),
+        avs_result=_avr("avs_result"),
+        ip_matches_prior_sessions=bool(body.get("ip_matches_prior_sessions", False)),
+        device_fingerprint_matches=bool(body.get("device_fingerprint_matches", False)),
+        shipped_to_account_address=bool(body.get("shipped_to_account_address", False)),
+        billing_address_matches_avs=bool(body.get("billing_address_matches_avs", False)),
+        account_age_days=int(body.get("account_age_days", 0)),
+        prior_purchases_on_account=int(body.get("prior_purchases_on_account", 0)),
+        login_before_purchase=bool(body.get("login_before_purchase", False)),
+        login_from_known_device=bool(body.get("login_from_known_device", False)),
+        ce3_eligible=bool(body.get("ce3_eligible", False)),
+        prior_non_disputed_txn_count=int(body.get("prior_non_disputed_txn_count", 0)),
+        prior_unauthorized_disputes=int(body.get("prior_unauthorized_disputes", 0)),
+        dispute_filed_within_30_days=bool(body.get("dispute_filed_within_30_days", True)),
+    )
+    r = score_unauthorized_transaction(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "transaction_amount": r.transaction_amount,
+        "network": r.network,
+        "dimensions": [
+            {
+                "dimension": d.dimension,
+                "score": d.score,
+                "max_score": d.max_score,
+                "rationale": d.rationale,
+            }
+            for d in r.dimensions
+        ],
+        "total_score": r.total_score,
+        "defensibility": r.defensibility.value,
+        "ce3_applicable": r.ce3_applicable,
+        "win_rate_adjustment": r.win_rate_adjustment,
+        "strengths": r.strengths,
+        "weaknesses": r.weaknesses,
+        "required_evidence": r.required_evidence,
+        "recommendation": r.recommendation,
+        "summary": r.summary,
+        "wave": 156,
+    })
+
+
+@app.post("/api/oracle/classify-subscription-dispute")
+async def api_classify_subscription_dispute(request: Request):
+    from oracle.subscription_dispute_classifier import (
+        SubscriptionDisputeInput, classify_subscription_dispute,
+    )
+    body = await request.json()
+    inp = SubscriptionDisputeInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        transaction_amount=float(body.get("transaction_amount", 29.99)),
+        buyer_requested_cancellation=bool(body.get("buyer_requested_cancellation", False)),
+        buyer_cancel_date=body.get("buyer_cancel_date", None),
+        charge_occurred_after_cancel_request=bool(body.get("charge_occurred_after_cancel_request", False)),
+        has_billing_agreement_record=bool(body.get("has_billing_agreement_record", False)),
+        has_cancellation_confirmation=bool(body.get("has_cancellation_confirmation", False)),
+        cancellation_was_honored=bool(body.get("cancellation_was_honored", False)),
+        has_service_usage_logs=bool(body.get("has_service_usage_logs", False)),
+        has_trial_terms_disclosure=bool(body.get("has_trial_terms_disclosure", False)),
+        had_trial_reminder_email=bool(body.get("had_trial_reminder_email", False)),
+        charged_amount_matches_agreement=bool(body.get("charged_amount_matches_agreement", True)),
+        is_free_trial=bool(body.get("is_free_trial", False)),
+        trial_days=int(body.get("trial_days", 0)),
+        is_active_at_time_of_dispute=bool(body.get("is_active_at_time_of_dispute", True)),
+        service_uptime_pct=float(body.get("service_uptime_pct", 99.0)),
+        has_prior_refunds_to_buyer=bool(body.get("has_prior_refunds_to_buyer", False)),
+        is_serial_subscription_disputer=bool(body.get("is_serial_subscription_disputer", False)),
+    )
+    r = classify_subscription_dispute(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "dispute_type": r.dispute_type.value,
+        "defense_strength": r.defense_strength.value,
+        "win_probability": r.win_probability,
+        "recommended_action": r.recommended_action,
+        "required_evidence": r.required_evidence,
+        "missing_evidence": r.missing_evidence,
+        "sp_coverage": r.sp_coverage,
+        "fee_risk": r.fee_risk,
+        "key_defense_points": r.key_defense_points,
+        "summary": r.summary,
+        "wave": 157,
+    })
+
+
+@app.post("/api/oracle/authorize-return")
+async def api_authorize_return(request: Request):
+    from oracle.return_merchandise_authorizer import (
+        ReturnInput, ReturnReason, authorize_return,
+    )
+    body = await request.json()
+    try:
+        return_reason = ReturnReason(body.get("return_reason", "NOT_AS_DESCRIBED").upper())
+    except ValueError:
+        return_reason = ReturnReason.NOT_AS_DESCRIBED
+    inp = ReturnInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        order_id=body.get("order_id", "ORD-001"),
+        claim_type=body.get("claim_type", "SNAD"),
+        order_amount=float(body.get("order_amount", 100.0)),
+        item_description=body.get("item_description", ""),
+        cogs_pct=float(body.get("cogs_pct", 0.40)),
+        return_reason=return_reason,
+        buyer_description_of_issue=body.get("buyer_description_of_issue", ""),
+        item_is_perishable=bool(body.get("item_is_perishable", False)),
+        item_is_custom_made=bool(body.get("item_is_custom_made", False)),
+        item_is_digital=bool(body.get("item_is_digital", False)),
+        item_can_be_resold=bool(body.get("item_can_be_resold", True)),
+        item_resale_pct=float(body.get("item_resale_pct", 0.70)),
+        return_shipping_cost=float(body.get("return_shipping_cost", 15.0)),
+        merchant_pays_return_shipping=bool(body.get("merchant_pays_return_shipping", False)),
+        buyer_dispute_history=int(body.get("buyer_dispute_history", 0)),
+        buyer_has_sent_photos=bool(body.get("buyer_has_sent_photos", False)),
+        buyer_account_age_days=int(body.get("buyer_account_age_days", 365)),
+        is_first_order_from_buyer=bool(body.get("is_first_order_from_buyer", False)),
+        listing_matches_item_sent=bool(body.get("listing_matches_item_sent", True)),
+        has_quality_control_docs=bool(body.get("has_quality_control_docs", False)),
+        p_win_if_fight=float(body.get("p_win_if_fight", 0.38)),
+        fight_cost=float(body.get("fight_cost", 25.0)),
+    )
+    r = authorize_return(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "order_id": r.order_id,
+        "claim_type": r.claim_type,
+        "decision": r.decision.value,
+        "fraud_risk": r.fraud_risk.value,
+        "cost_accept_return": r.cost_accept_return,
+        "cost_refuse_return": r.cost_refuse_return,
+        "ev_fight": r.ev_fight,
+        "recommended_net_cost": r.recommended_net_cost,
+        "conditions": [
+            {"requirement": c.requirement, "reason": c.reason}
+            for c in r.conditions
+        ],
+        "merchant_pays_shipping": r.merchant_pays_shipping,
+        "partial_refund_pct": r.partial_refund_pct,
+        "inspection_required": r.inspection_required,
+        "fraud_flags": r.fraud_flags,
+        "response_to_buyer": r.response_to_buyer,
+        "action_items": r.action_items,
+        "summary": r.summary,
+        "wave": 158,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
