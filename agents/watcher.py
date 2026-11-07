@@ -4238,6 +4238,63 @@ async def api_refund_timing(request: Request):
     })
 
 
+@app.post("/api/oracle/buyer-pattern")
+async def api_buyer_pattern(request: Request):
+    """
+    POST /api/oracle/buyer-pattern
+
+    Wave 82 — Buyer Pattern Analyzer.
+    Detects repeat-dispute behavior and serial-claim patterns from a buyer's
+    dispute history, returning a risk score, risk level, and merchant strategy.
+
+    Body JSON fields:
+      buyer_id              (str)   — buyer identifier
+      total_transactions    (int)   — lifetime transaction count
+      dispute_history       (list)  — list of dispute records:
+        { dispute_id, amount_usd, reason, merchant_won, escalated, days_ago }
+      community_trust_score (float) — optional KERNEL trust score 0-1
+    """
+    from oracle.buyer_pattern_analyzer import (
+        BuyerPatternInput, DisputeRecord, analyze_buyer_pattern,
+    )
+    body = await request.json()
+    raw_history = body.get("dispute_history", [])
+    history = [
+        DisputeRecord(
+            dispute_id=d.get("dispute_id", ""),
+            amount_usd=float(d.get("amount_usd", 0)),
+            reason=d.get("reason", "UNKNOWN"),
+            merchant_won=bool(d.get("merchant_won", False)),
+            escalated=bool(d.get("escalated", False)),
+            days_ago=int(d.get("days_ago", 365)),
+        )
+        for d in raw_history
+    ]
+    trust = body.get("community_trust_score")
+    inp = BuyerPatternInput(
+        buyer_id=body.get("buyer_id", "UNKNOWN"),
+        total_transactions=int(body.get("total_transactions", 1)),
+        dispute_history=history,
+        community_trust_score=float(trust) if trust is not None else None,
+    )
+    r = analyze_buyer_pattern(inp)
+    return JSONResponse({
+        "buyer_id": r.buyer_id,
+        "total_disputes": r.total_disputes,
+        "dispute_rate": r.dispute_rate,
+        "merchant_win_rate": r.merchant_win_rate,
+        "escalation_rate": r.escalation_rate,
+        "recency_score": r.recency_score,
+        "avg_claim_amount": r.avg_claim_amount,
+        "category_diversity": r.category_diversity,
+        "risk_score": r.risk_score,
+        "risk_level": r.risk_level.value,
+        "community_trust_adjusted": r.community_trust_adjusted,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/settlement-advisor")
 async def api_settlement_advisor(request: Request):
     """
