@@ -10934,5 +10934,189 @@ async def api_score_merchant_risk(request: Request):
     })
 
 
+@app.post("/api/oracle/score-evidence-quality")
+async def api_score_evidence_quality(request: Request):
+    from oracle.evidence_quality_scorer import (
+        EvidenceQualityInput, EvidenceItem, EvidenceType, ClaimType,
+        score_evidence_quality,
+    )
+    body = await request.json()
+    raw_items = body.get("evidence_items", [])
+    items = []
+    for it in raw_items:
+        try:
+            ev_type = EvidenceType(it.get("evidence_type", "TRACKING_NUMBER").upper())
+        except ValueError:
+            continue
+        items.append(EvidenceItem(
+            evidence_type=ev_type,
+            is_present=bool(it.get("is_present", True)),
+            is_dated=bool(it.get("is_dated", False)),
+        ))
+    try:
+        claim = ClaimType(body.get("claim_type", "INR").upper())
+    except ValueError:
+        claim = ClaimType.INR
+    inp = EvidenceQualityInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        claim_type=claim,
+        dispute_amount=float(body.get("dispute_amount", 100.0)),
+        evidence_items=items,
+        days_until_deadline=int(body.get("days_until_deadline", 10)),
+        has_prior_buyer_communication=bool(body.get("has_prior_buyer_communication", False)),
+        buyer_claimed_non_delivery=bool(body.get("buyer_claimed_non_delivery", True)),
+        order_above_signature_threshold=bool(body.get("order_above_signature_threshold", False)),
+        is_digital_goods=bool(body.get("is_digital_goods", False)),
+    )
+    r = score_evidence_quality(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "claim_type": r.claim_type.value,
+        "composite_score": r.composite_score,
+        "strength": r.strength.value,
+        "components": [
+            {
+                "dimension": c.dimension,
+                "score": c.score,
+                "weight": c.weight,
+                "weighted_contribution": c.weighted_contribution,
+                "notes": c.notes,
+            }
+            for c in r.components
+        ],
+        "gaps": [
+            {
+                "evidence_type": g.evidence_type.value,
+                "severity": g.severity.value,
+                "description": g.description,
+                "suggested_action": g.suggested_action,
+            }
+            for g in r.gaps
+        ],
+        "critical_gaps": r.critical_gaps,
+        "major_gaps": r.major_gaps,
+        "submit_recommended": r.submit_recommended,
+        "submission_risk": r.submission_risk,
+        "top_actions": r.top_actions,
+        "summary": r.summary,
+        "wave": 153,
+    })
+
+
+@app.post("/api/oracle/score-evidence-strength")
+async def api_score_evidence_strength(request: Request):
+    from oracle.evidence_strength_scorer import (
+        EvidencePackage, score_evidence,
+    )
+    body = await request.json()
+    pkg = EvidencePackage(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        tracking_number=body.get("tracking_number", None),
+        has_delivery_scan=bool(body.get("has_delivery_scan", False)),
+        has_signature_proof=bool(body.get("has_signature_proof", False)),
+        has_carrier_confirmation_letter=bool(body.get("has_carrier_confirmation_letter", False)),
+        has_order_confirmation=bool(body.get("has_order_confirmation", False)),
+        has_product_photos=bool(body.get("has_product_photos", False)),
+        has_item_description_match=bool(body.get("has_item_description_match", False)),
+        has_inspection_record=bool(body.get("has_inspection_record", False)),
+        has_buyer_communication=bool(body.get("has_buyer_communication", False)),
+        has_prior_resolution_attempt=bool(body.get("has_prior_resolution_attempt", False)),
+        has_refund_policy_acceptance=bool(body.get("has_refund_policy_acceptance", False)),
+        has_billing_notification=bool(body.get("has_billing_notification", False)),
+        has_terms_acceptance=bool(body.get("has_terms_acceptance", False)),
+        has_prior_renewal_history=bool(body.get("has_prior_renewal_history", False)),
+        has_ip_address_match=bool(body.get("has_ip_address_match", False)),
+        has_device_fingerprint=bool(body.get("has_device_fingerprint", False)),
+        has_address_match_proof=bool(body.get("has_address_match_proof", False)),
+        has_fraud_prevention_evidence=bool(body.get("has_fraud_prevention_evidence", False)),
+        has_policy_documentation=bool(body.get("has_policy_documentation", False)),
+    )
+    r = score_evidence(pkg)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "overall_score": r.overall_score,
+        "strength_tier": r.strength_tier.value,
+        "items": [
+            {
+                "name": it.name,
+                "status": it.status.value,
+                "weight": it.weight,
+                "critical": it.critical,
+                "description": it.description,
+            }
+            for it in r.items
+        ],
+        "missing_critical": r.missing_critical,
+        "missing_beneficial": r.missing_beneficial,
+        "estimated_win_probability": r.estimated_win_probability,
+        "submit_ready": r.submit_ready,
+        "paypal_signal": r.paypal_signal,
+        "recommendation": r.recommendation,
+        "wave": 154,
+    })
+
+
+@app.post("/api/oracle/analyze-dispute-clusters")
+async def api_analyze_dispute_clusters(request: Request):
+    from oracle.dispute_cluster_analyzer import (
+        ClusterAnalysisInput, DisputeRecord, analyze_dispute_clusters,
+    )
+    body = await request.json()
+    raw_disputes = body.get("disputes", [])
+    disputes = [
+        DisputeRecord(
+            dispute_id=d.get("dispute_id", f"PP-D-{i:03d}"),
+            buyer_id=d.get("buyer_id", "B-001"),
+            product_id=d.get("product_id", "PROD-001"),
+            ip_address=d.get("ip_address", ""),
+            dispute_date=d.get("dispute_date", "2026-10-01"),
+            transaction_amount=float(d.get("transaction_amount", 100.0)),
+            reason_code=d.get("reason_code", "INR"),
+        )
+        for i, d in enumerate(raw_disputes)
+    ]
+    inp = ClusterAnalysisInput(
+        merchant_id=body.get("merchant_id", "M-001"),
+        disputes=disputes,
+        amount_similarity_threshold=float(body.get("amount_similarity_threshold", 0.10)),
+    )
+    r = analyze_dispute_clusters(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes_analyzed": r.total_disputes_analyzed,
+        "total_clusters_found": r.total_clusters_found,
+        "high_risk_clusters": [
+            {
+                "cluster_id": c.cluster_id,
+                "dispute_ids": c.dispute_ids,
+                "shared_attributes": c.shared_attributes,
+                "fraud_score": c.fraud_score,
+                "risk_level": c.risk_level.value,
+                "recommendation": c.recommendation,
+            }
+            for c in r.high_risk_clusters
+        ],
+        "all_clusters": [
+            {
+                "cluster_id": c.cluster_id,
+                "dispute_ids": c.dispute_ids,
+                "shared_attributes": c.shared_attributes,
+                "fraud_score": c.fraud_score,
+                "risk_level": c.risk_level.value,
+                "recommendation": c.recommendation,
+            }
+            for c in r.all_clusters
+        ],
+        "unclustered_dispute_ids": r.unclustered_dispute_ids,
+        "overall_risk": r.overall_risk,
+        "paypal_signal": r.paypal_signal,
+        "wave": 155,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
