@@ -3028,3 +3028,63 @@ async def merchant_health_advisor(request: Request):
         "key_insight": r.key_insight,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/response-writer")
+async def dispute_response_writer(request: Request):
+    """
+    POST /api/oracle/response-writer
+    Generate structured, evidence-backed dispute response text ready to submit to PayPal.
+
+    Body: ResponseContext fields (dispute_id, reason_code, order_id, evidence_items, ...)
+    Returns: 5-section dispute response with tone, submission_ready flag, evidence list
+    """
+    from oracle.dispute_response_writer import (
+        write_dispute_response, ResponseContext, EvidenceItem,
+    )
+    body = await request.json()
+    evidence_items = [EvidenceItem(e) for e in body.get("evidence_items", [])
+                      if e in EvidenceItem.__members__]
+    ctx = ResponseContext(
+        dispute_id=body.get("dispute_id", ""),
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        merchant_name=body.get("merchant_name", "Merchant"),
+        reason_code=body.get("reason_code", "INR"),
+        order_id=body.get("order_id", ""),
+        order_date=body.get("order_date", ""),
+        order_amount=float(body.get("order_amount", 0.0)),
+        currency=body.get("currency", "USD"),
+        item_description=body.get("item_description", ""),
+        buyer_name=body.get("buyer_name", ""),
+        ship_date=body.get("ship_date", ""),
+        carrier=body.get("carrier", ""),
+        tracking_number=body.get("tracking_number", ""),
+        delivery_date=body.get("delivery_date", ""),
+        delivery_status=body.get("delivery_status", ""),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        has_signature_confirmation=bool(body.get("has_signature_confirmation", False)),
+        is_international=bool(body.get("is_international", False)),
+        subscription_start=body.get("subscription_start", ""),
+        last_billing_date=body.get("last_billing_date", ""),
+        cancellation_requested=bool(body.get("cancellation_requested", False)),
+        cancellation_date=body.get("cancellation_date", ""),
+        evidence_items=evidence_items,
+        win_probability=float(body.get("win_probability", 0.5)),
+        recommended_action=body.get("recommended_action", ""),
+        prior_contact_summary=body.get("prior_contact_summary", ""),
+    )
+    r = write_dispute_response(ctx)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "merchant_id": r.merchant_id,
+        "reason_code": r.reason_code,
+        "tone": r.tone.value,
+        "sections": [{"section": s.section, "content": s.content} for s in r.sections],
+        "full_response": r.full_response,
+        "evidence_count": r.evidence_count,
+        "evidence_items_referenced": [e.value for e in r.evidence_items_referenced],
+        "word_count": r.word_count,
+        "is_submission_ready": r.is_submission_ready,
+        "submission_note": r.submission_note,
+        "summary": r.summary,
+    })
