@@ -716,6 +716,7 @@
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-disputes"   onclick="switchPanel('disputes')"   id="tab-disputes">Disputes</button>
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-recoveries" onclick="switchPanel('recoveries')" id="tab-recoveries">Recoveries</button>
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-insights"   onclick="switchPanel('insights')"   id="tab-insights">Insights</button>
+      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-audit"      onclick="switchPanel('audit')"      id="tab-audit">Audit Trail</button>
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-connections" onclick="switchPanel('connections')" id="tab-connections">Connections</button>
     </div>
   </div>
@@ -898,6 +899,47 @@
     <div class="placeholder-panel">
       <h3>Portfolio analytics</h3>
       <p>Win rates by reason code, chargeback trends, evidence quality scores, and EV outcomes.</p>
+    </div>
+  </div>
+
+  <!-- ══ Audit Trail Panel ════════════════════════════════ -->
+  <div class="panel" id="panel-audit" role="tabpanel" aria-labelledby="tab-audit">
+    <div class="page-header">
+      <h1>Audit Trail</h1>
+      <p>Every autonomous oracle decision — timestamped, labeled, and traceable. <span style="background:#fef3c7;color:#92400e;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;letter-spacing:.03em;">SANDBOX</span> entries are test/demo data.</p>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+      <button onclick="loadAudit()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Refresh Log</button>
+      <button onclick="runE2ETrace()" style="background:var(--text);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Run End-to-End Trace</button>
+    </div>
+
+    <!-- E2E trace output -->
+    <div id="e2e-trace-box" style="display:none;margin-bottom:24px;"></div>
+
+    <!-- Audit stats strip -->
+    <div id="audit-stats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px;"></div>
+
+    <!-- Audit log table -->
+    <div style="overflow-x:auto;">
+      <table id="audit-table" style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border);text-align:left;">
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Entry ID</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Dispute</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Action</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Win Prob</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">EV Fight</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Amount</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Outcome</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Data</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Time</th>
+          </tr>
+        </thead>
+        <tbody id="audit-tbody">
+          <tr><td colspan="9" style="padding:24px;text-align:center;color:var(--muted);">Click "Refresh Log" or "Run End-to-End Trace" to populate</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -1371,7 +1413,131 @@
       _connectionsLoaded = true;
       loadConnections();
     }
+    if (id === 'audit') loadAudit();
   };
+
+  // ── Audit Trail panel ──────────────────────────────────
+  const ACTION_COLORS = {
+    AUTO_FIGHT:       '#16a34a',
+    AUTO_ACCEPT:      '#dc2626',
+    REQUEST_APPROVAL: '#d97706',
+    GATHER_EVIDENCE:  '#2563eb',
+    SKIPPED:          '#9898a3',
+  };
+  const OUTCOME_COLORS = {
+    PENDING:   '#d97706',
+    WON:       '#16a34a',
+    LOST:      '#dc2626',
+    SETTLED:   '#2563eb',
+    WITHDRAWN: '#9898a3',
+    UNKNOWN:   '#9898a3',
+  };
+
+  async function loadAudit() {
+    try {
+      const [logRes, statsRes] = await Promise.all([
+        fetch('/api/audit/log?limit=50'),
+        fetch('/api/audit/stats'),
+      ]);
+      if (logRes.ok) renderAuditTable(await logRes.json());
+      if (statsRes.ok) renderAuditStats(await statsRes.json());
+    } catch(e) {
+      document.getElementById('audit-tbody').innerHTML =
+        '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--muted);">Could not reach audit API</td></tr>';
+    }
+  }
+
+  function renderAuditStats(stats) {
+    const el = document.getElementById('audit-stats');
+    if (!el) return;
+    const cells = [
+      { label: 'Total Logged',       value: stats.total_logged },
+      { label: 'Avg Win Prob',        value: stats.avg_win_probability != null ? (stats.avg_win_probability * 100).toFixed(0) + '%' : '—' },
+      { label: 'Amount at Risk',      value: stats.total_amount_at_risk_usd != null ? '$' + stats.total_amount_at_risk_usd.toFixed(2) : '—' },
+      { label: 'Sandbox Entries',     value: stats.sandbox_pct != null ? stats.sandbox_pct + '%' : '—' },
+    ];
+    el.innerHTML = cells.map(c => `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 18px;min-width:120px;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px;">${c.label}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--text);">${c.value}</div>
+      </div>`).join('');
+  }
+
+  function renderAuditTable(data) {
+    const tbody = document.getElementById('audit-tbody');
+    if (!data.entries || data.entries.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="padding:24px;text-align:center;color:var(--muted);">No audit entries yet — run a trace or simulate a dispute</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.entries.map(e => {
+      const ac = ACTION_COLORS[e.action] || '#9898a3';
+      const oc = OUTCOME_COLORS[e.outcome] || '#9898a3';
+      const ts = new Date(e.timestamp_utc).toLocaleTimeString();
+      const sandboxBadge = e.is_sandbox
+        ? '<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;">SANDBOX</span>'
+        : '<span style="background:#dcfce7;color:#166534;font-size:10px;padding:1px 5px;border-radius:3px;font-weight:700;">LIVE</span>';
+      return `<tr style="border-bottom:1px solid var(--border-light);">
+        <td style="padding:8px 12px;font-family:monospace;font-size:11px;color:var(--muted);">${e.entry_id}</td>
+        <td style="padding:8px 12px;font-weight:600;">${e.dispute_id}</td>
+        <td style="padding:8px 12px;"><span style="color:${ac};font-weight:700;font-size:12px;">${e.action}</span></td>
+        <td style="padding:8px 12px;">${(e.oracle_win_probability * 100).toFixed(0)}%</td>
+        <td style="padding:8px 12px;font-family:monospace;">${e.oracle_ev_fight >= 0 ? '+' : ''}$${e.oracle_ev_fight.toFixed(2)}</td>
+        <td style="padding:8px 12px;">$${e.amount_usd.toFixed(2)}</td>
+        <td style="padding:8px 12px;"><span style="color:${oc};font-weight:600;font-size:12px;">${e.outcome}</span></td>
+        <td style="padding:8px 12px;">${sandboxBadge}</td>
+        <td style="padding:8px 12px;color:var(--muted);font-size:12px;">${ts}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  async function runE2ETrace() {
+    const box = document.getElementById('e2e-trace-box');
+    box.style.display = 'block';
+    box.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px;">Running end-to-end trace…</div>';
+    try {
+      const res = await fetch('/api/demo/e2e-trace', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({scenario: 'inr_fight'}),
+      });
+      const data = await res.json();
+      if (!res.ok) { box.innerHTML = `<div style="color:#dc2626;padding:16px;">${JSON.stringify(data)}</div>`; return; }
+      const s = data.summary;
+      box.innerHTML = `
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:12px;">
+          <div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--text);">
+            End-to-End Trace
+            <span style="background:#fef3c7;color:#92400e;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;margin-left:8px;">SANDBOX</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px;">
+            ${[
+              ['Scenario',    s.scenario],
+              ['Dispute',     s.dispute_id],
+              ['Oracle',      s.oracle_decision],
+              ['Action',      `<b style="color:${ACTION_COLORS[s.guardian_action]||'#111'}">${s.guardian_action}</b>`],
+              ['Win Prob',    (s.win_probability*100).toFixed(0)+'%'],
+              ['EV Fight',    (s.ev_fight>=0?'+':'')+'$'+s.ev_fight.toFixed(2)],
+              ['Pipeline ms', s.total_pipeline_ms+'ms'],
+              ['Audit ID',    `<span style="font-family:monospace;font-size:11px">${s.audit_entry_id}</span>`],
+            ].map(([k,v])=>`<div><div style="font-size:11px;color:var(--muted)">${k}</div><div style="font-weight:600">${v}</div></div>`).join('')}
+          </div>
+          <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Pipeline Steps</div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            ${data.trace.map((step, i) => `
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg);border-radius:7px;">
+                <div style="background:var(--accent);color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${i+1}</div>
+                <div>
+                  <div style="font-size:12px;font-weight:700;color:var(--text);">${step.step} <span style="font-weight:400;color:var(--muted);margin-left:6px;">+${step.elapsed_ms}ms</span></div>
+                  ${step.data.note ? `<div style="font-size:11px;color:#92400e;margin-top:2px;">${step.data.note}</div>` : ''}
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+      await loadAudit();
+    } catch(e) {
+      box.innerHTML = `<div style="color:#dc2626;padding:16px;">Trace failed: ${e.message}</div>`;
+    }
+  }
 </script>
 </body>
 </html>

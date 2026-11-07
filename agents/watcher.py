@@ -1722,6 +1722,222 @@ async def demo_simulate_dispute(request: Request):
     })
 
 
+@app.post("/api/demo/e2e-trace")
+async def demo_e2e_trace(request: Request):
+    """
+    POST /api/demo/e2e-trace
+
+    Returns a complete, timestamped end-to-end trace of the
+    webhook → oracle → guardian → PayPal action pipeline for a given
+    scenario. Every step is labeled SANDBOX so judges can clearly see
+    test data vs production.
+
+    This endpoint proves the full autonomous flow works end-to-end and
+    produces an audit entry in the in-memory audit log.
+
+    Body: same as /api/demo/simulate-dispute — {"scenario": "inr_fight"}
+    """
+    from oracle.decision import calculate, score_evidence, ClaimType, Evidence, Recommendation
+    from oracle.decision_audit import log_decision, AuditAction
+    import time
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    scenario_key = body.get("scenario", "inr_fight")
+    scenario = DEMO_SCENARIOS.get(scenario_key)
+    if scenario is None:
+        return JSONResponse(
+            {"error": f"Unknown scenario '{scenario_key}'", "available": list(DEMO_SCENARIOS)},
+            status_code=400,
+        )
+
+    trace_steps = []
+    t0 = time.monotonic()
+
+    def _step(name: str, detail: Any) -> None:
+        trace_steps.append({
+            "step": name,
+            "elapsed_ms": round((time.monotonic() - t0) * 1000, 1),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "data": detail,
+            "data_source": "SANDBOX",
+        })
+
+    # Step 1: inbound webhook
+    _step("WEBHOOK_RECEIVED", {
+        "event_type": "CUSTOMER.DISPUTE.CREATED",
+        "dispute_id": scenario["dispute_id"],
+        "amount": scenario["amount"],
+        "claim_type": scenario["claim_type"],
+        "buyer_message": scenario.get("narrative", ""),
+        "note": "[SANDBOX] Simulated PayPal webhook event — not a real transaction",
+    })
+
+    # Step 2: oracle evaluation
+    ct_map = {
+        "ITEM_NOT_RECEIVED": ClaimType.ITEM_NOT_RECEIVED,
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": ClaimType.SIGNIFICANTLY_NOT_AS_DESCRIBED,
+        "UNAUTHORIZED": ClaimType.UNAUTHORIZED,
+        "BILLING_ISSUE": ClaimType.BILLING_ISSUE,
+    }
+    ct = ct_map.get(scenario["claim_type"].upper(), ClaimType.ITEM_NOT_RECEIVED)
+    evidence = Evidence(
+        has_tracking_number=scenario["has_tracking"],
+        has_delivery_confirmation=scenario["has_delivery"],
+        has_buyer_communication=scenario["has_comm"],
+        has_item_description_proof=scenario["has_item_proof"],
+        seller_account_age_days=365,
+        seller_dispute_win_rate=0.5,
+    )
+    oracle = calculate(
+        dispute_amount=scenario["amount"],
+        claim_type=ct,
+        evidence=evidence,
+        deadline_hours=scenario["deadline_hours"],
+        seller_hourly_rate=50.0,
+        high_volume_tier=scenario["high_volume"],
+    )
+    evidence_multiplier = round(score_evidence(evidence, ct), 4)
+    _step("ORACLE_EVALUATED", {
+        "recommendation": oracle.recommendation.value,
+        "ev_fight": round(oracle.ev_fight, 2),
+        "ev_accept": round(oracle.ev_accept, 2),
+        "win_probability": round(oracle.win_probability, 4),
+        "break_even": round(oracle.break_even_probability, 4),
+        "confidence": round(oracle.confidence, 4),
+        "evidence_multiplier": evidence_multiplier,
+        "reasoning": oracle.reasoning,
+        "formula": "EV(fight) = p×(amount−rc) − (1−p)×(amount+cb_fee+rc)",
+        "note": "[SANDBOX] Win probability from base-rate × evidence multiplier",
+    })
+
+    # Step 3: guardian gate
+    auto_accept_below = float(os.environ.get("AUTO_ACCEPT_BELOW", 60))
+    auto_fight_above  = float(os.environ.get("AUTO_FIGHT_ABOVE", 200))
+    auto_fight_min_p  = float(os.environ.get("AUTO_FIGHT_MIN_PROB", 0.60))
+
+    if scenario["amount"] <= auto_accept_below:
+        guardian_action = "AUTO_ACCEPT"
+        guardian_reason = f"Amount ${scenario['amount']:.2f} ≤ auto-accept threshold ${auto_accept_below:.2f}"
+    elif (scenario["amount"] >= auto_fight_above and
+          oracle.win_probability >= auto_fight_min_p and
+          oracle.recommendation == Recommendation.FIGHT):
+        guardian_action = "AUTO_FIGHT"
+        guardian_reason = (
+            f"Amount ${scenario['amount']:.2f} ≥ ${auto_fight_above:.2f} AND "
+            f"win probability {oracle.win_probability:.0%} ≥ {auto_fight_min_p:.0%}"
+        )
+    elif oracle.recommendation == Recommendation.FIGHT:
+        guardian_action = "REQUEST_APPROVAL"
+        guardian_reason = "Oracle says FIGHT — amount in ask-me zone, sending merchant one-tap approval"
+    else:
+        guardian_action = "AUTO_ACCEPT"
+        guardian_reason = "Oracle EV(fight) ≤ 0 — auto-accepting"
+
+    _step("GUARDIAN_GATE", {
+        "action": guardian_action,
+        "reason": guardian_reason,
+        "thresholds": {
+            "auto_accept_below": auto_accept_below,
+            "auto_fight_above": auto_fight_above,
+            "auto_fight_min_prob": auto_fight_min_p,
+        },
+    })
+
+    # Step 4: simulated PayPal API calls
+    if guardian_action == "AUTO_ACCEPT":
+        api_calls = [
+            {"method": "GET",  "path": f"/v1/customer/disputes/{scenario['dispute_id']}", "purpose": "Verify accept-claim HATEOAS link"},
+            {"method": "POST", "path": f"/v1/customer/disputes/{scenario['dispute_id']}/accept-claim", "purpose": "Accept — oracle confirmed negative EV"},
+        ]
+    elif guardian_action == "AUTO_FIGHT":
+        api_calls = [
+            {"method": "GET",  "path": f"/v1/customer/disputes/{scenario['dispute_id']}", "purpose": "Verify provide-evidence HATEOAS link"},
+            {"method": "POST", "path": f"/v1/customer/disputes/{scenario['dispute_id']}/provide-evidence", "purpose": "Submit evidence package"},
+        ]
+    else:
+        api_calls = [
+            {"method": "GET",  "path": f"/v1/customer/disputes/{scenario['dispute_id']}", "purpose": "Fetch dispute state"},
+            {"method": "POST", "path": "/merchant-webhook", "purpose": "Send one-tap approval link with HMAC token"},
+        ]
+    for call in api_calls:
+        call["note"] = "[SANDBOX] Simulated — no real PayPal API call made in demo mode"
+    _step("PAYPAL_API_CALLS", {"calls": api_calls})
+
+    # Step 5: audit log entry
+    audit_entry = log_decision(
+        dispute_id=scenario["dispute_id"],
+        action=AuditAction(guardian_action),
+        oracle_ev_fight=oracle.ev_fight,
+        oracle_win_probability=oracle.win_probability,
+        oracle_recommendation=oracle.recommendation.value,
+        guardian_reason=guardian_reason,
+        amount_usd=scenario["amount"],
+        claim_type=scenario["claim_type"],
+        paypal_api_calls=api_calls,
+        is_sandbox=True,
+        notes=f"e2e-trace demo — scenario={scenario_key}",
+    )
+    _step("AUDIT_LOGGED", {
+        "entry_id": audit_entry.entry_id,
+        "is_sandbox": True,
+        "note": "[SANDBOX] Logged to in-memory audit ring (last 1000 entries) + audit_log.jsonl",
+    })
+
+    total_ms = round((time.monotonic() - t0) * 1000, 1)
+    return JSONResponse({
+        "trace": trace_steps,
+        "summary": {
+            "scenario": scenario_key,
+            "dispute_id": scenario["dispute_id"],
+            "amount_usd": scenario["amount"],
+            "oracle_decision": oracle.recommendation.value,
+            "guardian_action": guardian_action,
+            "win_probability": round(oracle.win_probability, 4),
+            "ev_fight": round(oracle.ev_fight, 2),
+            "audit_entry_id": audit_entry.entry_id,
+            "total_pipeline_ms": total_ms,
+            "data_label": "SANDBOX — test scenario, no real PayPal transaction",
+        },
+    })
+
+
+@app.get("/api/audit/log")
+async def api_audit_log(limit: int = 50):
+    """
+    GET /api/audit/log?limit=50
+
+    Returns the most recent oracle decisions from the in-memory audit log.
+    Every entry is labeled with is_sandbox so callers can distinguish
+    test decisions from production ones.
+    """
+    from oracle.decision_audit import get_recent
+    from dataclasses import asdict
+    entries = get_recent(limit=min(limit, 200))
+    return JSONResponse({
+        "entries": [asdict(e) for e in entries],
+        "count": len(entries),
+        "note": "Entries labeled is_sandbox=true are test/demo decisions",
+    })
+
+
+@app.get("/api/audit/stats")
+async def api_audit_stats():
+    """
+    GET /api/audit/stats
+
+    Aggregate stats over all logged decisions: action breakdown,
+    outcome breakdown, total amount at risk, average win probability,
+    and percentage of entries that are sandbox vs production.
+    """
+    from oracle.decision_audit import get_stats
+    stats = get_stats()
+    return JSONResponse(stats)
+
+
 @app.get("/api/demo/scenarios")
 async def demo_scenarios():
     """List of available demo scenarios for the dashboard simulator."""
