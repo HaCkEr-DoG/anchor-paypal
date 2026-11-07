@@ -7644,5 +7644,140 @@ async def api_chargeback_prevention(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 100 — Dispute Intelligence Summary  GET /api/oracle/intelligence-summary
+# ---------------------------------------------------------------------------
+
+@app.get("/api/oracle/intelligence-summary")
+async def api_intelligence_summary(merchant_id: str = ""):
+    """
+    Master oracle summary for a merchant — aggregates all available signals.
+
+    Query params:
+      merchant_id: str  (optional, defaults to MERCHANT_ID env var)
+
+    Response:
+      {
+        "merchant_id": str,
+        "generated_at_utc": str,
+        "wave": 100,
+        "capabilities": {
+          "total_oracle_endpoints": int,
+          "endpoints": [str]
+        },
+        "velocity": {
+          "available": bool,
+          "total_disputes_7d": int,
+          "avg_per_hour": float,
+          "spike_hours_7d": int
+        },
+        "health": {
+          "webhook_registered": bool,
+          "source": str,
+          "paypal_env": str
+        },
+        "oracle_endpoints": [str],
+        "status": "operational"
+      }
+    """
+    mid = merchant_id or os.environ.get("MERCHANT_ID", "default")
+
+    # All oracle endpoints added across waves
+    oracle_endpoints = [
+        "POST /api/oracle/portfolio-risk",
+        "POST /api/oracle/settlement-evaluate",
+        "POST /api/oracle/chargeback-forecast",
+        "POST /api/oracle/evidence-assembly",
+        "POST /api/oracle/deadline-priority",
+        "POST /api/oracle/refund-roi",
+        "POST /api/oracle/chargeback-threshold",
+        "POST /api/oracle/merchant-reputation",
+        "POST /api/oracle/evidence-gaps",
+        "POST /api/oracle/outcome-predictor",
+        "POST /api/oracle/dispute-clusters",
+        "POST /api/oracle/settlement-advisor",
+        "POST /api/oracle/response-quality",
+        "POST /api/oracle/buyer-pattern",
+        "POST /api/oracle/refund-timing",
+        "POST /api/oracle/dispute-aging",
+        "POST /api/oracle/response-quality-analyzer",
+        "GET /api/webhook/health",
+        "GET /api/velocity/disputes",
+        "POST /api/oracle/surge-alert",
+        "POST /api/oracle/resolution-time",
+        "POST /api/oracle/buyer-risk",
+        "POST /api/oracle/dispute-cost",
+        "POST /api/oracle/refund-leakage",
+        "POST /api/oracle/win-rate-benchmark",
+        "POST /api/oracle/response-quality-score",
+        "POST /api/oracle/chargeback-prevention",
+        "GET /api/oracle/intelligence-summary",
+    ]
+
+    # Velocity data (best-effort from PG)
+    velocity_data = {"available": False, "total_disputes_7d": 0, "avg_per_hour": 0.0, "spike_hours_7d": 0}
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as _pg
+            buckets = await asyncio.to_thread(_pg.get_dispute_velocity, mid, 168)
+            if buckets:
+                counts = [b["dispute_count"] for b in buckets]
+                total = sum(counts)
+                avg = total / len(counts) if counts else 0.0
+                spike_threshold = max(2.0 * avg, 2)
+                spikes = sum(1 for c in counts if c >= spike_threshold)
+                velocity_data = {
+                    "available": True,
+                    "total_disputes_7d": total,
+                    "avg_per_hour": round(avg, 2),
+                    "spike_hours_7d": spikes,
+                }
+        except Exception:
+            pass
+
+    # Webhook health
+    webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    webhook_source = "env_var" if webhook_id else "none"
+    if not webhook_id and os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as _pg
+            stored = await asyncio.to_thread(_pg.get_config_value, "paypal_webhook_id")
+            if stored:
+                webhook_id = stored
+                webhook_source = "postgresql"
+        except Exception:
+            pass
+
+    return JSONResponse({
+        "merchant_id": mid,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "wave": 100,
+        "status": "operational",
+        "capabilities": {
+            "total_oracle_endpoints": len(oracle_endpoints),
+            "endpoints": oracle_endpoints,
+        },
+        "velocity": velocity_data,
+        "health": {
+            "webhook_registered": bool(webhook_id),
+            "source": webhook_source,
+            "paypal_env": os.environ.get("PAYPAL_ENV", "sandbox"),
+        },
+        "features": [
+            "Auto-webhook registration at startup",
+            "PostgreSQL durable storage",
+            "Dispute velocity tracking + spike detection",
+            "Surge alerting with shadow mode recommendation",
+            "Resolution time prediction + fight/settle EV",
+            "Buyer risk profiling",
+            "Full dispute P&L cost estimation",
+            "Refund leakage / policy abuse detection",
+            "Win rate benchmarking vs industry averages",
+            "Dispute response quality scoring",
+            "Chargeback prevention pre-transaction scoring",
+        ],
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
