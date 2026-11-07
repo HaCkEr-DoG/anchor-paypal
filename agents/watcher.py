@@ -4398,6 +4398,60 @@ async def api_buyer_pattern(request: Request):
     })
 
 
+@app.post("/api/oracle/response-quality")
+async def api_response_quality(request: Request):
+    """
+    POST /api/oracle/response-quality
+
+    Wave 83 — Merchant Response Quality Scorer.
+    Grades a draft dispute response across five evidence dimensions and
+    predicts win probability before the merchant submits to PayPal.
+
+    Body JSON fields:
+      dispute_id                        str
+      dispute_reason                    str   (INR|SNAD|UNAUTH|OTHER)
+      has_tracking_number               bool
+      has_delivery_confirmation         bool
+      has_buyer_communications          bool
+      has_policy_citation               bool
+      product_description_completeness  float  0–1
+      has_photo_or_video_evidence       bool
+      response_word_count               int
+      days_until_deadline               int
+    """
+    from oracle.merchant_response_quality import ResponseQualityInput, score_response
+    body = await request.json()
+    inp = ResponseQualityInput(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        dispute_reason=body.get("dispute_reason", "OTHER"),
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        has_buyer_communications=bool(body.get("has_buyer_communications", False)),
+        has_policy_citation=bool(body.get("has_policy_citation", False)),
+        product_description_completeness=float(
+            body.get("product_description_completeness", 0.5)
+        ),
+        has_photo_or_video_evidence=bool(body.get("has_photo_or_video_evidence", False)),
+        response_word_count=int(body.get("response_word_count", 100)),
+        days_until_deadline=int(body.get("days_until_deadline", 7)),
+    )
+    r = score_response(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "tracking_score": r.tracking_score,
+        "communication_score": r.communication_score,
+        "policy_score": r.policy_score,
+        "product_score": r.product_score,
+        "photo_score": r.photo_score,
+        "overall_score": r.overall_score,
+        "grade": r.grade.value,
+        "estimated_win_probability": r.estimated_win_probability,
+        "missing_items": r.missing_items,
+        "recommendations": r.recommendations,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/settlement-advisor")
 async def api_settlement_advisor(request: Request):
     """
