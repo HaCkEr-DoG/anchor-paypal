@@ -9206,5 +9206,182 @@ async def api_prevent_chargeback(request: Request):
     })
 
 
+# ── Evidence Quality Scorer endpoint (wave 118) ───────────────────────────────
+
+@app.post("/api/oracle/score-evidence")
+async def api_score_evidence(request: Request):
+    from oracle.evidence_quality_scorer import (
+        EvidenceQualityInput, EvidenceItem, EvidenceType, ClaimType,
+        score_evidence_quality,
+    )
+    body = await request.json()
+    raw_ct = body.get("claim_type", "INR").upper()
+    ct_map = {"INR": "INR", "SNAD": "SNAD", "UNAUTHORIZED": "UNAUTHORIZED",
+              "DUPLICATE": "DUPLICATE", "SUBSCRIPTION": "SUBSCRIPTION"}
+    try:
+        claim_type = ClaimType(ct_map.get(raw_ct, raw_ct))
+    except ValueError:
+        claim_type = ClaimType.INR
+
+    raw_items = body.get("evidence_items", [])
+    items: list[EvidenceItem] = []
+    for it in raw_items:
+        try:
+            et = EvidenceType(it.get("evidence_type", "").upper())
+        except ValueError:
+            continue
+        items.append(EvidenceItem(
+            evidence_type=et,
+            is_present=bool(it.get("is_present", True)),
+            is_dated=bool(it.get("is_dated", False)),
+            is_specific=bool(it.get("is_specific", False)),
+            file_format_ok=bool(it.get("file_format_ok", True)),
+            description=it.get("description", ""),
+        ))
+
+    inp = EvidenceQualityInput(
+        dispute_id=body.get("dispute_id", ""),
+        claim_type=claim_type,
+        dispute_amount=float(body.get("dispute_amount", 0.0)),
+        evidence_items=items,
+        days_until_deadline=int(body.get("days_until_deadline", 10)),
+        has_prior_buyer_communication=bool(body.get("has_prior_buyer_communication", False)),
+        buyer_claimed_non_delivery=bool(body.get("buyer_claimed_non_delivery", True)),
+        order_above_signature_threshold=bool(body.get("order_above_signature_threshold", False)),
+        is_digital_goods=bool(body.get("is_digital_goods", False)),
+    )
+    report = score_evidence_quality(inp)
+    return JSONResponse({
+        "dispute_id": report.dispute_id,
+        "claim_type": report.claim_type.value,
+        "composite_score": report.composite_score,
+        "strength": report.strength.value,
+        "critical_gaps": report.critical_gaps,
+        "major_gaps": report.major_gaps,
+        "submit_recommended": report.submit_recommended,
+        "submission_risk": report.submission_risk,
+        "top_actions": report.top_actions,
+        "gaps": [
+            {
+                "evidence_type": g.evidence_type.value,
+                "severity": g.severity.value,
+                "description": g.description,
+                "suggested_action": g.suggested_action,
+            }
+            for g in report.gaps
+        ],
+        "summary": report.summary,
+        "wave": 118,
+    })
+
+
+# ── Outcome Predictor endpoint (wave 119) ─────────────────────────────────────
+
+@app.post("/api/oracle/predict-outcome")
+async def api_predict_outcome(request: Request):
+    from oracle.dispute_outcome_predictor import (
+        OutcomePredictorInput, MerchantTier, predict_outcome,
+    )
+    body = await request.json()
+    try:
+        tier = MerchantTier(body.get("merchant_tier", "SILVER").upper())
+    except ValueError:
+        tier = MerchantTier.SILVER
+    inp = OutcomePredictorInput(
+        dispute_id=body.get("dispute_id", ""),
+        reason_code=body.get("reason_code", "INR"),
+        evidence_coverage=float(body.get("evidence_coverage", 0.5)),
+        response_hours=float(body.get("response_hours", 24.0)),
+        transaction_age_days=int(body.get("transaction_age_days", 7)),
+        seller_protection_eligible=bool(body.get("seller_protection_eligible", False)),
+        merchant_tier=tier,
+        buyer_is_repeat_disputer=bool(body.get("buyer_is_repeat_disputer", False)),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+    )
+    report = predict_outcome(inp)
+    return JSONResponse({
+        "dispute_id": report.dispute_id,
+        "p_win": report.p_win,
+        "p_partial_win": report.p_partial_win,
+        "p_lose": report.p_lose,
+        "predicted_outcome": report.predicted_outcome.value,
+        "confidence": report.confidence,
+        "win_probability_for_ev": report.win_probability_for_ev,
+        "paypal_signal": report.paypal_signal,
+        "factor_contributions": [
+            {"factor": f.factor, "delta": f.delta, "description": f.description}
+            for f in report.factor_contributions
+        ],
+        "wave": 119,
+    })
+
+
+# ── Case Summarizer endpoint (wave 120) ───────────────────────────────────────
+
+@app.post("/api/oracle/summarize-case")
+async def api_summarize_case(request: Request):
+    from oracle.case_summarizer import DisputeCaseInput, DisputePhase, summarize_case
+    from datetime import date as _date
+    body = await request.json()
+    try:
+        phase = DisputePhase(body.get("phase", "NEW").upper())
+    except ValueError:
+        phase = DisputePhase.NEW
+
+    def _parse_date(raw: str, fallback_days: int = 0) -> _date:
+        from datetime import date as _d, timedelta as _td
+        if raw:
+            try:
+                return _d.fromisoformat(raw[:10])
+            except (ValueError, TypeError):
+                pass
+        return _d.today() + _td(days=fallback_days)
+
+    inp = DisputeCaseInput(
+        dispute_id=body.get("dispute_id", ""),
+        order_id=body.get("order_id", ""),
+        opened_date=_parse_date(body.get("opened_date", "")),
+        deadline=_parse_date(body.get("deadline", ""), fallback_days=10),
+        dispute_amount=float(body.get("dispute_amount", 0.0)),
+        order_amount=float(body.get("order_amount", 0.0)),
+        merchant_win_rate_90d=float(body.get("merchant_win_rate_90d", 0.65)),
+        claim_type=body.get("claim_type", "ITEM_NOT_RECEIVED"),
+        phase=phase,
+        evidence_package_strength=body.get("evidence_package_strength", "MODERATE"),
+        response_ready=bool(body.get("response_ready", False)),
+        fight_score=body.get("fight_score"),
+        buyer_trust_score=body.get("buyer_trust_score"),
+        predicted_dispute_probability=body.get("predicted_dispute_probability"),
+        sp_protection_level=body.get("sp_protection_level", "UNKNOWN"),
+        days_to_respond=body.get("days_to_respond"),
+        is_escalated_to_claim=bool(body.get("is_escalated_to_claim", False)),
+        is_repeat_buyer_dispute=bool(body.get("is_repeat_buyer_dispute", False)),
+        buyer_stage=body.get("buyer_stage", "UNKNOWN"),
+        hdr_impact=bool(body.get("hdr_impact", False)),
+    )
+    summary = summarize_case(inp)
+    return JSONResponse({
+        "dispute_id": summary.dispute_id,
+        "order_id": summary.order_id,
+        "days_remaining": summary.days_remaining,
+        "phase": summary.phase.value,
+        "dispute_amount": summary.dispute_amount,
+        "expected_loss_if_uncontested": summary.expected_loss_if_uncontested,
+        "ev_fight": summary.ev_fight,
+        "fight_recommendation": summary.fight_recommendation.value,
+        "action_urgency": summary.action_urgency.value,
+        "next_action": summary.next_action,
+        "fight_score": summary.fight_score,
+        "confidence": summary.confidence,
+        "sp_protection": summary.sp_protection,
+        "headline": summary.headline,
+        "narrative": summary.narrative,
+        "key_facts": summary.key_facts,
+        "warnings": summary.warnings,
+        "summary_line": summary.summary_line,
+        "wave": 120,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
