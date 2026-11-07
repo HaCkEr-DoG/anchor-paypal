@@ -119,13 +119,13 @@ async def _load_or_create_approval_secret() -> str:
 # If unset in dev the check is skipped; warn loudly so it isn't forgotten.
 _API_SECRET = os.environ.get("API_SECRET", "")
 if not _API_SECRET:
-    print("[Watcher] WARNING: API_SECRET not set — /recovery-check, /morning-brief and dashboard API endpoints are unauthenticated")
+    print("[Watcher] WARNING: API_SECRET not set — protected admin and merchant data endpoints will return 503")
 
 
 def _require_api_key(request: Request) -> None:
     """Raise 401 unless the caller supplies the correct X-API-Key header."""
     if not _API_SECRET:
-        return
+        raise HTTPException(503, "API_SECRET is not configured")
     key = request.headers.get("X-API-Key", "")
     if not hmac.compare_digest(key, _API_SECRET):
         raise HTTPException(401, "Unauthorized")
