@@ -6272,5 +6272,167 @@ async def api_portfolio_risk(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 92 — Dispute Surge Alerter  POST /api/oracle/surge-alert
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/surge-alert")
+async def api_surge_alert(request: Request):
+    """
+    Analyze recent dispute velocity and return a surge alert with severity.
+
+    Request body:
+      {
+        "merchant_id": "anchor-main",   // optional, defaults to MERCHANT_ID env
+        "hours_lookback": 24,           // optional, default 24
+        "spike_multiplier": 2.0         // optional, threshold = spike_multiplier * avg
+      }
+
+    Response:
+      {
+        "merchant_id": str,
+        "alert_severity": "normal" | "elevated" | "critical",
+        "current_hour_count": int,
+        "rolling_avg_per_hour": float,
+        "spike_threshold": float,
+        "peak_hour": str | null,
+        "peak_hour_count": int,
+        "total_disputes_window": int,
+        "total_amount_window": float,
+        "spike_hours": [str],
+        "hours_analyzed": int,
+        "recommendation": str,
+        "shadow_mode_advised": bool,
+        "source": "postgresql" | "unavailable"
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    merchant_id = body.get("merchant_id") or os.environ.get("MERCHANT_ID", "default")
+    hours_lookback = int(body.get("hours_lookback", 24))
+    spike_multiplier = float(body.get("spike_multiplier", 2.0))
+
+    # Clamp to reasonable bounds
+    hours_lookback = max(1, min(hours_lookback, 168))
+    spike_multiplier = max(1.1, min(spike_multiplier, 10.0))
+
+    if not os.environ.get("DATABASE_URL"):
+        return JSONResponse({
+            "merchant_id": merchant_id,
+            "alert_severity": "normal",
+            "current_hour_count": 0,
+            "rolling_avg_per_hour": 0.0,
+            "spike_threshold": float(spike_multiplier),
+            "peak_hour": None,
+            "peak_hour_count": 0,
+            "total_disputes_window": 0,
+            "total_amount_window": 0.0,
+            "spike_hours": [],
+            "hours_analyzed": 0,
+            "recommendation": "No velocity data — DATABASE_URL not configured.",
+            "shadow_mode_advised": False,
+            "source": "unavailable",
+        })
+
+    try:
+        import agents.pg_store as _pg
+        buckets = await asyncio.to_thread(
+            _pg.get_dispute_velocity, merchant_id, hours_lookback
+        )
+    except Exception as exc:
+        return JSONResponse({
+            "merchant_id": merchant_id,
+            "alert_severity": "normal",
+            "source": "unavailable",
+            "error": str(exc),
+        }, status_code=200)
+
+    if not buckets:
+        return JSONResponse({
+            "merchant_id": merchant_id,
+            "alert_severity": "normal",
+            "current_hour_count": 0,
+            "rolling_avg_per_hour": 0.0,
+            "spike_threshold": float(spike_multiplier),
+            "peak_hour": None,
+            "peak_hour_count": 0,
+            "total_disputes_window": 0,
+            "total_amount_window": 0.0,
+            "spike_hours": [],
+            "hours_analyzed": 0,
+            "recommendation": "No dispute velocity data in the requested window.",
+            "shadow_mode_advised": False,
+            "source": "postgresql",
+        })
+
+    counts = [b["dispute_count"] for b in buckets]
+    amounts = [b["amount_total"] for b in buckets]
+    total_disputes = sum(counts)
+    total_amount = sum(amounts)
+    avg = total_disputes / len(counts) if counts else 0.0
+    spike_threshold = max(spike_multiplier * avg, spike_multiplier)
+
+    # Current hour is the last bucket (sorted ascending by pg query)
+    current_hour_count = counts[-1] if counts else 0
+    current_bucket_time = buckets[-1]["bucket_utc"] if buckets else None
+
+    # Peak hour
+    peak_idx = counts.index(max(counts)) if counts else 0
+    peak_hour = buckets[peak_idx]["bucket_utc"] if buckets else None
+    peak_count = counts[peak_idx] if counts else 0
+
+    # Spike hours
+    spike_hours = [b["bucket_utc"] for b in buckets if b["dispute_count"] >= spike_threshold]
+
+    # Severity
+    if current_hour_count >= spike_threshold or len(spike_hours) >= 3:
+        severity = "critical"
+    elif len(spike_hours) >= 1 or current_hour_count >= max(1.5 * avg, 1):
+        severity = "elevated"
+    else:
+        severity = "normal"
+
+    # Recommendation
+    shadow_mode = severity == "critical"
+    if severity == "critical":
+        rec = (
+            f"CRITICAL surge detected — {current_hour_count} disputes this hour "
+            f"({current_hour_count / avg:.1f}x average). "
+            "Enable SHADOW_MODE=1 and investigate root cause before accepting new payments."
+        )
+    elif severity == "elevated":
+        rec = (
+            f"Elevated dispute rate — {len(spike_hours)} spike hour(s) detected in the last "
+            f"{hours_lookback}h (avg {avg:.1f}/h, threshold {spike_threshold:.1f}/h). "
+            "Monitor closely and check for recent policy or product changes."
+        )
+    else:
+        rec = (
+            f"Dispute rate is normal — {avg:.1f} disputes/hour average over {len(counts)} hours. "
+            "No action required."
+        )
+
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "alert_severity": severity,
+        "current_hour_count": current_hour_count,
+        "current_hour_bucket": current_bucket_time,
+        "rolling_avg_per_hour": round(avg, 2),
+        "spike_threshold": round(spike_threshold, 2),
+        "peak_hour": peak_hour,
+        "peak_hour_count": peak_count,
+        "total_disputes_window": total_disputes,
+        "total_amount_window": round(total_amount, 2),
+        "spike_hours": spike_hours,
+        "hours_analyzed": len(counts),
+        "recommendation": rec,
+        "shadow_mode_advised": shadow_mode,
+        "source": "postgresql",
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
