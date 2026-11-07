@@ -3148,3 +3148,66 @@ async def buyer_satisfaction_risk(request: Request):
         "key_insight": r.key_insight,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/refund-roi")
+async def refund_roi(request: Request):
+    """
+    POST /api/oracle/refund-roi
+    Compute net expected value of fighting vs. refunding a dispute.
+
+    Body: RefundROIInput fields
+    Returns: recommended_action, ev_fight, ev_refund, confidence,
+             fight_refund_delta, paypal_signal, key_insight, summary
+    """
+    from oracle.refund_roi_calculator import (
+        calculate_refund_roi, RefundROIInput, MerchantSegment,
+    )
+    body = await request.json()
+    inp = RefundROIInput(
+        dispute_id=body.get("dispute_id", ""),
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        dispute_amount=float(body.get("dispute_amount", 100.0)),
+        reason_code=body.get("reason_code", "INR"),
+        win_probability=float(body.get("win_probability", 0.5)),
+        merchant_segment=MerchantSegment(body.get("merchant_segment", "SMALL_BUSINESS")),
+        buyer_ltv=float(body.get("buyer_ltv", 0.0)),
+        is_repeat_buyer=bool(body.get("is_repeat_buyer", False)),
+        buyer_prior_orders=int(body.get("buyer_prior_orders", 0)),
+        response_cost_override=body.get("response_cost_override"),
+        chargeback_fee_override=body.get("chargeback_fee_override"),
+        partial_refund_pct=float(body.get("partial_refund_pct", 0.0)),
+        refund_goodwill_value=float(body.get("refund_goodwill_value", 0.0)),
+    )
+    r = calculate_refund_roi(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "merchant_id": r.merchant_id,
+        "recommended_action": r.recommended_action.value,
+        "confidence": r.confidence.value,
+        "ev_fight": r.ev_fight,
+        "ev_refund": r.ev_refund,
+        "ev_partial_refund": r.ev_partial_refund,
+        "fight_refund_delta": r.fight_refund_delta,
+        "is_fight_roi_positive": r.is_fight_roi_positive,
+        "is_refund_roi_better": r.is_refund_roi_better,
+        "response_cost_used": r.response_cost_used,
+        "chargeback_fee_used": r.chargeback_fee_used,
+        "fight_breakdown": {
+            "gross_win_value": r.fight_breakdown.gross_win_value,
+            "gross_loss_value": r.fight_breakdown.gross_loss_value,
+            "response_cost": r.fight_breakdown.response_cost,
+            "chargeback_fee": r.fight_breakdown.chargeback_fee,
+            "expected_value": r.fight_breakdown.expected_value,
+        },
+        "refund_breakdown": {
+            "gross_win_value": r.refund_breakdown.gross_win_value,
+            "gross_loss_value": r.refund_breakdown.gross_loss_value,
+            "response_cost": r.refund_breakdown.response_cost,
+            "chargeback_fee": r.refund_breakdown.chargeback_fee,
+            "expected_value": r.refund_breakdown.expected_value,
+        },
+        "paypal_signal": r.paypal_signal,
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+    })
