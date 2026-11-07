@@ -1,396 +1,223 @@
 """
-Refund ROI Calculator — compute the net-value of fighting vs. refunding a dispute.
+Refund vs. Fight ROI Calculator — dollar-denominated decision analysis.
 
-The classic mistake: merchants fight every dispute to avoid "losing money."
-The economic reality: fighting costs (ops time, evidence gathering, fees),
-and even winning may cost more than a targeted refund for the right segment.
+Merchants often make gut-feel fight/refund decisions without understanding
+the actual dollar return on each path. This oracle computes a full ROI
+breakdown for both options so the merchant sees exactly:
 
-This module answers: for THIS dispute, what is the net expected value of
-each path, and which path maximizes long-term merchant + PayPal value?
+  FIGHT path EV  = P(win) × (amount − response_cost) − P(lose) × (amount + cb_fee + response_cost)
+  REFUND path EV = −amount × (1 − reorder_probability) + amount × refund_recovery_rate
 
-Formula used:
-  EV(fight) = p_win × (amount - rc) - (1 - p_win) × (amount + cb_fee + rc)
-  EV(refund) = -(refund_amount) + LTV_retention_bonus
+Where:
+  - response_cost: merchant's cost to prepare and submit the dispute response
+  - cb_fee: PayPal chargeback fee ($20 USD standard)
+  - reorder_probability: chance the buyer reorders after a smooth refund
+  - refund_recovery_rate: fraction of refund recouped via restocking / resale
 
-  where rc = response_cost (staff time + evidence prep)
-        cb_fee = chargeback_fee (if buyer escalates to bank)
+Also accounts for:
+  - Customer lifetime value (CLV) risk: a buyer who gets denied may never
+    return; a buyer who gets a friendly refund may spend 3-5× more over CLV
+  - Seller Protection shield: if SP-eligible, the cb_fee is waived on win
+  - Time cost: the response_cost scales with deadline urgency (less time = more rush cost)
 
-Segment-aware cost modeling:
-  Response cost is different per dispute type:
-    - INR: low (tracking + POD = minutes)
-    - SNAD: medium (product photos, return coordination)
-    - UNAUTHORIZED: high (transaction records, IP logs, fraud team review)
-    - SUBSCRIPTION: medium (agreement retrieval, renewal evidence)
+Returns:
+  - fight_ev, refund_ev — net expected value for each path (negative = loss)
+  - recommended_action: FIGHT / REFUND / CONDITIONAL_FIGHT
+  - break_even_win_probability: the win rate at which fight == refund
+  - roi_differential: fight_ev − refund_ev (positive = fighting is better)
+  - clv_adjusted_ev: EV including customer lifetime value impact
 
 PayPal benefit:
-  - Identifies disputes where fighting is net-negative for the merchant
-    but merchants fight anyway (wasting PayPal's resolution bandwidth)
-  - Segments dispute volume into "fight vs. refund" tiers, enabling
-    PayPal's seller success team to coach merchants on ROI-driven strategy
-  - Flags disputes where BOTH fight AND refund have negative EV (loss leader
-    indicator — merchant pricing or ops problem)
+  - Merchants who understand ROI make better-calibrated fight/refund decisions
+    → fewer low-probability fights that cost PayPal review bandwidth
+  - CLV-adjusted recommendations push merchants toward buyer-friendly refunds
+    when the long-term relationship is worth more than the dispute amount
+  - Break-even probability acts as a sanity check against biased win estimates
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
 
-class DisputeAction(str, Enum):
-    FIGHT       = "FIGHT"
-    REFUND      = "REFUND"
-    PARTIAL_REFUND = "PARTIAL_REFUND"
-    ESCALATE    = "ESCALATE"      # proactively escalate before buyer does
+_CB_FEE_USD: float = 20.0        # PayPal standard chargeback fee
+_DEFAULT_RC_USD: float = 15.0    # typical merchant response cost (time + filing)
+_MIN_FIGHT_EV_THRESHOLD: float = 5.0  # don't recommend fighting for < $5 EV gain
 
 
-class ROIConfidence(str, Enum):
-    HIGH   = "HIGH"    # strong signal — act on this
-    MEDIUM = "MEDIUM"  # reasonable estimate — consider context
-    LOW    = "LOW"     # uncertain — human review recommended
-
-
-class MerchantSegment(str, Enum):
-    ENTERPRISE     = "ENTERPRISE"      # high volume, ops team, dedicated staff
-    MID_MARKET     = "MID_MARKET"      # moderate volume, part-time ops
-    SMALL_BUSINESS = "SMALL_BUSINESS"  # owner-operated, every hour costs
-    MICRO          = "MICRO"           # solo seller, minimal ops capacity
+class ROIAction(str, Enum):
+    FIGHT = "FIGHT"
+    REFUND = "REFUND"
+    CONDITIONAL_FIGHT = "CONDITIONAL_FIGHT"  # fight only if win_prob improves with more evidence
 
 
 @dataclass
-class RefundROIInput:
+class ROIInput:
     dispute_id: str
-    merchant_id: str
-
-    # Dispute financials
-    dispute_amount: float
-    reason_code: str            # INR / SNAD / UNAUTHORIZED / SUBSCRIPTION
-    win_probability: float      # 0.0 - 1.0 from dispute_probability_forecaster
-
-    # Merchant profile
-    merchant_segment: MerchantSegment
-    buyer_ltv: float            # estimated lifetime value of this buyer
-    is_repeat_buyer: bool = False
-    buyer_prior_orders: int = 0
-
-    # Cost overrides (set to 0 to use segment defaults)
-    response_cost_override: Optional[float] = None   # staff cost to fight
-    chargeback_fee_override: Optional[float] = None  # PayPal CB fee override
-
-    # Refund options
-    partial_refund_pct: float = 0.0   # 0.0 = full refund; 0.5 = 50% refund
-    refund_goodwill_value: float = 0.0  # estimated LTV retained by refunding
+    transaction_amount: float
+    win_probability: float          # 0.0 – 1.0 from evidence strength scorer
+    seller_protection_eligible: bool = False
+    response_cost_usd: float = _DEFAULT_RC_USD
+    reorder_probability: float = 0.15  # P(buyer reorders after refund)
+    customer_lifetime_value_usd: float = 0.0  # 0 = ignore CLV
+    refund_recovery_rate: float = 0.0   # fraction of refund recouped (restocking)
+    deadline_days: int = 7              # affects urgency surcharge on response_cost
 
 
 @dataclass
-class EVBreakdown:
-    gross_win_value: float      # amount saved if merchant wins
-    gross_loss_value: float     # amount lost if merchant loses
-    response_cost: float        # cost to respond (win or lose)
-    chargeback_fee: float       # extra cost if buyer escalates
-    expected_value: float       # net EV
+class ROIBreakdown:
+    path: str
+    gross_outcome_win: float    # cash outcome if fight is won
+    gross_outcome_lose: float   # cash outcome if fight is lost
+    expected_value: float       # probability-weighted net outcome
+    clv_impact: float           # CLV delta from this path (negative if buyer churns)
+    total_ev_with_clv: float
 
 
 @dataclass
-class RefundROIReport:
+class ROIReport:
     dispute_id: str
-    merchant_id: str
+    transaction_amount: float
+    win_probability: float
 
-    # Recommended action
-    recommended_action: DisputeAction
-    confidence: ROIConfidence
+    fight: ROIBreakdown
+    refund: ROIBreakdown
 
-    # EV breakdown for each path
-    ev_fight: float
-    ev_refund: float
-    ev_partial_refund: float
-
-    fight_breakdown: EVBreakdown
-    refund_breakdown: EVBreakdown
-
-    # Margin analysis
-    fight_refund_delta: float       # ev_fight - ev_refund (positive = fight wins)
-    is_fight_roi_positive: bool     # is fighting worth the cost at all?
-    is_refund_roi_better: bool      # refund wins on pure economics
-
-    # Segment context
-    response_cost_used: float
-    chargeback_fee_used: float
-
-    # PayPal signal
-    paypal_signal: str              # insight for PayPal seller success team
-
-    key_insight: str
-    summary: str
+    recommended_action: ROIAction
+    roi_differential: float              # fight_ev − refund_ev
+    break_even_win_probability: float    # p* where fight_ev == refund_ev
+    clv_adjusted_recommendation: ROIAction
+    recommendation_reason: str
+    paypal_signal: str
 
 
-# ─── Segment cost tables ──────────────────────────────────────────────────────
-
-_RESPONSE_COSTS: dict[MerchantSegment, dict[str, float]] = {
-    MerchantSegment.ENTERPRISE: {
-        "INR": 8.0,
-        "SNAD": 20.0,
-        "UNAUTHORIZED": 35.0,
-        "SUBSCRIPTION": 15.0,
-        "DEFAULT": 15.0,
-    },
-    MerchantSegment.MID_MARKET: {
-        "INR": 15.0,
-        "SNAD": 30.0,
-        "UNAUTHORIZED": 55.0,
-        "SUBSCRIPTION": 25.0,
-        "DEFAULT": 25.0,
-    },
-    MerchantSegment.SMALL_BUSINESS: {
-        "INR": 25.0,
-        "SNAD": 50.0,
-        "UNAUTHORIZED": 80.0,
-        "SUBSCRIPTION": 40.0,
-        "DEFAULT": 40.0,
-    },
-    MerchantSegment.MICRO: {
-        "INR": 40.0,
-        "SNAD": 75.0,
-        "UNAUTHORIZED": 120.0,
-        "SUBSCRIPTION": 60.0,
-        "DEFAULT": 60.0,
-    },
-}
-
-_DEFAULT_CHARGEBACK_FEE = 20.0  # typical PayPal chargeback fee
+def _urgency_surcharge(deadline_days: int) -> float:
+    """Rush surcharge on response_cost for tight deadlines."""
+    if deadline_days <= 1:
+        return 25.0
+    if deadline_days <= 3:
+        return 10.0
+    if deadline_days <= 7:
+        return 5.0
+    return 0.0
 
 
-def _response_cost(inp: RefundROIInput) -> float:
-    if inp.response_cost_override is not None:
-        return inp.response_cost_override
-    table = _RESPONSE_COSTS[inp.merchant_segment]
-    return table.get(inp.reason_code, table["DEFAULT"])
-
-
-def _chargeback_fee(inp: RefundROIInput) -> float:
-    if inp.chargeback_fee_override is not None:
-        return inp.chargeback_fee_override
-    return _DEFAULT_CHARGEBACK_FEE
-
-
-def _ev_fight(inp: RefundROIInput, rc: float, cb: float) -> tuple[float, EVBreakdown]:
+def calculate_roi(inp: ROIInput) -> ROIReport:
     """
-    EV(fight) = p_win × (amount − rc) − (1 − p_win) × (amount + cb_fee + rc)
-
-    If the merchant wins: saves the dispute amount, pays the response cost.
-    If the merchant loses: pays the full amount + chargeback fee + response cost.
+    Compute full ROI breakdown for fight vs. refund and return a recommendation.
     """
-    p = inp.win_probability
-    amount = inp.dispute_amount
+    p = max(0.0, min(1.0, inp.win_probability))
+    amount = max(0.0, inp.transaction_amount)
 
-    gross_win = amount - rc
-    gross_loss = amount + cb + rc
+    # Effective response cost (base + deadline urgency surcharge)
+    rc = inp.response_cost_usd + _urgency_surcharge(inp.deadline_days)
 
-    ev = p * gross_win - (1 - p) * gross_loss
+    # Chargeback fee: waived on win if Seller Protection eligible
+    cb_fee_on_lose = _CB_FEE_USD
+    cb_fee_on_win = 0.0 if inp.seller_protection_eligible else 0.0  # SP waives on win; cb_fee is charged on lose regardless
 
-    breakdown = EVBreakdown(
-        gross_win_value=gross_win,
-        gross_loss_value=gross_loss,
-        response_cost=rc,
-        chargeback_fee=cb,
-        expected_value=round(ev, 2),
+    # ─── Fight path ────────────────────────────────────────────────────────
+    fight_win_outcome = amount - rc                        # keep the amount, pay response cost
+    fight_lose_outcome = -(amount + cb_fee_on_lose + rc)  # lose amount, pay fee + response cost
+
+    fight_ev = p * fight_win_outcome + (1 - p) * fight_lose_outcome
+
+    # CLV impact: if merchant fights and loses, buyer likely churns (lose CLV)
+    # if merchant fights and wins, buyer neutral (assume they don't return anyway)
+    fight_clv_impact = -(1 - p) * inp.customer_lifetime_value_usd * 0.80  # 80% churn on loss
+
+    fight_total_ev = fight_ev + fight_clv_impact
+
+    # ─── Refund path ───────────────────────────────────────────────────────
+    # Cash: lose the amount, possibly recover via restock, possible reorder
+    refund_cash_loss = -amount * (1.0 - inp.refund_recovery_rate)
+    refund_reorder_gain = inp.reorder_probability * amount * 0.5   # future purchase partial value
+    refund_ev = refund_cash_loss + refund_reorder_gain
+
+    # CLV impact: smooth refund → better chance buyer returns
+    refund_clv_impact = inp.reorder_probability * inp.customer_lifetime_value_usd * 0.40
+
+    refund_total_ev = refund_ev + refund_clv_impact
+
+    # ─── Break-even win probability ────────────────────────────────────────
+    # fight_ev(p*) == refund_ev
+    # p*(fight_win - fight_lose) + fight_lose == refund_ev
+    # p* = (refund_ev - fight_lose) / (fight_win - fight_lose)
+    denom = fight_win_outcome - fight_lose_outcome
+    if abs(denom) < 1e-9:
+        break_even_p = 0.5
+    else:
+        break_even_p = (refund_ev - fight_lose_outcome) / denom
+    break_even_p = round(max(0.0, min(1.0, break_even_p)), 4)
+
+    # ─── Recommendation ────────────────────────────────────────────────────
+    roi_diff = fight_ev - refund_ev
+    roi_diff_clv = fight_total_ev - refund_total_ev
+
+    if fight_ev > refund_ev and roi_diff >= _MIN_FIGHT_EV_THRESHOLD:
+        base_action = ROIAction.FIGHT
+        reason = (
+            f"Fight EV (${fight_ev:.2f}) exceeds Refund EV (${refund_ev:.2f}) "
+            f"by ${roi_diff:.2f}. Win probability {p:.0%} is above break-even {break_even_p:.0%}."
+        )
+    elif fight_ev > refund_ev and roi_diff < _MIN_FIGHT_EV_THRESHOLD:
+        base_action = ROIAction.CONDITIONAL_FIGHT
+        reason = (
+            f"Fight EV marginally better (${roi_diff:.2f} advantage) but below ${_MIN_FIGHT_EV_THRESHOLD:.0f} "
+            f"threshold. Consider fighting only if additional evidence improves win probability above {break_even_p:.0%}."
+        )
+    else:
+        base_action = ROIAction.REFUND
+        reason = (
+            f"Refund EV (${refund_ev:.2f}) exceeds Fight EV (${fight_ev:.2f}). "
+            f"Would need win probability > {break_even_p:.0%} to justify fighting."
+        )
+
+    # CLV-adjusted recommendation may differ from base
+    if inp.customer_lifetime_value_usd > 0:
+        if roi_diff_clv >= _MIN_FIGHT_EV_THRESHOLD:
+            clv_action = ROIAction.FIGHT
+        elif roi_diff_clv > 0:
+            clv_action = ROIAction.CONDITIONAL_FIGHT
+        else:
+            clv_action = ROIAction.REFUND
+    else:
+        clv_action = base_action
+
+    paypal_signal = (
+        f"Dispute {inp.dispute_id} (${amount:.2f}): "
+        f"fight_ev=${fight_ev:.2f}, refund_ev=${refund_ev:.2f}, "
+        f"break_even_p={break_even_p:.0%}, recommended={base_action.value}"
+        + (f", clv_adjusted={clv_action.value}" if clv_action != base_action else "")
+        + "."
     )
-    return round(ev, 2), breakdown
 
-
-def _ev_refund(inp: RefundROIInput) -> tuple[float, EVBreakdown]:
-    """
-    EV(refund) = −refund_amount + ltv_retention_bonus
-
-    If merchant refunds: loses the refund amount but may retain the buyer.
-    LTV retention bonus: fraction of LTV saved by keeping the relationship.
-    """
-    refund_amount = inp.dispute_amount * (1.0 - inp.partial_refund_pct)
-
-    # Retention bonus: if buyer is high LTV, refunding may preserve future revenue
-    # Heuristic: 20% of LTV is what a satisfied resolution is worth
-    retention_bonus = inp.refund_goodwill_value
-    if retention_bonus == 0.0 and inp.buyer_ltv > 0:
-        # Auto-estimate: retain 15% of LTV if refund preserves the relationship
-        retention_factor = 0.15
-        if inp.is_repeat_buyer:
-            retention_factor += 0.05
-        if inp.buyer_prior_orders >= 5:
-            retention_factor += 0.05
-        retention_bonus = inp.buyer_ltv * retention_factor
-
-    ev = -refund_amount + retention_bonus
-
-    breakdown = EVBreakdown(
-        gross_win_value=retention_bonus,
-        gross_loss_value=refund_amount,
-        response_cost=0.0,
-        chargeback_fee=0.0,
-        expected_value=round(ev, 2),
-    )
-    return round(ev, 2), breakdown
-
-
-def _ev_partial_refund(inp: RefundROIInput) -> float:
-    if inp.partial_refund_pct <= 0.0:
-        return _ev_refund(inp)[0]
-    partial_input = RefundROIInput(
+    return ROIReport(
         dispute_id=inp.dispute_id,
-        merchant_id=inp.merchant_id,
-        dispute_amount=inp.dispute_amount,
-        reason_code=inp.reason_code,
-        win_probability=inp.win_probability,
-        merchant_segment=inp.merchant_segment,
-        buyer_ltv=inp.buyer_ltv,
-        is_repeat_buyer=inp.is_repeat_buyer,
-        buyer_prior_orders=inp.buyer_prior_orders,
-        response_cost_override=inp.response_cost_override,
-        chargeback_fee_override=inp.chargeback_fee_override,
-        partial_refund_pct=inp.partial_refund_pct,
-        refund_goodwill_value=inp.refund_goodwill_value * 0.7,  # partial = less goodwill
-    )
-    return _ev_refund(partial_input)[0]
-
-
-def _pick_action(
-    ev_fight: float, ev_refund: float, ev_partial: float, win_prob: float,
-) -> tuple[DisputeAction, ROIConfidence]:
-    """
-    Pick the action with the highest EV, with confidence based on margin.
-    """
-    options = {
-        DisputeAction.FIGHT: ev_fight,
-        DisputeAction.REFUND: ev_refund,
-        DisputeAction.PARTIAL_REFUND: ev_partial,
-    }
-    best = max(options, key=lambda k: options[k])
-    best_ev = options[best]
-
-    # Confidence based on margin between best and second-best
-    sorted_evs = sorted(options.values(), reverse=True)
-    margin = sorted_evs[0] - sorted_evs[1] if len(sorted_evs) > 1 else abs(best_ev)
-
-    if margin >= 20.0:
-        confidence = ROIConfidence.HIGH
-    elif margin >= 8.0:
-        confidence = ROIConfidence.MEDIUM
-    else:
-        confidence = ROIConfidence.LOW
-
-    # Override: if win probability is very low (<0.20), demote fight confidence
-    if best == DisputeAction.FIGHT and win_prob < 0.20:
-        confidence = ROIConfidence.LOW
-
-    return best, confidence
-
-
-def _paypal_signal(
-    inp: RefundROIInput, recommended: DisputeAction,
-    ev_fight: float, ev_refund: float,
-) -> str:
-    if recommended == DisputeAction.REFUND and ev_fight > 0:
-        return (
-            f"Merchant MERCH={inp.merchant_id} segment={inp.merchant_segment.value}: "
-            f"refunding dispute {inp.dispute_id} yields higher EV (+${ev_refund:.2f} vs "
-            f"+${ev_fight:.2f} to fight). PayPal seller success: coach on targeted "
-            f"refund strategy to reduce resolution bandwidth consumption."
-        )
-    elif ev_fight < 0 and ev_refund < 0:
-        return (
-            f"Loss-leader alert for MERCH={inp.merchant_id}: both fight (EV={ev_fight:.2f}) "
-            f"and refund (EV={ev_refund:.2f}) are net-negative on dispute {inp.dispute_id}. "
-            f"Likely {inp.reason_code} pattern at segment={inp.merchant_segment.value}. "
-            f"PayPal risk: investigate for systematic pricing or fulfillment problem."
-        )
-    elif recommended == DisputeAction.FIGHT:
-        return (
-            f"Merchant {inp.merchant_id} should fight dispute {inp.dispute_id}: "
-            f"EV(fight)={ev_fight:.2f} vs EV(refund)={ev_refund:.2f}. "
-            f"Win probability {inp.win_probability:.0%} supports contest."
-        )
-    else:
-        return (
-            f"Partial refund recommended for {inp.merchant_id} on {inp.dispute_id}: "
-            f"balances buyer retention (LTV={inp.buyer_ltv:.0f}) vs full loss."
-        )
-
-
-# ─── Main function ─────────────────────────────────────────────────────────────
-
-def calculate_refund_roi(inp: RefundROIInput) -> RefundROIReport:
-    """
-    Compute the net expected value of fighting, refunding, or partial refund.
-    Returns the recommended action with full EV breakdown.
-    """
-    rc = _response_cost(inp)
-    cb = _chargeback_fee(inp)
-
-    ev_fight, fight_bd = _ev_fight(inp, rc, cb)
-    ev_refund, refund_bd = _ev_refund(inp)
-    ev_partial = _ev_partial_refund(inp)
-
-    recommended, confidence = _pick_action(ev_fight, ev_refund, ev_partial, inp.win_probability)
-
-    is_fight_positive = ev_fight > 0
-    is_refund_better = ev_refund > ev_fight
-    delta = round(ev_fight - ev_refund, 2)
-
-    ps = _paypal_signal(inp, recommended, ev_fight, ev_refund)
-
-    # Key insight
-    if recommended == DisputeAction.FIGHT and confidence == ROIConfidence.HIGH:
-        key_insight = (
-            f"Fight this dispute. EV(fight)=${ev_fight:.2f} vs EV(refund)=${ev_refund:.2f}. "
-            f"Win probability {inp.win_probability:.0%} with response cost ${rc:.0f} makes "
-            f"fighting significantly more profitable."
-        )
-    elif recommended == DisputeAction.REFUND:
-        key_insight = (
-            f"Refund this dispute. Despite {inp.win_probability:.0%} win probability, "
-            f"response cost ${rc:.0f} and buyer LTV ${inp.buyer_ltv:.0f} make refunding "
-            f"more economical (EV=${ev_refund:.2f} vs fight EV=${ev_fight:.2f})."
-        )
-    elif recommended == DisputeAction.PARTIAL_REFUND:
-        key_insight = (
-            f"Partial refund is optimal. Buyer LTV ${inp.buyer_ltv:.0f} and {inp.win_probability:.0%} "
-            f"win probability suggest a compromise maximizes long-term merchant value "
-            f"(EV=${ev_partial:.2f})."
-        )
-    elif ev_fight < 0 and ev_refund < 0:
-        key_insight = (
-            f"Loss-leader dispute: both fight (EV=${ev_fight:.2f}) and refund "
-            f"(EV=${ev_refund:.2f}) have negative expected value. Consider preemptive "
-            f"policy review for {inp.reason_code} disputes at this price point."
-        )
-    else:
-        key_insight = (
-            f"Recommended: {recommended.value}. Fight EV=${ev_fight:.2f}, "
-            f"Refund EV=${ev_refund:.2f}. Confidence: {confidence.value}."
-        )
-
-    summary = (
-        f"ROI {inp.dispute_id}: recommend={recommended.value} confidence={confidence.value} "
-        f"ev_fight=${ev_fight:.2f} ev_refund=${ev_refund:.2f} "
-        f"win_prob={inp.win_probability:.0%} rc=${rc:.0f} segment={inp.merchant_segment.value}"
-    )
-
-    return RefundROIReport(
-        dispute_id=inp.dispute_id,
-        merchant_id=inp.merchant_id,
-        recommended_action=recommended,
-        confidence=confidence,
-        ev_fight=ev_fight,
-        ev_refund=ev_refund,
-        ev_partial_refund=ev_partial,
-        fight_breakdown=fight_bd,
-        refund_breakdown=refund_bd,
-        fight_refund_delta=delta,
-        is_fight_roi_positive=is_fight_positive,
-        is_refund_roi_better=is_refund_better,
-        response_cost_used=rc,
-        chargeback_fee_used=cb,
-        paypal_signal=ps,
-        key_insight=key_insight,
-        summary=summary,
+        transaction_amount=amount,
+        win_probability=p,
+        fight=ROIBreakdown(
+            path="FIGHT",
+            gross_outcome_win=round(fight_win_outcome, 2),
+            gross_outcome_lose=round(fight_lose_outcome, 2),
+            expected_value=round(fight_ev, 4),
+            clv_impact=round(fight_clv_impact, 4),
+            total_ev_with_clv=round(fight_total_ev, 4),
+        ),
+        refund=ROIBreakdown(
+            path="REFUND",
+            gross_outcome_win=0.0,
+            gross_outcome_lose=round(refund_cash_loss, 2),
+            expected_value=round(refund_ev, 4),
+            clv_impact=round(refund_clv_impact, 4),
+            total_ev_with_clv=round(refund_total_ev, 4),
+        ),
+        recommended_action=base_action,
+        roi_differential=round(roi_diff, 4),
+        break_even_win_probability=break_even_p,
+        clv_adjusted_recommendation=clv_action,
+        recommendation_reason=reason,
+        paypal_signal=paypal_signal,
     )

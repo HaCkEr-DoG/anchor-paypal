@@ -3849,6 +3849,14 @@ async def openapi_spec():
                     "responses": {"200": {"description": "quality_score, grade, dimensions, issues, improvements, submit_ready"}},
                 }
             },
+            "/api/oracle/refund-roi": {
+                "post": {
+                    "summary": "Refund vs Fight ROI Calculator",
+                    "description": "Dollar-denominated EV for fight and refund paths with break-even probability and CLV-adjusted recommendation",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "fight_ev, refund_ev, recommended_action, roi_differential, break_even_win_probability"}},
+                }
+            },
             "/api/astropods/agent-registry": {
                 "get": {
                     "summary": "Astropods Agent Registry",
@@ -3981,6 +3989,7 @@ async def postman_collection():
                     _pm_post("Evidence Strength Scorer", f"{base}/api/oracle/evidence-strength", {"dispute_id": "D001", "reason_code": "INR", "transaction_amount": 299.0, "has_tracking_number": True, "has_delivery_scan": True, "has_order_confirmation": True}),
                     _pm_post("Merchant Benchmarker", f"{base}/api/oracle/merchant-benchmark", {"merchant_id": "MERCH_X", "segment": "SMALL_BUSINESS", "category": "ELECTRONICS", "total_orders": 1000, "total_disputes": 12, "disputes_won": 7, "disputes_fought": 12, "disputes_escalated": 1, "preemptive_refunds": 2, "avg_response_days": 3.5, "inr_disputes": 6, "unauthorized_disputes": 2}),
                     _pm_post("Response Quality Analyzer", f"{base}/api/oracle/response-quality-analyzer", {"dispute_id": "D001", "reason_code": "INR", "response_text": "We shipped the item on Oct 15, 2026. Tracking number 1Z9999W99999999999 confirms delivery Oct 20, 2026. Please find attached the tracking confirmation and delivery scan. We respectfully request closure.", "transaction_amount": 299.0, "has_tracking": True, "has_delivery_scan": True, "has_order_confirmation": True}),
+                    _pm_post("Refund vs Fight ROI", f"{base}/api/oracle/refund-roi", {"dispute_id": "D001", "transaction_amount": 299.0, "win_probability": 0.65, "seller_protection_eligible": True, "response_cost_usd": 15.0, "reorder_probability": 0.15, "customer_lifetime_value_usd": 500.0, "deadline_days": 5}),
                 ],
             },
             {
@@ -4103,6 +4112,73 @@ async def api_response_quality_analyzer(request: Request):
         "submit_ready": r.submit_ready,
         "paypal_signal": r.paypal_signal,
         "recommendation": r.recommendation,
+    })
+
+
+@app.post("/api/oracle/refund-roi")
+async def api_refund_roi(request: Request):
+    """
+    POST /api/oracle/refund-roi
+
+    Wave 73 — Refund vs. Fight ROI Calculator.
+    Computes dollar-denominated expected value for both fight and refund
+    paths, returning the break-even win probability, ROI differential,
+    and a CLV-adjusted recommendation.
+
+    Request body:
+      dispute_id               str
+      transaction_amount       float
+      win_probability          float   (0.0 – 1.0)
+      seller_protection_eligible bool
+      response_cost_usd        float   (default 15.0)
+      reorder_probability      float   (default 0.15)
+      customer_lifetime_value_usd float (default 0.0)
+      refund_recovery_rate     float   (default 0.0)
+      deadline_days            int     (default 7)
+
+    Response:
+      dispute_id, fight{ev, clv_impact, total_ev}, refund{ev, clv_impact, total_ev},
+      recommended_action, roi_differential, break_even_win_probability,
+      clv_adjusted_recommendation, recommendation_reason, paypal_signal
+    """
+    from oracle.refund_roi_calculator import calculate_roi, ROIInput
+    body = await request.json()
+    inp = ROIInput(
+        dispute_id=body.get("dispute_id", "DEMO"),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+        win_probability=float(body.get("win_probability", 0.5)),
+        seller_protection_eligible=bool(body.get("seller_protection_eligible", False)),
+        response_cost_usd=float(body.get("response_cost_usd", 15.0)),
+        reorder_probability=float(body.get("reorder_probability", 0.15)),
+        customer_lifetime_value_usd=float(body.get("customer_lifetime_value_usd", 0.0)),
+        refund_recovery_rate=float(body.get("refund_recovery_rate", 0.0)),
+        deadline_days=int(body.get("deadline_days", 7)),
+    )
+    r = calculate_roi(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "transaction_amount": r.transaction_amount,
+        "win_probability": r.win_probability,
+        "fight": {
+            "gross_outcome_win": r.fight.gross_outcome_win,
+            "gross_outcome_lose": r.fight.gross_outcome_lose,
+            "expected_value": r.fight.expected_value,
+            "clv_impact": r.fight.clv_impact,
+            "total_ev_with_clv": r.fight.total_ev_with_clv,
+        },
+        "refund": {
+            "gross_outcome_win": r.refund.gross_outcome_win,
+            "gross_outcome_lose": r.refund.gross_outcome_lose,
+            "expected_value": r.refund.expected_value,
+            "clv_impact": r.refund.clv_impact,
+            "total_ev_with_clv": r.refund.total_ev_with_clv,
+        },
+        "recommended_action": r.recommended_action.value,
+        "roi_differential": r.roi_differential,
+        "break_even_win_probability": r.break_even_win_probability,
+        "clv_adjusted_recommendation": r.clv_adjusted_recommendation.value,
+        "recommendation_reason": r.recommendation_reason,
+        "paypal_signal": r.paypal_signal,
     })
 
 
