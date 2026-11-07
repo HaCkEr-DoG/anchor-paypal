@@ -269,6 +269,13 @@ def _require_api_key(request: Request) -> None:
 _processed_events: dict[str, float] = {}
 _DEDUP_TTL_SECONDS = 4 * 24 * 3600  # 4 days > PayPal's 3-day retry window
 
+# ---------------------------------------------------------------------------
+# In-memory metric events — fallback when ES/PG not configured.
+# Stores (event_id -> record) for velocity/rate computation in the session.
+# ---------------------------------------------------------------------------
+_metric_events: list[dict] = []
+_METRIC_MAX = 5000  # ring buffer cap
+
 
 async def _is_duplicate(event_id: str) -> bool:
     """ES-backed atomic dedup; falls back to memory when ES is unavailable."""
@@ -780,10 +787,24 @@ async def _record_merchant_metric_event(
     event_id: str, event_type: str, amount: float, reason: str, timestamp: str,
     merchant_id: str = "",
 ) -> None:
-    """Persist the minimal merchant-scoped aggregates used by the fee-tier estimate."""
+    """Persist merchant-scoped aggregates used by the fee-tier estimate.
+    When ES is absent, appends to the in-memory ring buffer _metric_events."""
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+    record = {
+        "event_id": event_id,
+        "event_type": event_type,
+        "merchant_id": merchant_id or os.environ.get("MERCHANT_ID", "default"),
+        "amount": amount,
+        "reason": reason,
+        "timestamp": timestamp,
+    }
     if not es_url or not es_key:
+        # Append to in-memory ring buffer, dedup by event_id
+        if not any(e["event_id"] == event_id for e in _metric_events[-20:]):
+            _metric_events.append(record)
+            if len(_metric_events) > _METRIC_MAX:
+                del _metric_events[: len(_metric_events) - _METRIC_MAX]
         return
     import httpx
     payload = {
@@ -7745,7 +7766,7 @@ async def api_intelligence_summary(merchant_id: str = ""):
         "GET /api/oracle/intelligence-summary",
     ]
 
-    # Velocity data (best-effort from PG)
+    # Velocity data — PG preferred, fall back to in-memory session events
     velocity_data = {"available": False, "total_disputes_7d": 0, "avg_per_hour": 0.0, "spike_hours_7d": 0}
     if os.environ.get("DATABASE_URL"):
         try:
@@ -7762,9 +7783,27 @@ async def api_intelligence_summary(merchant_id: str = ""):
                     "total_disputes_7d": total,
                     "avg_per_hour": round(avg, 2),
                     "spike_hours_7d": spikes,
+                    "source": "postgresql",
                 }
         except Exception:
             pass
+    if not velocity_data["available"] and _metric_events:
+        from datetime import timedelta as _td
+        _cutoff = (datetime.now(timezone.utc) - _td(days=7)).isoformat()
+        _recent = [
+            e for e in _metric_events
+            if e.get("event_type") == "eligible_dispute"
+            and (e.get("merchant_id", mid) == mid or not mid)
+            and e.get("timestamp", "") >= _cutoff
+        ]
+        velocity_data = {
+            "available": True,
+            "total_disputes_7d": len(_recent),
+            "avg_per_hour": round(len(_recent) / 168, 3),
+            "spike_hours_7d": 0,
+            "source": "memory_session",
+            "note": "Resets on restart — connect a database for durable velocity tracking",
+        }
 
     # Webhook health
     webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "")
