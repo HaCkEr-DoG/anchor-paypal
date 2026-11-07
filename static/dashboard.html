@@ -1021,8 +1021,8 @@
       badge.classList.add('live');
       document.getElementById('subheading').textContent =
         `Live PayPal data · refreshed ${new Date(data.fetched_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
-      document.getElementById('m-open').textContent = data.open_disputes;
-      document.getElementById('m-risk').textContent = data.urgent_disputes;
+      document.getElementById('m-open').textContent = data.dispute_counts_complete ? data.open_disputes : `${data.open_disputes}+`;
+      document.getElementById('m-risk').textContent = data.dispute_counts_complete ? data.urgent_disputes : `${data.urgent_disputes}+`;
       document.getElementById('m-recovered').textContent = data.webhook_registrations;
 
       const recovery = data.recoveries || {};

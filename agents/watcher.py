@@ -792,8 +792,8 @@ async def api_dashboard_summary(request: Request):
 
     try:
         urgent_data, all_data, webhook_data = await asyncio.gather(
-            client.list_disputes(dispute_state="REQUIRED_ACTION", page_size=100),
-            client.list_disputes(page_size=100),
+            client.list_disputes(dispute_state="REQUIRED_ACTION", page_size=50),
+            client.list_disputes(page_size=50),
             client.list_webhooks(),
         )
         urgent_items = urgent_data.get("items", [])
@@ -806,7 +806,10 @@ async def api_dashboard_summary(request: Request):
             "environment": paypal_env,
             "urgent_disputes": int(urgent_count) if urgent_count is not None else len(urgent_items),
             "open_disputes": int(open_count) if open_count is not None else len(all_items),
-            "dispute_counts_complete": urgent_count is not None and open_count is not None,
+            "dispute_counts_complete": (
+                (urgent_count is not None or len(urgent_items) < 50)
+                and (open_count is not None or len(all_items) < 50)
+            ),
             "webhook_registrations": len(webhook_data.get("webhooks", [])),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "recoveries": {
