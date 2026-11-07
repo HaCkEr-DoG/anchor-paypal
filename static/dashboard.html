@@ -871,12 +871,48 @@
   <div class="panel" id="panel-disputes" role="tabpanel" aria-labelledby="tab-disputes">
     <div class="page-header">
       <h1>Disputes</h1>
-      <p>All open and recently resolved disputes.</p>
+      <p>Live open disputes from PayPal. Enter your API key to load full details.</p>
     </div>
-    <div class="placeholder-panel">
-      <h3>Dispute details</h3>
-      <p>Full dispute table with evidence management and response tools.</p>
+
+    <!-- API Key input -->
+    <div id="disputes-auth-row" style="display:flex;gap:10px;margin-bottom:20px;align-items:center;flex-wrap:wrap;">
+      <input id="disputes-api-key" type="password" placeholder="Enter X-API-Key…"
+        style="flex:1;min-width:220px;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface);color:var(--text);"
+        onkeydown="if(event.key==='Enter')loadLiveDisputes()" />
+      <button onclick="loadLiveDisputes()"
+        style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
+        Load Live Disputes
+      </button>
+      <button onclick="loadAllDisputes()"
+        style="background:var(--text);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;">
+        All States
+      </button>
     </div>
+
+    <div id="disputes-status-bar" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:6px;font-size:13px;font-weight:600;"></div>
+
+    <!-- Summary cards -->
+    <div id="disputes-summary-cards" style="display:none;margin-bottom:20px;display:flex;gap:12px;flex-wrap:wrap;"></div>
+
+    <!-- Disputes table -->
+    <div style="overflow-x:auto;">
+      <table id="disputes-table" style="width:100%;border-collapse:collapse;font-size:13px;display:none;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border);text-align:left;">
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Dispute ID</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Reason</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Amount</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Status</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Due Date</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Days Left</th>
+            <th style="padding:8px 12px;color:var(--muted);font-weight:600;">Oracle Decision</th>
+          </tr>
+        </thead>
+        <tbody id="disputes-tbody">
+        </tbody>
+      </table>
+    </div>
+    <div id="disputes-empty" style="display:none;padding:32px;text-align:center;color:var(--muted);font-size:14px;"></div>
   </div>
 
   <!-- ══ Recoveries Panel ════════════════════════════════ -->
@@ -1419,6 +1455,187 @@
     }));
   }
 
+  // ── Live Disputes panel ────────────────────────────────
+  let _disputesAuditCache = null;
+
+  function _getApiKey() {
+    const inp = document.getElementById('disputes-api-key');
+    const val = inp ? inp.value.trim() : '';
+    if (val) { try { sessionStorage.setItem('anchor_api_key', val); } catch(e){} return val; }
+    try { return sessionStorage.getItem('anchor_api_key') || ''; } catch(e){ return ''; }
+  }
+
+  function _daysUntil(dateStr) {
+    if (!dateStr) return null;
+    const diff = (new Date(dateStr) - Date.now()) / 86400000;
+    return Math.round(diff);
+  }
+
+  function _deadlineBadge(days) {
+    if (days === null) return '<span style="color:var(--muted)">—</span>';
+    const color = days <= 1 ? '#dc2626' : days <= 5 ? '#d97706' : '#16a34a';
+    const label = days < 0 ? `OVERDUE ${Math.abs(days)}d` : `${days}d`;
+    return `<span style="color:${color};font-weight:700;">${label}</span>`;
+  }
+
+  function _reasonLabel(r) {
+    const map = {
+      ITEM_NOT_RECEIVED: 'INR',
+      SIGNIFICANTLY_NOT_AS_DESCRIBED: 'SNAD',
+      UNAUTHORIZED: 'Unauth',
+      CREDIT_NOT_PROCESSED: 'Credit',
+      DUPLICATE_TRANSACTION: 'Dup',
+      INCORRECT_AMOUNT: 'Amt',
+      PAYMENT_BY_OTHER_MEANS: 'Other Pay',
+    };
+    return map[r] || r || '—';
+  }
+
+  async function _fetchAuditCache(apiKey) {
+    if (_disputesAuditCache) return _disputesAuditCache;
+    try {
+      const r = await fetch('/api/audit/log?limit=200', { signal: AbortSignal.timeout(8000) });
+      if (r.ok) {
+        const j = await r.json();
+        _disputesAuditCache = {};
+        for (const e of (j.entries || [])) {
+          if (!_disputesAuditCache[e.dispute_id]) _disputesAuditCache[e.dispute_id] = e;
+        }
+      }
+    } catch(e) { _disputesAuditCache = {}; }
+    return _disputesAuditCache;
+  }
+
+  function _oracleBadge(entry) {
+    if (!entry) return '<span style="color:var(--muted);font-size:12px;">No decision logged</span>';
+    const colors = { AUTO_FIGHT: '#16a34a', AUTO_ACCEPT: '#dc2626', REQUEST_APPROVAL: '#d97706', GATHER_EVIDENCE: '#2563eb', SKIPPED: '#9898a3' };
+    const c = colors[entry.action] || '#9898a3';
+    const prob = entry.win_prob != null ? ` · ${(entry.win_prob*100).toFixed(0)}%` : '';
+    return `<span style="background:${c}18;color:${c};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;">${entry.action}${prob}</span>`;
+  }
+
+  async function _renderDisputesTable(disputes) {
+    const apiKey = _getApiKey();
+    const audit = await _fetchAuditCache(apiKey);
+    const tbody = document.getElementById('disputes-tbody');
+    const table = document.getElementById('disputes-table');
+    const empty = document.getElementById('disputes-empty');
+
+    if (!disputes.length) {
+      table.style.display = 'none';
+      empty.style.display = 'block';
+      empty.textContent = 'No open disputes found in this state.';
+      return;
+    }
+
+    tbody.replaceChildren();
+    disputes.forEach(d => {
+      const tr = document.createElement('tr');
+      tr.style.cssText = 'border-bottom:1px solid var(--border-light);cursor:default;';
+      tr.onmouseover = () => tr.style.background = 'var(--bg)';
+      tr.onmouseleave = () => tr.style.background = '';
+
+      const days = _daysUntil(d.due_date || d.seller_response_due_date);
+      const oracleEntry = audit[d.dispute_id];
+
+      const cells = [
+        `<a href="https://www.sandbox.paypal.com/disputes/details/${d.dispute_id}" target="_blank" rel="noopener"
+           style="color:var(--accent);font-weight:600;font-size:12px;font-family:monospace;">${d.dispute_id}</a>`,
+        `<span style="font-weight:500;">${_reasonLabel(d.reason)}</span>`,
+        `<span style="font-weight:600;">${d.amount || '—'}</span>`,
+        `<span style="font-size:11px;color:var(--muted);">${(d.status||'').replaceAll('_',' ')}</span>`,
+        `<span style="font-size:12px;">${(d.due_date||d.seller_response_due_date||'—').replace('T',' ').substring(0,16)}</span>`,
+        _deadlineBadge(days),
+        _oracleBadge(oracleEntry),
+      ];
+
+      tr.innerHTML = cells.map(c => `<td style="padding:10px 12px;vertical-align:middle;">${c}</td>`).join('');
+      tbody.appendChild(tr);
+    });
+
+    table.style.display = 'table';
+    empty.style.display = 'none';
+  }
+
+  async function _loadDisputesForState(state) {
+    const apiKey = _getApiKey();
+    if (!apiKey) {
+      const bar = document.getElementById('disputes-status-bar');
+      bar.style.cssText = 'display:block;background:#fef3c7;color:#92400e;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+      bar.textContent = 'Enter your X-API-Key above to load live dispute data.';
+      return [];
+    }
+    const bar = document.getElementById('disputes-status-bar');
+    bar.style.cssText = 'display:block;background:#dbeafe;color:#1e40af;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;';
+    bar.textContent = `Loading ${state} disputes from PayPal…`;
+    try {
+      const r = await fetch(`/api/paypal/disputes?state=${state}&page_size=50`, {
+        headers: { 'X-API-Key': apiKey },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (r.status === 401) {
+        bar.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+        bar.textContent = 'Invalid API key. Check your X-API-Key.';
+        return [];
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      return data.items || data.urgent_items || [];
+    } catch(e) {
+      bar.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+      bar.textContent = `Error loading disputes: ${e.message}`;
+      return [];
+    }
+  }
+
+  async function loadLiveDisputes() {
+    _disputesAuditCache = null;
+    const inp = document.getElementById('disputes-api-key');
+    if (inp && inp.value.trim()) try { sessionStorage.setItem('anchor_api_key', inp.value.trim()); } catch(e){}
+    const disputes = await _loadDisputesForState('REQUIRED_ACTION');
+    if (!disputes.length && _getApiKey()) {
+      const bar = document.getElementById('disputes-status-bar');
+      if (!bar.textContent.includes('Error') && !bar.textContent.includes('Invalid')) {
+        bar.style.cssText = 'display:block;background:#d1fae5;color:#065f46;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+        bar.textContent = 'No REQUIRED_ACTION disputes — no urgent responses needed right now.';
+      }
+    } else if (disputes.length) {
+      const bar = document.getElementById('disputes-status-bar');
+      bar.style.cssText = 'display:block;background:#d1fae5;color:#065f46;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+      bar.textContent = `Loaded ${disputes.length} disputes requiring action.`;
+    }
+    await _renderDisputesTable(disputes);
+  }
+
+  async function loadAllDisputes() {
+    _disputesAuditCache = null;
+    const inp = document.getElementById('disputes-api-key');
+    if (inp && inp.value.trim()) try { sessionStorage.setItem('anchor_api_key', inp.value.trim()); } catch(e){}
+    const states = ['REQUIRED_ACTION', 'REQUIRED_OTHER_PARTY_ACTION', 'UNDER_REVIEW', 'OPEN_INQUIRIES'];
+    const bar = document.getElementById('disputes-status-bar');
+    bar.style.cssText = 'display:block;background:#dbeafe;color:#1e40af;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;';
+    bar.textContent = 'Loading all open dispute states…';
+    try {
+      const apiKey = _getApiKey();
+      if (!apiKey) { bar.style.cssText = bar.style.cssText.replace('1e40af','92400e').replace('dbeafe','fef3c7'); bar.textContent = 'Enter your X-API-Key above.'; return; }
+      const results = await Promise.all(states.map(s =>
+        fetch(`/api/paypal/disputes?state=${s}&page_size=50`, { headers: { 'X-API-Key': apiKey }, signal: AbortSignal.timeout(15000) })
+          .then(r => r.ok ? r.json() : { items: [] })
+          .then(j => j.items || j.urgent_items || [])
+          .catch(() => [])
+      ));
+      const all = results.flat();
+      const seen = new Set();
+      const unique = all.filter(d => { if (seen.has(d.dispute_id)) return false; seen.add(d.dispute_id); return true; });
+      bar.style.cssText = 'display:block;background:#d1fae5;color:#065f46;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+      bar.textContent = `Loaded ${unique.length} total open disputes.`;
+      await _renderDisputesTable(unique);
+    } catch(e) {
+      bar.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:13px;font-weight:600;';
+      bar.textContent = `Error: ${e.message}`;
+    }
+  }
+
   // Load connections when that panel is first opened
   let _connectionsLoaded = false;
   const _origSwitchPanel = switchPanel;
@@ -1430,6 +1647,14 @@
     }
     if (id === 'audit') loadAudit();
     if (id === 'safety') loadSafety();
+    if (id === 'disputes') {
+      // Pre-fill API key from session storage
+      try {
+        const saved = sessionStorage.getItem('anchor_api_key');
+        const inp = document.getElementById('disputes-api-key');
+        if (saved && inp && !inp.value) inp.value = saved;
+      } catch(e) {}
+    }
   };
 
   // ── Audit Trail panel ──────────────────────────────────

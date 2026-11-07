@@ -8263,5 +8263,458 @@ async def api_auto_categorize(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 106 — Fraud Pattern Detector  POST /api/oracle/fraud-pattern
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/fraud-pattern")
+async def api_fraud_pattern(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    disputes = body.get("disputes", [])  # list of {claim_type, outcome, amount_usd, buyer_email, ip_country, days_since_purchase}
+    threshold_refund_rate = float(body.get("threshold_refund_rate", 0.3))
+
+    total = len(disputes)
+    if total == 0:
+        return JSONResponse({
+            "total_analyzed": 0, "patterns_detected": [], "fraud_risk": "low",
+            "fraud_score": 0, "recommendations": [], "wave": 106,
+        })
+
+    # Pattern 1: Triangulation — same buyer email, multiple disputes
+    email_counts: dict = {}
+    for d in disputes:
+        email = d.get("buyer_email", "unknown")
+        email_counts[email] = email_counts.get(email, 0) + 1
+    repeat_buyers = {e: c for e, c in email_counts.items() if c >= 3}
+
+    # Pattern 2: High refund rate
+    refunds = sum(1 for d in disputes if d.get("outcome") in ("lost", "settled"))
+    refund_rate = refunds / total
+
+    # Pattern 3: Cross-border disputes (ip_country != billing)
+    cross_border = sum(1 for d in disputes if d.get("ip_country") and d.get("ip_country") != "US")
+
+    # Pattern 4: Quick disputes (< 3 days after purchase)
+    quick_disputes = sum(1 for d in disputes if int(d.get("days_since_purchase", 14)) < 3)
+
+    # Pattern 5: High-value cluster
+    high_value = sum(1 for d in disputes if float(d.get("amount_usd", 0)) > 300)
+
+    patterns = []
+    fraud_score = 0
+
+    if repeat_buyers:
+        patterns.append({
+            "pattern": "repeat_dispute_buyer",
+            "severity": "high",
+            "detail": f"{len(repeat_buyers)} buyer(s) filed 3+ disputes",
+        })
+        fraud_score += 30
+
+    if refund_rate > threshold_refund_rate:
+        patterns.append({
+            "pattern": "high_refund_rate",
+            "severity": "medium",
+            "detail": f"Refund/loss rate {refund_rate:.0%} exceeds threshold {threshold_refund_rate:.0%}",
+        })
+        fraud_score += 20
+
+    if cross_border > total * 0.4:
+        patterns.append({
+            "pattern": "cross_border_concentration",
+            "severity": "medium",
+            "detail": f"{cross_border}/{total} disputes from non-US IP",
+        })
+        fraud_score += 15
+
+    if quick_disputes > total * 0.3:
+        patterns.append({
+            "pattern": "rapid_dispute_filing",
+            "severity": "high",
+            "detail": f"{quick_disputes}/{total} disputes filed within 3 days of purchase",
+        })
+        fraud_score += 25
+
+    if high_value > total * 0.5:
+        patterns.append({
+            "pattern": "high_value_cluster",
+            "severity": "medium",
+            "detail": f"{high_value}/{total} disputes over $300",
+        })
+        fraud_score += 10
+
+    fraud_score = min(100, fraud_score)
+
+    if fraud_score >= 60:
+        fraud_risk = "critical"
+    elif fraud_score >= 35:
+        fraud_risk = "high"
+    elif fraud_score >= 15:
+        fraud_risk = "medium"
+    else:
+        fraud_risk = "low"
+
+    recommendations = []
+    if fraud_score >= 60:
+        recommendations.append("URGENT: Flag account(s) for manual review and consider suspending high-risk buyers")
+    if repeat_buyers:
+        recommendations.append("Block or flag buyers with 3+ disputes: " + ", ".join(list(repeat_buyers.keys())[:3]))
+    if quick_disputes > 2:
+        recommendations.append("Add cooling-off period or manual review for orders disputed within 3 days")
+    if refund_rate > threshold_refund_rate:
+        recommendations.append("Review pricing and product listing accuracy to reduce refund rate")
+
+    return JSONResponse({
+        "total_analyzed": total,
+        "patterns_detected": patterns,
+        "fraud_score": fraud_score,
+        "fraud_risk": fraud_risk,
+        "refund_rate": round(refund_rate, 3),
+        "quick_dispute_count": quick_disputes,
+        "cross_border_count": cross_border,
+        "repeat_buyer_count": len(repeat_buyers),
+        "high_value_count": high_value,
+        "recommendations": recommendations,
+        "wave": 106,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 107 — Recovery Probability Scorer  POST /api/oracle/recovery-score
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/recovery-score")
+async def api_recovery_score(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    claim_type = (body.get("claim_type") or "OTHER").upper()
+    amount_usd = float(body.get("amount_usd", 0))
+    has_tracking = bool(body.get("has_tracking", False))
+    has_delivery_confirmation = bool(body.get("has_delivery_confirmation", False))
+    has_communication_log = bool(body.get("has_communication_log", False))
+    has_photos = bool(body.get("has_photos", False))
+    has_refund_policy = bool(body.get("has_refund_policy", False))
+    days_until_deadline = int(body.get("days_until_deadline", 10))
+    buyer_dispute_history = int(body.get("buyer_dispute_history", 0))
+    response_quality_score = float(body.get("response_quality_score", 50))
+
+    # Base recovery probability by claim type
+    _BASE_PROB = {
+        "ITEM_NOT_RECEIVED": 0.55,
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": 0.40,
+        "UNAUTHORIZED": 0.30,
+        "OTHER": 0.45,
+    }
+    base = _BASE_PROB.get(claim_type, 0.45)
+
+    adjustments = []
+    score = base
+
+    if has_tracking:
+        score += 0.15
+        adjustments.append({"factor": "tracking_number", "delta": +0.15})
+    if has_delivery_confirmation:
+        score += 0.12
+        adjustments.append({"factor": "delivery_confirmation", "delta": +0.12})
+    if has_communication_log:
+        score += 0.08
+        adjustments.append({"factor": "communication_log", "delta": +0.08})
+    if has_photos:
+        score += 0.08
+        adjustments.append({"factor": "photos_evidence", "delta": +0.08})
+    if has_refund_policy:
+        score += 0.05
+        adjustments.append({"factor": "refund_policy_doc", "delta": +0.05})
+    if buyer_dispute_history >= 3:
+        score += 0.10
+        adjustments.append({"factor": "repeat_buyer_pattern", "delta": +0.10})
+    if response_quality_score >= 80:
+        score += 0.08
+        adjustments.append({"factor": "high_quality_response", "delta": +0.08})
+    elif response_quality_score < 50:
+        score -= 0.10
+        adjustments.append({"factor": "low_quality_response", "delta": -0.10})
+    if days_until_deadline <= 2:
+        score -= 0.05
+        adjustments.append({"factor": "tight_deadline_pressure", "delta": -0.05})
+
+    score = max(0.0, min(1.0, score))
+
+    expected_recovery = round(score * amount_usd, 2) if amount_usd > 0 else None
+
+    if score >= 0.7:
+        confidence_band = "high"
+        action = "fight"
+    elif score >= 0.5:
+        confidence_band = "medium"
+        action = "fight_or_negotiate"
+    elif score >= 0.35:
+        confidence_band = "low"
+        action = "negotiate"
+    else:
+        confidence_band = "very_low"
+        action = "settle"
+
+    return JSONResponse({
+        "claim_type": claim_type,
+        "amount_usd": amount_usd,
+        "recovery_probability": round(score, 3),
+        "expected_recovery_usd": expected_recovery,
+        "confidence_band": confidence_band,
+        "recommended_action": action,
+        "base_probability": base,
+        "adjustments": adjustments,
+        "days_until_deadline": days_until_deadline,
+        "wave": 107,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 108 — Deadline Escalation Monitor  POST /api/oracle/deadline-escalation
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/deadline-escalation")
+async def api_deadline_escalation(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    disputes = body.get("disputes", [])  # list of {dispute_id, deadline_date, claim_type, amount_usd, status}
+    from datetime import datetime, timezone
+
+    now_utc = datetime.now(timezone.utc)
+
+    escalated = []
+    warnings = []
+    ok = []
+
+    for d in disputes:
+        dispute_id = d.get("dispute_id", "unknown")
+        raw_deadline = d.get("deadline_date")
+        claim_type = d.get("claim_type", "OTHER")
+        amount_usd = float(d.get("amount_usd", 0))
+        status = d.get("status", "open")
+
+        if status not in ("open", "pending"):
+            continue
+
+        if not raw_deadline:
+            warnings.append({
+                "dispute_id": dispute_id, "issue": "missing_deadline",
+                "claim_type": claim_type, "amount_usd": amount_usd,
+            })
+            continue
+
+        try:
+            if isinstance(raw_deadline, str):
+                deadline_dt = datetime.fromisoformat(raw_deadline.replace("Z", "+00:00"))
+            else:
+                continue
+        except ValueError:
+            warnings.append({"dispute_id": dispute_id, "issue": "invalid_deadline_format"})
+            continue
+
+        days_left = (deadline_dt - now_utc).days
+
+        entry = {
+            "dispute_id": dispute_id,
+            "deadline_date": raw_deadline,
+            "days_left": days_left,
+            "claim_type": claim_type,
+            "amount_usd": amount_usd,
+        }
+
+        if days_left < 0:
+            entry["status"] = "overdue"
+            entry["action_required"] = "OVERDUE: Contact PayPal immediately"
+            escalated.append(entry)
+        elif days_left <= 2:
+            entry["status"] = "critical"
+            entry["action_required"] = f"CRITICAL: {days_left}d left — respond today"
+            escalated.append(entry)
+        elif days_left <= 5:
+            entry["status"] = "warning"
+            entry["action_required"] = f"WARNING: {days_left}d left — respond within 24h"
+            warnings.append(entry)
+        else:
+            entry["status"] = "ok"
+            ok.append(entry)
+
+    escalated.sort(key=lambda x: x.get("days_left", 0))
+
+    return JSONResponse({
+        "checked_at_utc": now_utc.isoformat(),
+        "total_checked": len(disputes),
+        "escalated_count": len(escalated),
+        "warning_count": len(warnings),
+        "ok_count": len(ok),
+        "escalated": escalated,
+        "warnings": warnings,
+        "ok": ok,
+        "wave": 108,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 109 — Dispute Portfolio Risk  GET /api/oracle/portfolio-snapshot
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/portfolio-snapshot")
+async def api_portfolio_snapshot(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    disputes = body.get("disputes", [])  # list of {claim_type, amount_usd, status, outcome, days_until_deadline}
+    merchant_id = body.get("merchant_id") or os.getenv("MERCHANT_ID", "anchor-main")
+
+    total = len(disputes)
+    open_disputes = [d for d in disputes if d.get("status") in ("open", "pending")]
+    resolved = [d for d in disputes if d.get("status") == "resolved"]
+
+    total_exposure = sum(float(d.get("amount_usd", 0)) for d in open_disputes)
+    resolved_won = sum(1 for d in resolved if d.get("outcome") == "won")
+    resolved_lost = sum(1 for d in resolved if d.get("outcome") == "lost")
+    resolved_settled = sum(1 for d in resolved if d.get("outcome") == "settled")
+
+    win_rate = resolved_won / len(resolved) if resolved else None
+    loss_exposure = sum(
+        float(d.get("amount_usd", 0)) for d in resolved if d.get("outcome") in ("lost", "settled")
+    )
+
+    # Urgency breakdown
+    critical_count = sum(
+        1 for d in open_disputes if int(d.get("days_until_deadline", 10)) <= 2
+    )
+    warning_count = sum(
+        1 for d in open_disputes if 3 <= int(d.get("days_until_deadline", 10)) <= 5
+    )
+
+    # Claim type distribution
+    type_dist: dict = {}
+    for d in disputes:
+        ct = d.get("claim_type", "OTHER")
+        type_dist[ct] = type_dist.get(ct, 0) + 1
+
+    # Risk rating
+    if critical_count >= 3 or total_exposure > 10000:
+        risk_rating = "critical"
+    elif critical_count >= 1 or total_exposure > 3000:
+        risk_rating = "high"
+    elif warning_count >= 2 or total_exposure > 1000:
+        risk_rating = "medium"
+    else:
+        risk_rating = "low"
+
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "total_disputes": total,
+        "open_disputes": len(open_disputes),
+        "resolved_disputes": len(resolved),
+        "total_open_exposure_usd": round(total_exposure, 2),
+        "total_loss_exposure_usd": round(loss_exposure, 2),
+        "win_rate": round(win_rate, 3) if win_rate is not None else None,
+        "resolved_won": resolved_won,
+        "resolved_lost": resolved_lost,
+        "resolved_settled": resolved_settled,
+        "critical_deadline_count": critical_count,
+        "warning_deadline_count": warning_count,
+        "risk_rating": risk_rating,
+        "claim_type_distribution": type_dist,
+        "wave": 109,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Wave 110 — Dispute Trend Analyzer  POST /api/oracle/dispute-trend
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/dispute-trend")
+async def api_dispute_trend(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    # buckets: list of {period_label, dispute_count, win_count, total_amount_usd}
+    buckets = body.get("buckets", [])
+    merchant_id = body.get("merchant_id") or os.getenv("MERCHANT_ID", "anchor-main")
+    trend_window = int(body.get("trend_window", 3))  # compare last N buckets vs prior N
+
+    if not buckets:
+        return JSONResponse({
+            "merchant_id": merchant_id, "trend": "insufficient_data",
+            "buckets": [], "wave": 110,
+        })
+
+    enriched = []
+    for b in buckets:
+        count = int(b.get("dispute_count", 0))
+        wins = int(b.get("win_count", 0))
+        amount = float(b.get("total_amount_usd", 0))
+        wr = round(wins / count, 3) if count else None
+        enriched.append({
+            "period_label": b.get("period_label", "?"),
+            "dispute_count": count,
+            "win_count": wins,
+            "total_amount_usd": amount,
+            "win_rate": wr,
+            "avg_amount_usd": round(amount / count, 2) if count else 0,
+        })
+
+    n = len(enriched)
+    if n < trend_window * 2:
+        volume_trend = "insufficient_data"
+        win_rate_trend = "insufficient_data"
+    else:
+        recent = enriched[-trend_window:]
+        prior = enriched[-(trend_window * 2):-trend_window]
+
+        recent_avg_count = sum(b["dispute_count"] for b in recent) / trend_window
+        prior_avg_count = sum(b["dispute_count"] for b in prior) / trend_window
+
+        if recent_avg_count > prior_avg_count * 1.2:
+            volume_trend = "increasing"
+        elif recent_avg_count < prior_avg_count * 0.8:
+            volume_trend = "decreasing"
+        else:
+            volume_trend = "stable"
+
+        recent_wins = [b["win_rate"] for b in recent if b["win_rate"] is not None]
+        prior_wins = [b["win_rate"] for b in prior if b["win_rate"] is not None]
+        recent_wr = sum(recent_wins) / len(recent_wins) if recent_wins else None
+        prior_wr = sum(prior_wins) / len(prior_wins) if prior_wins else None
+
+        if recent_wr is None or prior_wr is None:
+            win_rate_trend = "insufficient_data"
+        elif recent_wr > prior_wr + 0.05:
+            win_rate_trend = "improving"
+        elif recent_wr < prior_wr - 0.05:
+            win_rate_trend = "declining"
+        else:
+            win_rate_trend = "stable"
+
+    overall_count = sum(b["dispute_count"] for b in enriched)
+    overall_wins = sum(b["win_count"] for b in enriched)
+    overall_wr = round(overall_wins / overall_count, 3) if overall_count else None
+
+    insights = []
+    if volume_trend == "increasing":
+        insights.append("Dispute volume is trending upward — review product quality and listing accuracy")
+    if win_rate_trend == "declining":
+        insights.append("Win rate is declining — consider improving evidence collection and response speed")
+    if win_rate_trend == "improving":
+        insights.append("Win rate is improving — current practices are working well")
+    if volume_trend == "decreasing":
+        insights.append("Dispute volume is falling — positive sign of improved customer satisfaction")
+
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "total_buckets": n,
+        "trend_window": trend_window,
+        "volume_trend": volume_trend,
+        "win_rate_trend": win_rate_trend,
+        "overall_dispute_count": overall_count,
+        "overall_win_rate": overall_wr,
+        "buckets": enriched,
+        "insights": insights,
+        "wave": 110,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
