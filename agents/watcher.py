@@ -9383,5 +9383,143 @@ async def api_summarize_case(request: Request):
     })
 
 
+# ── Dispute Triage Engine endpoint (wave 121) ─────────────────────────────────
+
+@app.post("/api/oracle/triage-dispute")
+async def api_triage_dispute(request: Request):
+    from oracle.dispute_triage_engine import (
+        DisputeTriageInput, FraudSignal, triage_dispute,
+    )
+    body = await request.json()
+    try:
+        fraud_signal = FraudSignal(body.get("fraud_signal", "MINIMAL").upper())
+    except ValueError:
+        fraud_signal = FraudSignal.MINIMAL
+    inp = DisputeTriageInput(
+        dispute_id=body.get("dispute_id", ""),
+        transaction_amount=float(body.get("transaction_amount", 0.0)),
+        reason_code=body.get("reason_code", "INR"),
+        win_probability=float(body.get("win_probability", 0.50)),
+        fight_cost=float(body.get("fight_cost", 15.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+        seller_protection_eligible=bool(body.get("seller_protection_eligible", False)),
+        has_tracking_evidence=bool(body.get("has_tracking_evidence", False)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        is_vip=bool(body.get("is_vip", False)),
+        buyer_ltv=float(body.get("buyer_ltv", 0.0)),
+        buyer_prior_disputes=int(body.get("buyer_prior_disputes", 0)),
+        fraud_signal=fraud_signal,
+        days_until_deadline=int(body.get("days_until_deadline", 10)),
+        is_subscription=bool(body.get("is_subscription", False)),
+        already_refunded=bool(body.get("already_refunded", False)),
+    )
+    decision = triage_dispute(inp)
+    return JSONResponse({
+        "dispute_id": decision.dispute_id,
+        "priority": decision.priority.value,
+        "routing": decision.routing.value,
+        "ev_fight": decision.ev_fight,
+        "ev_accept": decision.ev_accept,
+        "rationale": decision.rationale,
+        "flags": decision.flags,
+        "suggested_next_action": decision.suggested_next_action,
+        "summary": decision.summary,
+        "wave": 121,
+    })
+
+
+# ── Deadline Tracker endpoint (wave 122) ──────────────────────────────────────
+
+@app.post("/api/oracle/track-deadline")
+async def api_track_deadline(request: Request):
+    from oracle.deadline_tracker import (
+        DisputeDeadlineInput, ResponseStatus, track_deadline,
+    )
+    from datetime import date as _date
+    body = await request.json()
+
+    def _parse_date(raw: str, fallback_days: int = 0) -> _date:
+        from datetime import timedelta as _td
+        if raw:
+            try:
+                return _date.fromisoformat(raw[:10])
+            except (ValueError, TypeError):
+                pass
+        return _date.today() + _td(days=fallback_days)
+
+    try:
+        status_enum = ResponseStatus(body.get("response_status", "NOT_STARTED").upper())
+    except ValueError:
+        status_enum = ResponseStatus.NOT_STARTED
+
+    inp = DisputeDeadlineInput(
+        dispute_id=body.get("dispute_id", ""),
+        true_deadline=_parse_date(body.get("true_deadline", ""), fallback_days=10),
+        opened_date=_parse_date(body.get("opened_date", "")),
+        response_status=status_enum,
+        claim_type=body.get("claim_type", "ITEM_NOT_RECEIVED"),
+        dispute_amount=float(body.get("dispute_amount", 0.0)),
+        is_hdr_contributing=bool(body.get("is_hdr_contributing", True)),
+        estimated_work_hours=float(body.get("estimated_work_hours", 1.0)),
+    )
+    status = track_deadline(inp)
+    return JSONResponse({
+        "dispute_id": status.dispute_id,
+        "true_deadline": status.true_deadline.isoformat(),
+        "effective_deadline": status.effective_deadline.isoformat(),
+        "days_to_true": status.days_to_true,
+        "days_to_effective": status.days_to_effective,
+        "heat": status.heat.value,
+        "response_status": status.response_status.value,
+        "is_at_risk": status.is_at_risk,
+        "claim_type": status.claim_type,
+        "dispute_amount": status.dispute_amount,
+        "is_hdr_contributing": status.is_hdr_contributing,
+        "action_required": status.action_required,
+        "wave": 122,
+    })
+
+
+# ── Deadline Prioritizer endpoint (wave 123) ──────────────────────────────────
+
+@app.post("/api/oracle/prioritize-disputes")
+async def api_prioritize_disputes(request: Request):
+    from oracle.dispute_deadline_prioritizer import (
+        OpenDispute, prioritize_disputes,
+    )
+    body = await request.json()
+    raw_disputes = body.get("disputes", [])
+    disputes: list[OpenDispute] = []
+    for d in raw_disputes:
+        disputes.append(OpenDispute(
+            dispute_id=d.get("dispute_id", ""),
+            claim_type=d.get("claim_type", "INR"),
+            amount_usd=float(d.get("amount_usd", 0.0)),
+            days_until_deadline=int(d.get("days_until_deadline", 10)),
+            win_probability=float(d.get("win_probability", 0.50)),
+            evidence_ready=bool(d.get("evidence_ready", False)),
+        ))
+    report = prioritize_disputes(disputes)
+    return JSONResponse({
+        "critical_count": report.critical_count,
+        "high_count": report.high_count,
+        "total_ev_at_risk_usd": report.total_ev_at_risk_usd,
+        "recommendation_summary": report.recommendation_summary,
+        "disputes": [
+            {
+                "dispute_id": p.dispute_id,
+                "rank": p.rank,
+                "priority_score": p.priority_score,
+                "urgency_label": p.urgency_label.value,
+                "action_recommendation": p.action_recommendation,
+                "days_until_deadline": p.days_until_deadline,
+                "amount_usd": p.amount_usd,
+            }
+            for p in report.disputes
+        ],
+        "wave": 123,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
