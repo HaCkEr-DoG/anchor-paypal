@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, HTMLResponse
 
 from agents.classifier import DisputeClassifier
@@ -43,6 +44,22 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 _log = logging.getLogger("watcher")
+
+# ---------------------------------------------------------------------------
+# Service-level constants — tunable via env vars
+# ---------------------------------------------------------------------------
+_RATE_LIMIT = int(os.environ.get("ORACLE_RATE_LIMIT", "120"))  # max oracle reqs/min per IP
+_MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(512 * 1024)))  # 512 KB default
+
+# In-memory rate-limit buckets: ip → [monotonic timestamps in last 60 s]
+_rate_buckets: dict[str, list[float]] = {}
+
+# Per-path request metrics (count, errors, cumulative ms, peak ms)
+_path_metrics: dict[str, dict] = {}
+
+# Service start time — used for uptime reporting
+_APP_START = time.monotonic()
+_APP_START_DT = datetime.now(timezone.utc)
 
 _scheduler = AsyncIOScheduler()
 
@@ -237,11 +254,56 @@ if not _ORACLE_SECRET:
 async def _request_middleware(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
     start = time.perf_counter()
+    path = request.url.path
+    client_ip = (request.client.host if request.client else "unknown")
 
-    # Optional oracle key gate — only enforced when ORACLE_API_KEY is set
-    if _ORACLE_SECRET and request.url.path.startswith("/api/oracle/"):
+    # 1. Body-size guard — reject oversized payloads before they reach a handler
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_BODY_BYTES:
+        _log.warning(
+            '{"event":"body_too_large","ip":"%s","path":"%s","bytes":%s}',
+            client_ip, path, content_length,
+        )
+        return JSONResponse(
+            status_code=413,
+            content={
+                "error": "request_too_large",
+                "detail": f"Body exceeds the {_MAX_BODY_BYTES}-byte limit",
+                "limit_bytes": _MAX_BODY_BYTES,
+            },
+            headers={"X-Request-ID": request_id},
+        )
+
+    # 2. IP-based rate limiting on oracle endpoints (sliding 60-second window)
+    if path.startswith("/api/oracle/"):
+        now_mono = time.monotonic()
+        cutoff = now_mono - 60.0
+        bucket = [t for t in _rate_buckets.get(client_ip, []) if t > cutoff]
+        if len(bucket) >= _RATE_LIMIT:
+            _log.warning(
+                '{"event":"rate_limit","ip":"%s","path":"%s","count":%d}',
+                client_ip, path, len(bucket),
+            )
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "rate_limit_exceeded",
+                    "detail": f"Max {_RATE_LIMIT} oracle requests per minute per IP",
+                    "retry_after_seconds": 60,
+                },
+                headers={"X-Request-ID": request_id, "Retry-After": "60"},
+            )
+        bucket.append(now_mono)
+        _rate_buckets[client_ip] = bucket
+
+    # 3. Oracle API key gate — enforced only when ORACLE_API_KEY is configured
+    if _ORACLE_SECRET and path.startswith("/api/oracle/"):
         key = request.headers.get("X-Oracle-Key", "")
         if not hmac.compare_digest(key, _ORACLE_SECRET):
+            _log.warning(
+                '{"event":"auth_fail","ip":"%s","path":"%s"}',
+                client_ip, path,
+            )
             return JSONResponse(
                 status_code=401,
                 content={"error": "unauthorized", "detail": "Invalid or missing X-Oracle-Key header"},
@@ -250,13 +312,26 @@ async def _request_middleware(request: Request, call_next):
 
     response = await call_next(request)
     duration_ms = round((time.perf_counter() - start) * 1000, 1)
+
+    # 4. Per-path metrics (non-locking; GIL protects simple dict mutations)
+    m = _path_metrics.setdefault(path, {"count": 0, "errors": 0, "total_ms": 0.0, "max_ms": 0.0})
+    m["count"] += 1
+    m["total_ms"] += duration_ms
+    if duration_ms > m["max_ms"]:
+        m["max_ms"] = duration_ms
+    if response.status_code >= 500:
+        m["errors"] += 1
+
+    # 5. Slow-request warning
+    if duration_ms > 1000:
+        _log.warning(
+            '{"event":"slow_request","path":"%s","ms":%.1f}',
+            path, duration_ms,
+        )
+
     _log.info(
         '{"req_id":"%s","method":"%s","path":"%s","status":%d,"ms":%.1f}',
-        request_id,
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration_ms,
+        request_id, request.method, path, response.status_code, duration_ms,
     )
     response.headers["X-Request-ID"] = request_id
     return response
@@ -271,6 +346,30 @@ async def _global_exception_handler(request: Request, exc: Exception):
             "error": "internal_server_error",
             "detail": str(exc),
             "path": str(request.url.path),
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "detail": exc.errors(),
+            "path": str(request.url.path),
+        },
+    )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": "http_error",
+            "detail": exc.detail,
+            "status_code": exc.status_code,
         },
     )
 
@@ -338,10 +437,11 @@ def _require_api_key(request: Request) -> None:
 @app.get("/api/oracle/catalog", tags=["oracle"], summary="List all oracle endpoints")
 async def oracle_catalog():
     """Return every /api/oracle/* route registered on this app."""
+    _SKIP = {"/api/oracle/catalog"}
     routes = []
     for route in app.routes:
         path = getattr(route, "path", "")
-        if path.startswith("/api/oracle/") and path != "/api/oracle/catalog":
+        if path.startswith("/api/oracle/") and path not in _SKIP:
             routes.append({
                 "path": path,
                 "methods": sorted(getattr(route, "methods", ["GET"])),
@@ -349,6 +449,57 @@ async def oracle_catalog():
             })
     routes.sort(key=lambda r: r["path"])
     return {"total": len(routes), "endpoints": routes}
+
+
+@app.get("/metrics", tags=["health"], summary="Per-path request metrics")
+async def metrics_endpoint():
+    """Live per-path call counts, error counts, avg/max latency."""
+    uptime_s = round(time.monotonic() - _APP_START, 1)
+    rows = []
+    for path, m in sorted(_path_metrics.items(), key=lambda x: -x[1]["count"]):
+        avg_ms = round(m["total_ms"] / m["count"], 1) if m["count"] else 0.0
+        rows.append({
+            "path": path,
+            "count": m["count"],
+            "errors": m["errors"],
+            "avg_ms": avg_ms,
+            "max_ms": round(m["max_ms"], 1),
+        })
+    return {
+        "uptime_seconds": uptime_s,
+        "total_requests": sum(m["count"] for m in _path_metrics.values()),
+        "paths": rows,
+    }
+
+
+@app.get("/api/status", tags=["health"], summary="Service status and configuration checklist")
+async def api_status():
+    """Uptime, oracle endpoint count, rate-limit config, and env-var presence checklist."""
+    uptime_s = round(time.monotonic() - _APP_START, 1)
+    oracle_count = sum(
+        1 for r in app.routes
+        if getattr(r, "path", "").startswith("/api/oracle/")
+        and getattr(r, "path", "") not in {"/api/oracle/catalog"}
+    )
+    env_check = {
+        "PAYPAL_CLIENT_ID": bool(os.environ.get("PAYPAL_CLIENT_ID")),
+        "PAYPAL_CLIENT_SECRET": bool(os.environ.get("PAYPAL_CLIENT_SECRET")),
+        "API_SECRET": bool(os.environ.get("API_SECRET")),
+        "ORACLE_API_KEY": bool(os.environ.get("ORACLE_API_KEY")),
+        "ELASTICSEARCH_URL": bool(os.environ.get("ELASTICSEARCH_URL")),
+        "DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
+        "RENDER_EXTERNAL_URL": bool(os.environ.get("RENDER_EXTERNAL_URL")),
+    }
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "uptime_seconds": uptime_s,
+        "started_at": _APP_START_DT.isoformat(),
+        "oracle_endpoints": oracle_count,
+        "rate_limit_per_minute": _RATE_LIMIT,
+        "max_body_bytes": _MAX_BODY_BYTES,
+        "env": env_check,
+    }
 
 
 # ---------------------------------------------------------------------------
