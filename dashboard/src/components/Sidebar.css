@@ -1,0 +1,50 @@
+.sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  gap: 2px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition: background .15s, color .15s;
+  width: 100%;
+}
+
+.sidebar-item:hover {
+  background: var(--bg);
+}
+
+.sidebar-item.active {
+  background: #ebf4ff;
+  color: var(--paypal-blue);
+  font-weight: 600;
+}
+
+.sidebar-icon {
+  font-size: 16px;
+  width: 20px;
+  text-align: center;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}

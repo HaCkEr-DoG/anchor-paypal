@@ -1,0 +1,34 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --paypal-blue: #003087;
+  --paypal-blue-light: #009cde;
+  --paypal-gold: #ffc439;
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --border: #e1e5eb;
+  --text: #1a1f36;
+  --text-muted: #6b7280;
+  --green: #10b981;
+  --red: #ef4444;
+  --orange: #f59e0b;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,.10);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}

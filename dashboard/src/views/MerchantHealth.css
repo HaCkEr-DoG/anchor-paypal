@@ -1,0 +1,113 @@
+.merchant-health { display: flex; flex-direction: column; gap: 20px; }
+
+.mh-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.mh-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.mh-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow);
+  background: var(--surface);
+}
+
+.mh-card--green { border-top: 3px solid var(--green); }
+.mh-card--blue  { border-top: 3px solid var(--paypal-blue-light); }
+.mh-card--orange{ border-top: 3px solid var(--orange); }
+.mh-card--red   { border-top: 3px solid var(--red); }
+
+.mh-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.mh-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.mh-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.mh-score {
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.mh-score-label {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.mh-projected {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.mh-metrics {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mh-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 70px;
+  background: var(--bg);
+  padding: 6px 8px;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.mh-metric-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.mh-metric-value {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mh-metric-value.good { color: #065f46; }
+.mh-metric-value.bad  { color: #991b1b; }
+
+.mh-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.mh-paypal {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 6px 8px;
+  background: #f8fafc;
+  border-radius: 4px;
+  font-style: italic;
+  line-height: 1.4;
+}

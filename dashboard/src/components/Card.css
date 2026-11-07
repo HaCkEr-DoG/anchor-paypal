@@ -1,0 +1,112 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.card-body {
+  padding: 16px 20px;
+}
+
+/* Stat tiles */
+.stat-tile {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+
+.stat-tile--green { border-top: 3px solid var(--green); }
+.stat-tile--red   { border-top: 3px solid var(--red); }
+.stat-tile--orange{ border-top: 3px solid var(--orange); }
+.stat-tile--blue  { border-top: 3px solid var(--paypal-blue-light); }
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.1;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-top: 4px;
+}
+
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* Badge */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+
+.badge--blue   { background: #dbeafe; color: #1e40af; }
+.badge--green  { background: #d1fae5; color: #065f46; }
+.badge--red    { background: #fee2e2; color: #991b1b; }
+.badge--orange { background: #fef3c7; color: #92400e; }
+.badge--gray   { background: #f3f4f6; color: #374151; }
+.badge--purple { background: #ede9fe; color: #5b21b6; }
+
+/* Progress bar */
+.progress-wrap {
+  position: relative;
+  background: #e5e7eb;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+
+.progress-bar--blue   { background: var(--paypal-blue-light); }
+.progress-bar--green  { background: var(--green); }
+.progress-bar--red    { background: var(--red); }
+.progress-bar--orange { background: var(--orange); }
+
+.progress-label {
+  position: absolute;
+  right: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+}

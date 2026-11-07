@@ -1,0 +1,122 @@
+.forecast-view { display: flex; flex-direction: column; gap: 20px; }
+
+.fv-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.fv-list { display: flex; flex-direction: column; gap: 12px; }
+
+.fv-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface);
+}
+
+.fv-item--green  { border-left: 4px solid var(--green); }
+.fv-item--orange { border-left: 4px solid var(--orange); }
+.fv-item--red    { border-left: 4px solid var(--red); }
+
+.fv-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.fv-order-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+code {
+  font-size: 12px;
+  color: var(--paypal-blue);
+  background: #ebf4ff;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.fv-merchant { font-size: 13px; color: var(--text-muted); }
+
+.fv-badges { display: flex; gap: 4px; }
+
+.fv-prob-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fv-prob-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  min-width: 140px;
+}
+
+.fv-prob-bar-wrap {
+  flex: 1;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.fv-prob-bar {
+  height: 100%;
+  border-radius: 4px;
+  transition: width .3s;
+}
+
+.fv-prob-pct {
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 36px;
+  text-align: right;
+}
+
+.fv-signals, .fv-prevention {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fv-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  margin-right: 2px;
+  align-self: center;
+}
+
+.fv-prevention ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fv-prevention li {
+  font-size: 12px;
+  color: var(--text);
+  padding-left: 14px;
+  position: relative;
+}
+
+.fv-prevention li::before {
+  content: '✓';
+  position: absolute;
+  left: 0;
+  color: var(--green);
+  font-weight: 700;
+}
