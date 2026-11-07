@@ -610,6 +610,67 @@
     .placeholder-panel h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
     .placeholder-panel p { font-size: 13.5px; }
 
+    /* ── Connections panel ─────────────────────────────── */
+    .connections-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 14px;
+    }
+    .conn-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    .conn-logo {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: #f3f3f4;
+      border: 1px solid var(--border-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .conn-info { flex: 1; min-width: 0; }
+    .conn-name { font-size: 13.5px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+    .conn-desc { font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.4; }
+    .conn-endpoints { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .conn-ep {
+      font-size: 10.5px;
+      font-family: "SF Mono", ui-monospace, monospace;
+      background: #f3f3f4;
+      border: 1px solid var(--border-light);
+      border-radius: 4px;
+      padding: 2px 6px;
+      color: var(--muted);
+    }
+    .conn-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+    .conn-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .conn-dot.ok { background: #059669; }
+    .conn-dot.demo { background: #f59e0b; }
+    .conn-dot.checking { background: #9898a3; animation: pulse2 1.4s infinite; }
+    @keyframes pulse2 { 0%,100%{opacity:1}50%{opacity:.3} }
+    .conn-status.ok { color: #059669; }
+    .conn-status.demo { color: #c97e00; }
+    .conn-status.checking { color: var(--muted-2); }
+
     /* ── Spinner ───────────────────────────────────────── */
     .spinner {
       display: inline-block;
@@ -855,11 +916,10 @@
   <div class="panel" id="panel-connections" role="tabpanel" aria-labelledby="tab-connections">
     <div class="page-header">
       <h1>Connections</h1>
-      <p>Sponsor integrations and service health.</p>
+      <p>All 10 Hackathon sponsor integrations — live status from each service.</p>
     </div>
-    <div class="placeholder-panel">
-      <h3>Integration health</h3>
-      <p>Status for Render, AG Grid, Bryntum, Zapier, Elastic, APIMatic, Postman, Astropods, Channel3, and KERNEL.</p>
+    <div class="connections-grid" id="connections-grid" aria-live="polite">
+      <!-- Cards injected by JS -->
     </div>
   </div>
 
@@ -1139,6 +1199,147 @@
       closeDrawer();
     }
   });
+
+  // ── Connections panel ───────────────────────────────────
+  const SPONSORS = [
+    {
+      key: 'render', name: 'Render', logo: '🟣', category: 'Hosting',
+      desc: 'Always-on cloud hosting for Anchor. Auto-deploys on every GitHub push.',
+      endpoints: ['GET /api/render/status', 'GET /api/render/health'],
+      statusUrl: '/api/render/health',
+      statusKey: 'status',
+    },
+    {
+      key: 'aggrid', name: 'AG Grid', logo: '📊', category: 'UI · Data Grid',
+      desc: 'Community 31.3.2 — powers the Disputes and Recoveries data tables with column groups and CSV export.',
+      endpoints: ['GET /api/aggrid/status', 'GET /api/aggrid/data'],
+      statusUrl: '/api/aggrid/status',
+      statusKey: 'status',
+    },
+    {
+      key: 'bryntum', name: 'Bryntum', logo: '📅', category: 'UI · Scheduler',
+      desc: 'Deadline and response timeline visualization in the dispute management view.',
+      endpoints: ['GET /api/bryntum/status', 'GET /api/bryntum/data'],
+      statusUrl: '/api/bryntum/status',
+      statusKey: 'status',
+    },
+    {
+      key: 'zapier', name: 'Zapier', logo: '⚡', category: 'Automation',
+      desc: 'Webhook subscriptions — Zapier can trigger Anchor on new disputes and receive real-time alerts.',
+      endpoints: ['POST /api/zapier/subscribe', 'POST /api/zapier/ingest'],
+      statusUrl: null,
+      statusKey: null,
+    },
+    {
+      key: 'elastic', name: 'Elastic', logo: '🔍', category: 'Search',
+      desc: 'Full-text search and indexing over dispute history. Keyword and structured queries across all cases.',
+      endpoints: ['POST /api/elastic/search', 'GET /api/elastic/stats'],
+      statusUrl: '/api/elastic/stats',
+      statusKey: 'status',
+    },
+    {
+      key: 'apimatic', name: 'APIMatic', logo: '📐', category: 'API · SDK Gen',
+      desc: 'Auto-generates SDKs from Anchor\'s OpenAPI spec. Full endpoint catalog and schema export.',
+      endpoints: ['GET /api/openapi.json', 'GET /api/apimatic/context'],
+      statusUrl: '/api/openapi.json',
+      statusKey: null,
+    },
+    {
+      key: 'postman', name: 'Postman', logo: '📮', category: 'API · Testing',
+      desc: 'Runnable Postman collection covering every Anchor endpoint — importable in one click.',
+      endpoints: ['GET /api/postman/collection', 'POST /api/postman/publish'],
+      statusUrl: '/api/postman/status',
+      statusKey: 'status',
+    },
+    {
+      key: 'astropods', name: 'Astropods', logo: '🤖', category: 'Agent Governance',
+      desc: 'AgentOS registry — Anchor\'s full oracle fleet registered as governed AI agents with metadata.',
+      endpoints: ['GET /api/astropods/status', 'GET /api/astropods/agent-registry'],
+      statusUrl: '/api/astropods/status',
+      statusKey: 'status',
+    },
+    {
+      key: 'channel3', name: 'Channel3', logo: '🛍️', category: 'Commerce Enrichment',
+      desc: 'Agentic commerce — enriches INR/SNAD disputes with live product details and delivery verification.',
+      endpoints: ['GET /api/channel3/product-lookup', 'POST /api/channel3/dispute-enrich'],
+      statusUrl: '/api/channel3/status',
+      statusKey: 'status',
+    },
+    {
+      key: 'kernel', name: 'KERNEL', logo: '🌐', category: 'Community Trust',
+      desc: 'Cross-references buyer IDs against KERNEL\'s community trust graph. Surfaces repeat-disputer risk.',
+      endpoints: ['POST /api/kernel/community-trust', 'GET /api/kernel/trust-stats'],
+      statusUrl: '/api/kernel/status',
+      statusKey: 'status',
+    },
+  ];
+
+  async function loadConnections() {
+    const grid = document.getElementById('connections-grid');
+    if (!grid) return;
+
+    // Render cards immediately with "checking" state
+    grid.innerHTML = SPONSORS.map(s => `
+      <div class="conn-card" id="conn-${s.key}">
+        <div class="conn-logo" aria-hidden="true">${s.logo}</div>
+        <div class="conn-info">
+          <div class="conn-name">${s.name} <span style="font-size:11px;font-weight:500;color:var(--muted-2);margin-left:4px;">${s.category}</span></div>
+          <div class="conn-desc">${s.desc}</div>
+          <div class="conn-endpoints">${s.endpoints.map(e => `<span class="conn-ep">${e}</span>`).join('')}</div>
+          <div class="conn-status checking" id="conn-status-${s.key}">
+            <span class="conn-dot checking"></span>
+            Checking…
+          </div>
+        </div>
+      </div>
+    `).join('');
+
+    // Probe each endpoint in parallel
+    await Promise.all(SPONSORS.map(async s => {
+      const el = document.getElementById('conn-status-' + s.key);
+      if (!el) return;
+      if (!s.statusUrl) {
+        // Zapier — static (webhook-driven, no GET probe)
+        el.className = 'conn-status demo';
+        el.innerHTML = '<span class="conn-dot demo"></span>Webhook ready';
+        return;
+      }
+      try {
+        const res = await fetch(s.statusUrl, { signal: AbortSignal.timeout(4000) });
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const statusVal = s.statusKey ? (data[s.statusKey] || '') : '';
+          const isDemo = String(statusVal).toLowerCase().includes('demo') ||
+                         String(statusVal).toLowerCase().includes('simulated');
+          el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
+          el.innerHTML = isDemo
+            ? '<span class="conn-dot demo"></span>Demo mode'
+            : '<span class="conn-dot ok"></span>Connected';
+          // Extra detail if available
+          if (data.version) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">v${data.version}</span>`;
+          if (data.requests_indexed != null) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">${data.requests_indexed} requests</span>`;
+          if (data.agent_count != null) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">${data.agent_count} agents</span>`;
+        } else {
+          el.className = 'conn-status demo';
+          el.innerHTML = '<span class="conn-dot demo"></span>Demo mode';
+        }
+      } catch(e) {
+        el.className = 'conn-status demo';
+        el.innerHTML = '<span class="conn-dot demo"></span>Demo mode';
+      }
+    }));
+  }
+
+  // Load connections when that panel is first opened
+  let _connectionsLoaded = false;
+  const _origSwitchPanel = switchPanel;
+  window.switchPanel = function(id) {
+    _origSwitchPanel(id);
+    if (id === 'connections' && !_connectionsLoaded) {
+      _connectionsLoaded = true;
+      loadConnections();
+    }
+  };
 </script>
 </body>
 </html>
