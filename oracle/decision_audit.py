@@ -113,6 +113,7 @@ def log_decision(
     with _lock:
         _ring.append(entry)
         _try_append_jsonl(entry)
+        _try_append_pg(entry)
     return entry
 
 
@@ -176,3 +177,13 @@ def _try_append_jsonl(entry: AuditEntry) -> None:
             f.write(line)
     except Exception:
         pass  # disk write is best-effort; ring buffer is authoritative
+
+
+def _try_append_pg(entry: AuditEntry) -> None:
+    if not os.environ.get("DATABASE_URL"):
+        return
+    try:
+        import agents.pg_store as pg_store
+        pg_store.append_audit_entry(asdict(entry))
+    except Exception:
+        pass  # PG write is best-effort alongside JSONL

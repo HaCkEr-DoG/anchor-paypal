@@ -15,6 +15,7 @@ PayPal webhook events we handle:
   BILLING.SUBSCRIPTION.PAYMENT.FAILED → flag for invoice follow-up
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -41,8 +42,19 @@ _scheduler = AsyncIOScheduler()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global APPROVAL_TOKEN_SECRET
+    import asyncio
     from zoneinfo import ZoneInfo
     from agents.config import load_config as _load_config
+
+    # Initialise PostgreSQL tables when DATABASE_URL is available
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        ok = await asyncio.to_thread(pg_store.init_db)
+        if ok:
+            print("[Watcher] PostgreSQL tables ready")
+        else:
+            print("[Watcher] WARNING: PostgreSQL init failed — falling back to ES/JSONL storage")
+
     APPROVAL_TOKEN_SECRET = await _load_or_create_approval_secret()
     _merchant_id = os.environ.get("MERCHANT_ID", "default")
     _brief_hour = 8
@@ -213,15 +225,30 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
     event_id = event.get("id", "")
     event_type = event.get("event_type", "")
 
-    # ── Webhook outbox: persist BEFORE processing ────────────────────────────
-    # Saves the verified event to durable storage first so a background-task
-    # crash cannot silently drop it. PayPal retries delivery, but a premature
-    # duplicate-check mark would block the retry — the outbox prevents that.
-    _save_webhook_outbox(event_id, event_type, event)
-
-    if event_id and await _is_duplicate(event_id):
-        print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored")
-        return
+    # ── Webhook outbox: persist + dedup ─────────────────────────────────────
+    # When DATABASE_URL is set: single atomic INSERT ON CONFLICT DO NOTHING.
+    # rowcount=0 means duplicate — no second round-trip needed.
+    # Without DATABASE_URL: fall back to the existing ES → JSONL/memory chain.
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        try:
+            is_new = await asyncio.to_thread(
+                pg_store.save_webhook_event_atomic, event_id, event_type, event
+            )
+            if not is_new:
+                print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored (pg)")
+                return
+        except Exception as _pg_exc:
+            print(f"[Watcher] PG outbox failed ({_pg_exc}) — falling back to ES/JSONL path")
+            _save_webhook_outbox(event_id, event_type, event)
+            if event_id and await _is_duplicate(event_id):
+                print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored (fallback)")
+                return
+    else:
+        _save_webhook_outbox(event_id, event_type, event)
+        if event_id and await _is_duplicate(event_id):
+            print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored")
+            return
 
     if event_type == "CUSTOMER.DISPUTE.CREATED":
         background.add_task(_handle_dispute_created, event, merchant_id)
@@ -2057,16 +2084,30 @@ async def api_audit_log(limit: int = 50):
     """
     GET /api/audit/log?limit=50
 
-    Returns the most recent oracle decisions from the in-memory audit log.
-    Every entry is labeled with is_sandbox so callers can distinguish
-    test decisions from production ones.
+    Returns the most recent oracle decisions. When DATABASE_URL is set,
+    queries PostgreSQL (durable across restarts); otherwise returns the
+    in-memory ring buffer. Every entry is labeled with is_sandbox.
     """
     from oracle.decision_audit import get_recent
     from dataclasses import asdict
-    entries = get_recent(limit=min(limit, 200))
+    capped = min(limit, 200)
+
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        pg_entries = await asyncio.to_thread(pg_store.get_audit_entries, capped)
+        if pg_entries:
+            return JSONResponse({
+                "entries": pg_entries,
+                "count": len(pg_entries),
+                "source": "postgresql",
+                "note": "Entries labeled is_sandbox=true are test/demo decisions",
+            })
+
+    entries = get_recent(limit=capped)
     return JSONResponse({
         "entries": [asdict(e) for e in entries],
         "count": len(entries),
+        "source": "memory",
         "note": "Entries labeled is_sandbox=true are test/demo decisions",
     })
 
@@ -2076,13 +2117,94 @@ async def api_audit_stats():
     """
     GET /api/audit/stats
 
-    Aggregate stats over all logged decisions: action breakdown,
-    outcome breakdown, total amount at risk, average win probability,
-    and percentage of entries that are sandbox vs production.
+    Aggregate stats over all logged decisions. When DATABASE_URL is set,
+    queries PostgreSQL for durable cross-restart stats; otherwise uses
+    the in-memory ring buffer.
     """
     from oracle.decision_audit import get_stats
+
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        pg_stats = await asyncio.to_thread(pg_store.get_audit_stats)
+        if pg_stats:
+            return JSONResponse(pg_stats)
+
     stats = get_stats()
     return JSONResponse(stats)
+
+
+@app.post("/api/admin/register-webhook")
+async def api_register_webhook(request: Request):
+    """
+    POST /api/admin/register-webhook
+
+    One-click PayPal webhook registration. Registers the correct event
+    types against this deployment's /webhooks/paypal URL.
+
+    Requires X-API-Key header. Body: { merchant_id (optional) }
+    Returns: webhook_id, url, event_types, registered_at
+    """
+    _require_api_key(request)
+    body = await request.json()
+    merchant_id = body.get("merchant_id", os.environ.get("MERCHANT_ID", ""))
+
+    from agents.paypal_client import get_client
+    client = get_client()
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not base_url:
+        return JSONResponse(
+            {"error": "RENDER_EXTERNAL_URL env var not set — cannot determine webhook URL"},
+            status_code=400,
+        )
+
+    webhook_url = (
+        f"{base_url}/webhooks/paypal/{merchant_id}"
+        if merchant_id
+        else f"{base_url}/webhooks/paypal"
+    )
+    event_types = [
+        "CUSTOMER.DISPUTE.CREATED",
+        "CUSTOMER.DISPUTE.UPDATED",
+        "CHECKOUT.ORDER.APPROVED",
+        "INVOICING.INVOICE.PAYMENT.PAID",
+        "INVOICING.INVOICE.UPDATED",
+        "PAYMENT.CAPTURE.COMPLETED",
+        "BILLING.SUBSCRIPTION.PAYMENT.FAILED",
+    ]
+    try:
+        token = await client.get_token()
+        import httpx
+        paypal_base = (
+            "https://api-m.sandbox.paypal.com"
+            if os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox"
+            else "https://api-m.paypal.com"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.post(
+                f"{paypal_base}/v1/notifications/webhooks",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "url": webhook_url,
+                    "event_types": [{"name": e} for e in event_types],
+                },
+            )
+        if r.status_code in (200, 201):
+            data = r.json()
+            return JSONResponse({
+                "webhook_id": data.get("id"),
+                "url": webhook_url,
+                "event_types": event_types,
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+            })
+        return JSONResponse(
+            {"error": f"PayPal API returned {r.status_code}", "detail": r.text},
+            status_code=r.status_code,
+        )
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 @app.get("/api/safety/check")
