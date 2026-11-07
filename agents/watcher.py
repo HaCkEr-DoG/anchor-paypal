@@ -80,6 +80,16 @@ async def lifespan(app: FastAPI):
     if not os.environ.get("PAYPAL_WEBHOOK_ID"):
         await _auto_register_webhook()
 
+    # Repopulate in-memory deadline store from PayPal API (no-op when ES/PG available)
+    _merchant_id = os.environ.get("MERCHANT_ID", "default")
+    try:
+        from agents.deadline_tracker import startup_sync as _deadline_startup_sync
+        _n = await _deadline_startup_sync(_merchant_id)
+        if _n:
+            print(f"[Watcher] Deadline startup sync: {_n} open disputes restored")
+    except Exception as _exc:
+        print(f"[Watcher] Deadline startup sync failed (non-fatal): {_exc}")
+
     yield
     _scheduler.shutdown()
 
@@ -2637,6 +2647,27 @@ async def api_deadlines(merchant_id: str):
 async def api_deadlines_default():
     """Open deadlines for the default merchant (MERCHANT_ID env var)."""
     return await api_deadlines(os.environ.get("MERCHANT_ID", "default"))
+
+
+@app.post("/api/admin/startup-sync")
+async def api_startup_sync(request: Request):
+    """
+    POST /api/admin/startup-sync
+
+    Manually trigger the deadline startup sync — repopulates the in-memory
+    deadline store from the live PayPal API. Useful after a restart to
+    immediately recover deadline awareness without waiting for the next
+    webhook. Requires X-API-Key.
+    """
+    _require_api_key(request)
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    try:
+        from agents.deadline_tracker import startup_sync as _ss
+        n = await _ss(merchant_id)
+        return JSONResponse({"synced": n, "merchant_id": merchant_id,
+                             "message": f"Loaded {n} open disputes into memory deadline tracker"})
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ── Oracle Calibration ────────────────────────────────────────────────────────

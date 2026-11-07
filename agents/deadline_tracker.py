@@ -58,6 +58,10 @@ ALERT_THRESHOLDS_HOURS = [
     (2,   "2_hours",  "⛔ Auto-action in 2 hours unless you respond"),
 ]
 
+# In-memory fallback when neither Elasticsearch nor PostgreSQL is configured.
+# Loses state on restart, but startup_sync() can repopulate from PayPal API.
+_memory_store: dict[str, "OpenDispute"] = {}
+
 # When less than this many hours remain and no human action, auto-accept
 AUTO_ACTION_HOURS = 2
 
@@ -107,13 +111,16 @@ def hours_until_deadline(response_deadline_iso: str) -> float:
 
 async def store_open_dispute(dispute: OpenDispute) -> bool:
     """
-    Persist an open dispute to the ES deadline-tracking index.
-    Uses op_type=create to avoid overwriting existing entries.
+    Persist an open dispute to ES (preferred) or in-memory fallback.
+    Uses op_type=create against ES to avoid overwriting existing entries.
     """
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
-        return False
+        if dispute.dispute_id not in _memory_store:
+            _memory_store[dispute.dispute_id] = dispute
+            print(f"[DeadlineTracker] Stored {dispute.dispute_id} in memory (no ES/PG configured)")
+        return True
 
     doc = {
         "dispute_id": dispute.dispute_id,
@@ -144,7 +151,8 @@ async def mark_dispute_resolved(dispute_id: str) -> bool:
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
-        return False
+        _memory_store.pop(dispute_id, None)
+        return True
     try:
         async with httpx.AsyncClient(timeout=4.0) as c:
             r = await c.delete(
@@ -161,7 +169,10 @@ async def update_alert_level(dispute_id: str, level: str, auto_acted: bool = Fal
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
-        return False
+        if dispute_id in _memory_store:
+            _memory_store[dispute_id].last_alert_level = level
+            _memory_store[dispute_id].auto_acted = auto_acted
+        return True
     try:
         async with httpx.AsyncClient(timeout=4.0) as c:
             r = await c.post(
@@ -176,11 +187,14 @@ async def update_alert_level(dispute_id: str, level: str, auto_acted: bool = Fal
 
 
 async def get_open_disputes(merchant_id: str = "") -> list[OpenDispute]:
-    """Fetch all open (non-auto-acted) disputes from the deadline-tracking index."""
+    """Fetch all open (non-auto-acted) disputes from ES or in-memory fallback."""
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
-        return []
+        result = [d for d in _memory_store.values() if not d.auto_acted]
+        if merchant_id:
+            result = [d for d in result if d.merchant_id == merchant_id]
+        return result
 
     filters = [{"term": {"auto_acted": False}}]
     if merchant_id:
@@ -412,3 +426,62 @@ def generate_response_template(
 
     lines += ["", "Thank you for your review."]
     return "\n".join(lines)
+
+
+async def startup_sync(merchant_id: str) -> int:
+    """
+    Called at service startup to repopulate the in-memory deadline store
+    from the live PayPal API. Runs even when ES/PG are absent so the
+    service has deadline awareness immediately after a restart.
+
+    Returns the number of disputes loaded.
+    """
+    es_url = os.environ.get("ELASTICSEARCH_URL", "")
+    es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
+    # Only needed for in-memory mode; ES already has persistent state
+    if es_url and es_key:
+        return 0
+
+    try:
+        from agents.paypal_client import get_client
+        client = get_client()
+        if not client.configured():
+            print("[DeadlineTracker] startup_sync skipped: PayPal not configured")
+            return 0
+
+        loaded = 0
+        for state in ("REQUIRED_ACTION", "REQUIRED_OTHER_PARTY_ACTION", "UNDER_REVIEW"):
+            try:
+                data = await client.list_disputes(dispute_state=state, page_size=50)
+            except Exception as exc:
+                print(f"[DeadlineTracker] startup_sync: could not list {state}: {exc}")
+                continue
+
+            for item in data.get("items", []):
+                did = item.get("dispute_id", "")
+                if not did or did in _memory_store:
+                    continue
+                money = item.get("dispute_amount", {})
+                try:
+                    amount = float(money.get("value", 0))
+                except (TypeError, ValueError):
+                    amount = 0.0
+                reason = item.get("reason", "")
+                opened = item.get("create_time", datetime.now(timezone.utc).isoformat())
+                due = item.get("seller_response_due_date") or compute_deadline(opened, reason)
+                _memory_store[did] = OpenDispute(
+                    dispute_id=did,
+                    merchant_id=merchant_id,
+                    amount=amount,
+                    reason_code=reason,
+                    opened_at=opened,
+                    response_deadline=due,
+                )
+                loaded += 1
+
+        if loaded:
+            print(f"[DeadlineTracker] startup_sync: loaded {loaded} open disputes into memory")
+        return loaded
+    except Exception as exc:
+        print(f"[DeadlineTracker] startup_sync failed: {exc}")
+        return 0
