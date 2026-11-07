@@ -3491,3 +3491,136 @@ async def merchant_benchmark(request: Request):
         "merchant_coaching": r.merchant_coaching,
         "summary": r.summary,
     })
+
+
+# ─── Zapier Integration Endpoints ────────────────────────────────────────────
+#
+# Zapier can:
+#   1. Push new disputes INTO Anchor (trigger intake pipeline)
+#   2. Subscribe to Anchor events via webhook (register a Zapier hook URL)
+#   3. Pull dispute summaries as trigger data for downstream Zaps
+#
+# This enables merchants to wire Anchor into their existing Zapier workflows:
+#   PayPal Dispute → Zapier → POST /api/zapier/ingest → Anchor scores it →
+#   sends scoring summary back via POST to merchant's Zapier webhook URL.
+
+
+# In-memory webhook registry (production: use Redis/DB)
+_zapier_hooks: dict[str, str] = {}  # hook_id → callback_url
+
+
+@app.post("/api/zapier/subscribe")
+async def zapier_subscribe(request: Request):
+    """
+    Zapier REST Hook subscribe endpoint.
+    Zapier POSTs here to register a callback URL for Anchor events.
+    Returns hook_id for unsubscribe.
+    """
+    import uuid
+    body = await request.json()
+    callback_url = body.get("hookUrl") or body.get("callback_url", "")
+    hook_id = str(uuid.uuid4())[:12]
+    _zapier_hooks[hook_id] = callback_url
+    return JSONResponse({
+        "hook_id": hook_id,
+        "status": "subscribed",
+        "message": f"Anchor will POST dispute events to {callback_url}",
+        "event_types": ["dispute.scored", "dispute.p0_alert", "merchant.health_degraded"],
+    })
+
+
+@app.delete("/api/zapier/unsubscribe/{hook_id}")
+async def zapier_unsubscribe(hook_id: str):
+    """Zapier REST Hook unsubscribe endpoint."""
+    removed = _zapier_hooks.pop(hook_id, None)
+    return JSONResponse({
+        "hook_id": hook_id,
+        "status": "unsubscribed" if removed else "not_found",
+    })
+
+
+@app.post("/api/zapier/ingest")
+async def zapier_ingest(request: Request):
+    """
+    Zapier trigger: a new PayPal dispute lands in the merchant's queue.
+    Anchor runs it through the oracle pipeline and returns a scored summary.
+    Optionally fires registered webhook callbacks with the result.
+
+    Body: { dispute_id, amount, reason_code, merchant_id, deadline?,
+            win_probability?, expected_value?, evidence_items? }
+    """
+    import httpx
+    from datetime import date, timedelta
+
+    body = await request.json()
+    dispute_id = body.get("dispute_id", "ZAP-001")
+    amount = float(body.get("amount", 0))
+    reason_code = body.get("reason_code", "INR").upper()
+    merchant_id = body.get("merchant_id", "UNKNOWN")
+    days_until = int(body.get("days_until_deadline", 7))
+    win_prob = float(body.get("win_probability", 0.60))
+    ev = float(body.get("expected_value", amount * win_prob * 0.5))
+
+    # Quick priority assessment
+    from oracle.deadline_prioritizer import (
+        prioritize_disputes, PrioritizerInput, OpenDispute,
+    )
+    od = OpenDispute(
+        dispute_id=dispute_id,
+        amount=amount,
+        reason_code=reason_code,
+        deadline=date.today() + timedelta(days=days_until),
+        win_probability=win_prob,
+        expected_value=ev,
+    )
+    queue = prioritize_disputes(PrioritizerInput(
+        merchant_id=merchant_id,
+        disputes=[od],
+    ))
+    item = queue.items[0] if queue.items else None
+
+    result = {
+        "dispute_id": dispute_id,
+        "merchant_id": merchant_id,
+        "amount": amount,
+        "reason_code": reason_code,
+        "priority": item.priority.value if item else "UNKNOWN",
+        "urgency_score": item.urgency_score if item else 0,
+        "recommended_action": item.recommended_action.value if item else "SCHEDULE_FOR_LATER",
+        "action_detail": item.action_detail if item else "",
+        "days_remaining": days_until,
+        "event_type": "dispute.scored",
+        "anchor_version": "71",
+    }
+
+    # Fire all registered webhooks (non-blocking best-effort)
+    if _zapier_hooks:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            for hook_id, url in list(_zapier_hooks.items()):
+                try:
+                    await client.post(url, json=result)
+                except Exception:
+                    pass  # never fail the main response due to webhook delivery
+
+    return JSONResponse(result)
+
+
+@app.get("/api/zapier/sample-dispute")
+async def zapier_sample():
+    """
+    Zapier trigger polling endpoint — returns a sample dispute event
+    so Zapier can map fields during Zap setup.
+    """
+    return JSONResponse([{
+        "dispute_id": "PP-D-SAMPLE-001",
+        "merchant_id": "MERCH_DEMO",
+        "amount": 299.00,
+        "reason_code": "INR",
+        "priority": "P1_HIGH",
+        "urgency_score": 0.72,
+        "recommended_action": "GATHER_EVIDENCE",
+        "action_detail": "2d remaining. Gather tracking + POD.",
+        "days_remaining": 2,
+        "event_type": "dispute.scored",
+        "anchor_version": "71",
+    }])

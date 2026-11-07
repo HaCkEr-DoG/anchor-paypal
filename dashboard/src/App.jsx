@@ -6,10 +6,12 @@ import MerchantHealth from './views/MerchantHealth.jsx'
 import ROICalculator from './views/ROICalculator.jsx'
 import BuyerRisk from './views/BuyerRisk.jsx'
 import ForecastView from './views/ForecastView.jsx'
+import DeadlineTimeline from './views/DeadlineTimeline.jsx'
 import './App.css'
 
 const VIEWS = [
   { id: 'queue',    label: 'Dispute Queue',      icon: '⚡' },
+  { id: 'timeline', label: 'Deadline Timeline',  icon: '📅' },
   { id: 'health',   label: 'Merchant Health',    icon: '🏪' },
   { id: 'roi',      label: 'Refund ROI',         icon: '💰' },
   { id: 'buyer',    label: 'Buyer Risk',         icon: '👤' },
@@ -34,6 +36,7 @@ export default function App() {
         <Sidebar views={VIEWS} active={view} onNavigate={setView} />
         <main className="app-main">
           {view === 'queue'    && <DisputeQueue />}
+          {view === 'timeline' && <DeadlineTimeline />}
           {view === 'health'   && <MerchantHealth />}
           {view === 'roi'      && <ROICalculator />}
           {view === 'buyer'    && <BuyerRisk />}

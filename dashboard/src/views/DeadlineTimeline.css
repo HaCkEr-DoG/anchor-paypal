@@ -1,0 +1,244 @@
+.dt-root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: inherit;
+}
+
+/* Stats */
+.dt-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.dt-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.dt-stat-val {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--paypal-blue);
+}
+
+.dt-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-top: 4px;
+}
+
+/* Grid layout constants */
+.dt-row-label-col { width: 200px; min-width: 200px; flex-shrink: 0; }
+.dt-timeline-col  { flex: 1; position: relative; }
+
+/* Header */
+.dt-header-row {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.dt-header-cell {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  border-right: 1px solid var(--border);
+}
+
+.dt-day-headers {
+  position: relative;
+  height: 32px;
+}
+
+.dt-day-header {
+  position: absolute;
+  font-size: 10px;
+  color: var(--text-muted);
+  top: 50%;
+  transform: translateY(-50%) translateX(-50%);
+  white-space: nowrap;
+}
+
+/* Today line */
+.dt-today-line {
+  position: absolute;
+  left: 0%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--paypal-blue);
+  z-index: 3;
+}
+
+/* Weekend shading */
+.dt-weekend {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.04);
+  z-index: 0;
+}
+
+/* Rows */
+.dt-rows {
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  overflow: hidden;
+}
+
+.dt-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  background: var(--surface);
+  transition: background 0.15s;
+  min-height: 52px;
+}
+
+.dt-row:last-child { border-bottom: none; }
+
+.dt-row:hover { background: var(--hover-bg, #f8fafc); }
+.dt-row--selected { background: rgba(0,112,186,0.06); }
+
+.dt-row-label-col {
+  padding: 8px 12px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dt-dispute-id {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.dt-dispute-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Timeline cell */
+.dt-timeline-cell {
+  position: relative;
+  height: 52px;
+  overflow: hidden;
+}
+
+.dt-gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.5;
+  z-index: 0;
+}
+
+/* Bar */
+.dt-bar {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  z-index: 2;
+  min-width: 32px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.dt-bar-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* Deadline pin */
+.dt-deadline-pin {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%) translateX(-50%);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  z-index: 3;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* Detail panel */
+.dt-detail {
+  border: 2px solid;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.dt-detail-header {
+  padding: 10px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.dt-priority-badge {
+  font-size: 10px;
+  background: rgba(255,255,255,0.25);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.dt-detail-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dt-detail-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.dt-detail-row span:first-child {
+  color: var(--text-muted);
+}
+
+.dt-action {
+  margin-top: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Attribution */
+.dt-attribution {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  padding: 4px 0;
+}
