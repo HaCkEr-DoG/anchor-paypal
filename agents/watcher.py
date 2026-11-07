@@ -778,6 +778,87 @@ async def api_stats(request: Request):
         return JSONResponse({"demo": True})
 
 
+@app.get("/api/dashboard/summary")
+async def api_dashboard_summary(request: Request):
+    """Safe, aggregate-only PayPal sandbox data for the public dashboard."""
+    paypal_env = os.environ.get("PAYPAL_ENV", "sandbox").lower()
+    if paypal_env == "live":
+        _require_api_key(request)
+
+    from agents.paypal_client import get_client
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"connected": False, "source": "PayPal", "error": "not_configured"}, status_code=503)
+
+    try:
+        urgent_data, all_data, webhook_data = await asyncio.gather(
+            client.list_disputes(dispute_state="REQUIRED_ACTION", page_size=100),
+            client.list_disputes(page_size=100),
+            client.list_webhooks(),
+        )
+        urgent_items = urgent_data.get("items", [])
+        all_items = all_data.get("items", [])
+        urgent_count = urgent_data.get("total_items")
+        open_count = all_data.get("total_items")
+        summary = {
+            "connected": True,
+            "source": "PayPal sandbox" if paypal_env == "sandbox" else "PayPal",
+            "environment": paypal_env,
+            "urgent_disputes": int(urgent_count) if urgent_count is not None else len(urgent_items),
+            "open_disputes": int(open_count) if open_count is not None else len(all_items),
+            "dispute_counts_complete": urgent_count is not None and open_count is not None,
+            "webhook_registrations": len(webhook_data.get("webhooks", [])),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "recoveries": {
+                "available": False,
+                "recovered_orders": None,
+                "recovered_revenue": None,
+                "awaiting_capture": None,
+            },
+        }
+
+        es_url = os.environ.get("ELASTICSEARCH_URL")
+        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+        if es_url and es_key:
+            import httpx
+            merchant_id = os.environ.get("MERCHANT_ID", "default")
+            recovery_query = {
+                "size": 0,
+                "query": {"term": {"merchant_id": merchant_id}},
+                "aggs": {
+                    "recovered_orders": {"filter": {"term": {"recovered": True}}},
+                    "recovered_revenue": {
+                        "filter": {"term": {"recovered": True}},
+                        "aggs": {"amount": {"sum": {"field": "amount"}}},
+                    },
+                    "awaiting_capture": {
+                        "filter": {"bool": {
+                            "must": [{"term": {"recovered": False}}],
+                            "must_not": [{"terms": {"recovery_status": ["needs_review", "completed_externally", "not_eligible"]}}],
+                        }},
+                    },
+                },
+            }
+            async with httpx.AsyncClient(timeout=5.0) as http:
+                response = await http.post(
+                    f"{es_url}/anchor-abandoned-orders/_search",
+                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                    json=recovery_query,
+                )
+                response.raise_for_status()
+            aggs = response.json().get("aggregations", {})
+            summary["recoveries"] = {
+                "available": True,
+                "recovered_orders": aggs.get("recovered_orders", {}).get("doc_count", 0),
+                "recovered_revenue": round(aggs.get("recovered_revenue", {}).get("amount", {}).get("value", 0), 2),
+                "awaiting_capture": aggs.get("awaiting_capture", {}).get("doc_count", 0),
+            }
+        return JSONResponse(summary)
+    except Exception as exc:
+        print(f"[Dashboard] PayPal live summary failed: {type(exc).__name__}: {exc}")
+        return JSONResponse({"connected": False, "source": "PayPal", "error": "upstream_unavailable"}, status_code=503)
+
+
 @app.get("/api/disputes")
 async def api_disputes(request: Request):
     """Recent dispute actions for the AG Grid disputes table. Requires X-API-Key."""
@@ -1209,12 +1290,13 @@ async def aggrid_data(grid: str = "disputes"):
 # ── PayPal API endpoints ──────────────────────────────────────────────────────
 
 @app.get("/api/paypal/status")
-async def paypal_status():
+async def paypal_status(request: Request):
     """
     Returns PayPal API connection status, OAuth health, open dispute count,
     and webhook registrations.
     Always returns a renderable payload; uses demo data when keys are absent.
     """
+    _require_api_key(request)
     from agents.paypal_client import get_client
     return JSONResponse(await get_client().status_summary())
 

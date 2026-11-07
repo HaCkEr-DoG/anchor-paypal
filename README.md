@@ -13,7 +13,7 @@ The sample decision flow needs no PayPal credentials. A live AI evidence review 
 
 | What to try | Where |
 |---|---|
-| **Sample dispute review** — run the real deterministic Oracle on a labeled scenario; see source-cited AI review when the gateway is configured | [Dashboard → Sample decision](https://anchor-paypal.onrender.com/dashboard) |
+| **Live PayPal overview** — see aggregate counts read from the connected sandbox; the sample decision is a separate, no-action walkthrough | [Dashboard](https://anchor-paypal.onrender.com/dashboard) |
 | **Settlement Oracle Calculator** — adjust amount / evidence / tier, recalculate | Same page → Settlement Oracle panel |
 | **AG Grid disputes table** — grouped columns, floating filters, global search, CSV, row detail | Same page → Disputes tab |
 | **Merchant ROI Calculator** — edit assumptions and see annual value estimate | Same page → Merchant ROI Calculator |
@@ -57,7 +57,7 @@ Anchor pairs two event-driven agents with PayPal APIs. A configured Astropods mo
 - Resumes the existing checkout through `POST /v2/checkout/orders/{id}/capture` with a stable `PayPal-Request-Id`
 - Unknown or unexpected states stop for review; a completed capture webhook closes the recovery record
 
-**Demo boundary:** dashboard scenarios are labeled samples. They run the real deterministic Oracle and, if configured, a live Astropods evidence-review call against sample records. They never call PayPal or submit evidence. Live PayPal actions require configured sandbox credentials and a registered webhook.
+**Demo boundary:** the overview reads aggregate counts from PayPal's connected sandbox and never returns case identifiers or buyer data. Dashboard scenarios are labeled samples. They run the deterministic Oracle and, if configured, a live Astropods evidence-review call against sample records. They never call PayPal or submit evidence. Live PayPal actions require configured sandbox credentials and a registered webhook.
 
 ### Morning Brief
 - The app's APScheduler can prepare a morning brief at 08:00 UTC while the web process is running

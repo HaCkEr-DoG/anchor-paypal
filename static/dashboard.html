@@ -738,7 +738,7 @@
 
     <div class="page-header">
       <h1 id="greeting">Good morning, Acme</h1>
-      <p id="subheading">Run a labeled sample decision or connect merchant data to begin.</p>
+      <p id="subheading">Connecting to the PayPal sandbox…</p>
     </div>
 
     <!-- Hero dispute card -->
@@ -785,21 +785,21 @@
     <!-- Metrics strip -->
     <div class="metrics-strip" role="region" aria-label="Portfolio metrics">
       <div class="metric-cell">
-        <div class="metric-label">Disputes handled</div>
-        <div class="metric-value" id="m-open">0</div>
+        <div class="metric-label">Open PayPal disputes</div>
+        <div class="metric-value" id="m-open">—</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-label">Awaiting review</div>
-        <div class="metric-value" id="m-risk">0</div>
+        <div class="metric-label">Need a response</div>
+        <div class="metric-value" id="m-risk">—</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-label">Recovered</div>
-        <div class="metric-value" id="m-recovered">$0</div>
+        <div class="metric-label">Webhook registrations</div>
+        <div class="metric-value" id="m-recovered">—</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-label">Win estimate</div>
+        <div class="metric-label">Recovered orders</div>
         <div class="metric-value" id="m-winrate">—</div>
-        <div class="metric-sub" id="m-winrate-sub">outcomes not calibrated</div>
+        <div class="metric-sub" id="m-winrate-sub">Recovery history unavailable</div>
       </div>
     </div>
 
@@ -817,7 +817,7 @@
             <div class="queue-th" role="columnheader">Context</div>
           </div>
           <div id="queue-body">
-            <div class="queue-row" role="row"><div class="queue-context" role="cell">No live dispute activity loaded.</div></div>
+            <div class="queue-row" role="row"><div class="queue-context" role="cell">Connecting to PayPal…</div></div>
           </div>
         </div>
       </div>
@@ -826,10 +826,10 @@
       <div>
         <div class="section-title">Checkout recovery</div>
         <div class="recovery-card">
-          <div class="recovery-title">Approved orders awaiting capture</div>
-          <div class="recovery-sub" id="recovery-sub">No live order activity loaded</div>
-          <div class="recovery-amount" id="recovery-amount">$0</div>
-          <div class="recovery-est" id="recovery-est">confirmed captures by Anchor</div>
+          <div class="recovery-title" id="recovery-title">Checkout recovery</div>
+          <div class="recovery-sub" id="recovery-sub">Checking recovery storage…</div>
+          <div class="recovery-amount" id="recovery-amount">—</div>
+          <div class="recovery-est" id="recovery-est">Source: Anchor recovery records</div>
           <div class="recovery-bar-bg" aria-hidden="true">
             <div class="recovery-bar-fill" id="recovery-bar" style="width:0%"></div>
           </div>
@@ -1011,54 +1011,67 @@
   // ── Load live data ─────────────────────────────────────
   async function loadData() {
     try {
-      const [stats, disputes, recoveries] = await Promise.all([
-        fetch('/api/stats').then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/disputes').then(r => r.ok ? r.json() : null).catch(() => null),
-        fetch('/api/recoveries').then(r => r.ok ? r.json() : null).catch(() => null),
-      ]);
+      const response = await fetch('/api/dashboard/summary', { signal: AbortSignal.timeout(12000) });
+      if (!response.ok) throw new Error(`PayPal summary returned ${response.status}`);
+      const data = await response.json();
+      if (!data.connected) throw new Error('PayPal is not connected');
 
-      if (stats && stats.demo !== true && Object.hasOwn(stats, 'disputes_total')) {
-        const badge = document.getElementById('env-badge');
-        badge.textContent = 'Live';
-        badge.classList.add('live');
-        document.getElementById('m-open').textContent = stats.disputes_total ?? 0;
-        document.getElementById('m-risk').textContent = stats.disputes_pending ?? 0;
-        document.getElementById('m-recovered').textContent = '$' + Number(stats.revenue_recovered || 0).toLocaleString('en-US', {maximumFractionDigits:0});
+      const badge = document.getElementById('env-badge');
+      badge.textContent = data.environment === 'sandbox' ? 'PayPal Sandbox' : 'PayPal Live';
+      badge.classList.add('live');
+      document.getElementById('subheading').textContent =
+        `Live PayPal data · refreshed ${new Date(data.fetched_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
+      document.getElementById('m-open').textContent = data.open_disputes;
+      document.getElementById('m-risk').textContent = data.urgent_disputes;
+      document.getElementById('m-recovered').textContent = data.webhook_registrations;
+
+      const recovery = data.recoveries || {};
+      if (recovery.available) {
+        document.getElementById('m-winrate').textContent = recovery.recovered_orders;
+        document.getElementById('m-winrate-sub').textContent =
+          '$' + Number(recovery.recovered_revenue || 0).toLocaleString('en-US', {maximumFractionDigits:2}) + ' captured';
+        document.getElementById('recovery-title').textContent = 'Approved orders awaiting capture';
+        document.getElementById('recovery-sub').textContent = `${recovery.awaiting_capture} orders awaiting capture`;
+        document.getElementById('recovery-amount').textContent =
+          '$' + Number(recovery.recovered_revenue || 0).toLocaleString('en-US', {maximumFractionDigits:2});
+        document.getElementById('recovery-est').textContent = 'Confirmed PayPal captures';
+        document.getElementById('recovery-bar').style.width = Math.min(100, recovery.awaiting_capture * 10) + '%';
+      } else {
         document.getElementById('m-winrate').textContent = '—';
-        document.getElementById('m-winrate-sub').textContent = 'outcomes not calibrated';
+        document.getElementById('m-winrate-sub').textContent = 'Recovery storage not connected';
+        document.getElementById('recovery-title').textContent = 'Recovery history unavailable';
+        document.getElementById('recovery-sub').textContent = 'Connect Elasticsearch to track approved orders and captures.';
+        document.getElementById('recovery-amount').textContent = '—';
+        document.getElementById('recovery-est').textContent = 'No recovery database configured';
       }
 
-      if (disputes && disputes.demo !== true && Array.isArray(disputes.rows)) {
-        const rows = disputes.rows;
-        const pending = rows.find(x => x.action_type === 'dispute_pending');
-        const hero = document.getElementById('hero-card');
-        const empty = document.getElementById('hero-empty');
-        if (pending) {
-          hero.style.display = 'flex';
-          empty.style.display = 'none';
-          document.getElementById('hero-amount').textContent = '$' + Number(pending.amount || 0).toLocaleString('en-US', {maximumFractionDigits:0});
-          document.getElementById('hero-desc').textContent = `Dispute needs approval · ${pending.dispute_id || 'PayPal case'}`;
-          document.getElementById('hero-due-text').textContent = 'Merchant approval required';
-          document.getElementById('signal-1').textContent = 'Awaiting your decision';
-          document.getElementById('signal-2').textContent = 'Open the recorded reasoning';
-          document.getElementById('hero-ev').textContent = pending.reasoning || 'Model estimate; inspect the dispute record';
-        } else {
-          hero.style.display = 'none';
-          empty.style.display = 'block';
-        }
-        renderQueue(rows.slice(0,4));
+      const empty = document.getElementById('hero-empty');
+      document.getElementById('hero-card').style.display = 'none';
+      empty.style.display = 'block';
+      if (data.open_disputes === 0) {
+        empty.textContent = 'No open disputes in the connected PayPal account.';
+      } else {
+        empty.textContent = `${data.open_disputes} open dispute(s) found. Case details are available only in the private merchant view.`;
       }
-
-      if (recoveries && recoveries.demo !== true && Array.isArray(recoveries.rows)) {
-        const rows = recoveries.rows;
-        const pending = rows.filter(x => !x.recovered && !['needs_review','completed_externally'].includes(x.recovery_status));
-        document.getElementById('recovery-amount').textContent = '$' + Number(stats?.revenue_recovered || 0).toLocaleString('en-US', {maximumFractionDigits:0});
-        document.getElementById('recovery-est').textContent = 'captured by Anchor';
-        document.getElementById('recovery-sub').textContent = `${pending.length} approved orders waiting for capture`;
-        document.getElementById('recovery-bar').style.width = Math.min(100, pending.length * 10) + '%';
-      }
-
+      const queue = document.getElementById('queue-body');
+      queue.replaceChildren();
+      const row = document.createElement('div');
+      row.className = 'queue-row';
+      row.setAttribute('role', 'row');
+      const cell = document.createElement('div');
+      cell.className = 'queue-context';
+      cell.setAttribute('role', 'cell');
+      cell.textContent = data.open_disputes === 0
+        ? 'Live PayPal result · no open disputes'
+        : 'Live PayPal result · private dispute details are protected';
+      row.appendChild(cell);
+      queue.appendChild(row);
     } catch(e) {
+      document.getElementById('env-badge').textContent = 'PayPal unavailable';
+      document.getElementById('subheading').textContent = 'Could not load live PayPal data. Check the service connection.';
+      document.getElementById('hero-empty').style.display = 'block';
+      document.getElementById('hero-empty').textContent = 'Live PayPal data is unavailable right now.';
+      document.getElementById('queue-body').textContent = 'Could not load PayPal data.';
       console.warn('Dashboard data load error:', e);
     }
   }
@@ -1221,7 +1234,7 @@
   const SPONSORS = [
     {
       key: 'render', name: 'Render', logo: '🟣', category: 'Hosting',
-      desc: 'Always-on cloud hosting for Anchor. Auto-deploys on every GitHub push.',
+      desc: 'Anchor is hosted on Render. Free instances may sleep after inactivity; GitHub pushes trigger deployment.',
       endpoints: ['GET /api/render/status', 'GET /api/render/health'],
       statusUrl: '/api/render/health',
       statusKey: 'status',
