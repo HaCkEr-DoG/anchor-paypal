@@ -4184,6 +4184,69 @@ async def api_dispute_aging(request: Request):
     })
 
 
+@app.post("/api/oracle/merchant-reputation")
+async def api_merchant_reputation(request: Request):
+    """
+    POST /api/oracle/merchant-reputation
+
+    Wave 76 — Merchant Reputation Score.
+    Synthesizes 6 merchant health dimensions into a 0-100 composite trust score
+    and maps it to a routing tier (GOLD/SILVER/BRONZE/REVIEW/SUSPEND).
+
+    PayPal benefit: GOLD merchants get auto-resolve fast-track (~$12/dispute
+    saved); SUSPEND tier gets early intervention before costly CMP breach.
+    Score delta month-over-month surfaces merchants improving or deteriorating.
+
+    Request body:
+      merchant_id               str
+      chargeback_rate_pct       float
+      dispute_win_rate_pct      float
+      response_timeliness_pct   float
+      refund_rate_pct           float
+      account_age_months        int
+      is_verified_seller        bool
+      total_disputes_last_90d   int    (optional)
+      previous_score            float  (optional, for delta)
+    """
+    from oracle.merchant_reputation_score import (
+        score_merchant_reputation,
+        MerchantReputationInput,
+    )
+    body = await request.json()
+    inp = MerchantReputationInput(
+        merchant_id=body.get("merchant_id", "MERCH_DEMO"),
+        chargeback_rate_pct=float(body.get("chargeback_rate_pct", 0.5)),
+        dispute_win_rate_pct=float(body.get("dispute_win_rate_pct", 60.0)),
+        response_timeliness_pct=float(body.get("response_timeliness_pct", 80.0)),
+        refund_rate_pct=float(body.get("refund_rate_pct", 5.0)),
+        account_age_months=int(body.get("account_age_months", 12)),
+        is_verified_seller=bool(body.get("is_verified_seller", False)),
+        total_disputes_last_90d=int(body.get("total_disputes_last_90d", 0)),
+        previous_score=body.get("previous_score", None),
+    )
+    r = score_merchant_reputation(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "composite_score": r.composite_score,
+        "tier": r.tier.value,
+        "score_delta": r.score_delta,
+        "signal_strength": r.signal_strength,
+        "dimensions": [
+            {
+                "name": d.name,
+                "raw_value": d.raw_value,
+                "normalized_score": d.normalized_score,
+                "weight": d.weight,
+                "weighted_contribution": d.weighted_contribution,
+            }
+            for d in r.dimensions
+        ],
+        "routing_recommendation": r.routing_recommendation,
+        "paypal_savings_per_dispute_usd": r.paypal_savings_per_dispute_usd,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/chargeback-threshold")
 async def api_chargeback_threshold(request: Request):
     """
