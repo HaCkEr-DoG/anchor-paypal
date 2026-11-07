@@ -109,7 +109,10 @@ def next_threshold_above(current_rate: float) -> tuple[float, str]:
     return THRESHOLDS[0][0], THRESHOLDS[0][1]
 
 
-async def get_account_health(merchant_id: str, open_disputes: int = 0) -> AccountHealth:
+async def get_account_health(
+    merchant_id: str, open_disputes: int = 0,
+    memory_events: list | None = None,
+) -> AccountHealth:
     """
     Pull dispute + capture metrics from Elasticsearch and calculate account health.
 
@@ -117,12 +120,13 @@ async def get_account_health(merchant_id: str, open_disputes: int = 0) -> Accoun
     ----------
     merchant_id   : merchant to query
     open_disputes : count of disputes currently awaiting decision (from caller context)
+    memory_events : optional in-memory event list fallback when ES is absent
     """
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
 
-    w30 = await _query_window(merchant_id, 30, es_url, es_key)
-    w90 = await _query_window(merchant_id, 90, es_url, es_key)
+    w30 = await _query_window(merchant_id, 30, es_url, es_key, memory_events)
+    w90 = await _query_window(merchant_id, 90, es_url, es_key, memory_events)
 
     rate_30d = w30.rate_by_amount   # PayPal uses amount-based rate
     status, description = classify_rate(rate_30d)
@@ -155,7 +159,7 @@ async def get_account_health(merchant_id: str, open_disputes: int = 0) -> Accoun
     posture, posture_reason = _calculate_posture(status, safe_quota_count, open_disputes)
 
     # Trajectory: compare 7-day rate to 30-day rate to get velocity
-    w7 = await _query_window(merchant_id, 7, es_url, es_key)
+    w7 = await _query_window(merchant_id, 7, es_url, es_key, memory_events)
     velocity, days_to_breach = _compute_trajectory(rate_30d, w7.rate_by_amount, next_t)
 
     return AccountHealth(
@@ -263,9 +267,26 @@ def _compute_trajectory(
 
 
 async def _query_window(
-    merchant_id: str, days: int, es_url: str, es_key: str
+    merchant_id: str, days: int, es_url: str, es_key: str,
+    memory_events: list | None = None,
 ) -> DisputeRateWindow:
     if not es_url or not es_key:
+        if memory_events:
+            since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            evts = [
+                e for e in memory_events
+                if (not merchant_id or e.get("merchant_id") == merchant_id)
+                and e.get("timestamp", "") >= since
+            ]
+            dispute_count = sum(1 for e in evts if e.get("event_type") == "eligible_dispute")
+            dispute_amount = sum(e.get("amount") or 0.0 for e in evts if e.get("event_type") == "eligible_dispute")
+            capture_count = sum(1 for e in evts if e.get("event_type") == "capture")
+            capture_amount = sum(e.get("amount") or 0.0 for e in evts if e.get("event_type") == "capture")
+            return DisputeRateWindow(
+                window_days=days,
+                dispute_count=dispute_count, dispute_amount=dispute_amount,
+                capture_count=capture_count, capture_amount=capture_amount,
+            )
         return DisputeRateWindow(
             window_days=days, dispute_count=0, dispute_amount=0.0,
             capture_count=0, capture_amount=0.0,

@@ -356,3 +356,146 @@ def build_portfolio_submission_plan(
         warnings=warnings,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Simple per-dispute response planner used by the dispute management API
+# ---------------------------------------------------------------------------
+
+class ResponseUrgency(str, Enum):
+    OPTIMAL  = "OPTIMAL"   # Days 1-3: prepare carefully
+    URGENT   = "URGENT"    # Days 4-7: respond soon
+    CRITICAL = "CRITICAL"  # Days 8-10: respond immediately
+    EXPIRED  = "EXPIRED"   # > 10 days: window closed
+
+
+@dataclass
+class ResponsePlan:
+    urgency: ResponseUrgency
+    hours_remaining: float
+    respond_by: str                     # ISO datetime string
+    should_respond_now: bool
+    timing_penalty: float               # 0.0 on days 1-3, negative after
+    win_rate_at_current_timing: float   # 0–1 estimated
+    evidence_completeness_threshold: float  # min evidence to submit now
+    advice: str
+
+
+# Base win rates by claim type (empirical averages)
+_BASE_WIN_RATE: dict[str, float] = {
+    "ITEM_NOT_RECEIVED": 0.72,
+    "SIGNIFICANTLY_NOT_AS_DESCRIBED": 0.58,
+    "UNAUTHORIZED": 0.41,
+    "CREDIT_NOT_PROCESSED": 0.50,
+    "DUPLICATE_TRANSACTION": 0.65,
+    "INCORRECT_AMOUNT": 0.60,
+}
+_DEFAULT_WIN_RATE = 0.55
+
+# Timing penalty curve: by day since filing
+_TIMING_PENALTIES = {
+    1: 0.0,
+    2: 0.0,
+    3: 0.0,
+    4: -0.02,
+    5: -0.05,
+    6: -0.08,
+    7: -0.12,
+    8: -0.18,
+    9: -0.25,
+    10: -0.30,
+}
+
+
+def plan_response(
+    dispute_filed_at: str | datetime,
+    claim_type: str = "ITEM_NOT_RECEIVED",
+    evidence_completeness: float = 0.5,
+    still_gathering_evidence: bool = False,
+    hours_to_complete_evidence: float = 0.0,
+    response_window_days: int = 10,
+) -> ResponsePlan:
+    """
+    Given when a dispute was filed and current evidence state,
+    return a ResponsePlan describing urgency and whether to respond now.
+    """
+    if isinstance(dispute_filed_at, str):
+        filed = datetime.fromisoformat(dispute_filed_at.replace("Z", "+00:00"))
+    else:
+        filed = dispute_filed_at
+    if filed.tzinfo is None:
+        from datetime import timezone as _tz
+        filed = filed.replace(tzinfo=_tz.utc)
+
+    from datetime import timezone as _tz
+    now = datetime.now(_tz.utc)
+    respond_by_dt = filed + timedelta(days=response_window_days)
+    hours_remaining = max(0.0, (respond_by_dt - now).total_seconds() / 3600)
+    days_elapsed = (now - filed).days + 1  # 1-indexed
+
+    # Urgency  (days_elapsed is 1-indexed: filed today = 1)
+    days_since_filing = (now - filed).total_seconds() / 86400
+    if hours_remaining == 0:
+        urgency = ResponseUrgency.EXPIRED
+    elif days_since_filing >= 9:  # day 10 = last ~24h
+        urgency = ResponseUrgency.CRITICAL
+    elif days_since_filing >= 4:  # days 4-8 = urgent
+        urgency = ResponseUrgency.URGENT
+    else:
+        urgency = ResponseUrgency.OPTIMAL
+
+    # Timing penalty
+    day_key = min(max(days_elapsed, 1), 10)
+    timing_penalty = _TIMING_PENALTIES.get(day_key, -0.30)
+
+    # Win rate estimate
+    base_wr = _BASE_WIN_RATE.get(claim_type, _DEFAULT_WIN_RATE)
+    win_rate = max(0.0, min(1.0, base_wr + timing_penalty))
+
+    # Evidence threshold: lower threshold as deadline approaches
+    if urgency == ResponseUrgency.CRITICAL:
+        evidence_threshold = 0.0  # Submit with whatever you have
+    elif urgency == ResponseUrgency.URGENT:
+        evidence_threshold = 0.50
+    else:
+        evidence_threshold = 0.70
+
+    # Should respond now?
+    if urgency == ResponseUrgency.EXPIRED:
+        should_respond = False
+    elif urgency == ResponseUrgency.CRITICAL:
+        should_respond = True
+    elif evidence_completeness >= evidence_threshold:
+        should_respond = True
+    elif still_gathering_evidence and hours_to_complete_evidence > 0:
+        # Only wait if we have time
+        should_respond = hours_to_complete_evidence >= hours_remaining
+    else:
+        should_respond = False
+
+    # Advice text
+    if urgency == ResponseUrgency.EXPIRED:
+        advice = "Response window has closed. Consider filing an appeal if PayPal ruled against you."
+    elif urgency == ResponseUrgency.CRITICAL:
+        advice = f"Submit your response immediately — only {hours_remaining:.0f} hours remain. Use whatever evidence you have."
+    elif urgency == ResponseUrgency.URGENT:
+        if should_respond:
+            advice = f"Respond within the next 24 hours. Evidence looks sufficient at {evidence_completeness:.0%}."
+        else:
+            advice = f"Finish gathering evidence quickly — {hours_remaining:.0f} hours remain. Target 50%+ completeness before submitting."
+    else:
+        if should_respond:
+            advice = f"Good time to respond. Evidence at {evidence_completeness:.0%} is sufficient. Optimal submission: Tue-Thu 9-11am PT."
+        else:
+            advice = f"You have time — continue building evidence. Target 70%+ completeness for best win rate ({win_rate:.0%} estimated)."
+
+    return ResponsePlan(
+        urgency=urgency,
+        hours_remaining=round(hours_remaining, 1),
+        respond_by=respond_by_dt.isoformat(),
+        should_respond_now=should_respond,
+        timing_penalty=round(timing_penalty, 3),
+        win_rate_at_current_timing=round(win_rate, 3),
+        evidence_completeness_threshold=evidence_threshold,
+        advice=advice,
+    )
