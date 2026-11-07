@@ -4238,6 +4238,55 @@ async def api_refund_timing(request: Request):
     })
 
 
+@app.post("/api/oracle/settlement-advisor")
+async def api_settlement_advisor(request: Request):
+    """
+    POST /api/oracle/settlement-advisor
+
+    Wave 81 — Settlement Negotiation Advisor.
+    Models the EV of accepting vs. rejecting a partial settlement offer.
+    Recommends ACCEPT / COUNTEROFFER / REJECT_AND_FIGHT with an optimal
+    counteroffer amount when applicable.
+
+    PayPal benefit: Settlements avoid formal chargebacks (~$30/case processing
+    cost). Merchants with optimized settlement behavior have lower chargeback
+    rates. Saves PayPal $12–$30 per case closed via negotiated settlement.
+
+    Request body:
+      dispute_id                str
+      claimed_amount            float  — full amount the buyer claims
+      settlement_offer_amount   float  — the offer on the table
+      p_win                     float  0.0–1.0
+      response_cost_usd         float  (optional, default 15.0)
+      cb_fee_usd                float  (optional, default 20.0)
+      already_responded         bool   (optional, default false)
+    """
+    from oracle.settlement_negotiation_advisor import advise_settlement, SettlementNegotiationInput
+    body = await request.json()
+    inp = SettlementNegotiationInput(
+        dispute_id=body.get("dispute_id", "UNKNOWN"),
+        claimed_amount=float(body.get("claimed_amount", 100.0)),
+        settlement_offer_amount=float(body.get("settlement_offer_amount", 50.0)),
+        p_win=float(body.get("p_win", 0.50)),
+        response_cost_usd=float(body.get("response_cost_usd", 15.0)),
+        cb_fee_usd=float(body.get("cb_fee_usd", 20.0)),
+        already_responded=bool(body.get("already_responded", False)),
+    )
+    r = advise_settlement(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "ev_accept": r.ev_accept,
+        "ev_reject": r.ev_reject,
+        "settlement_threshold": r.settlement_threshold,
+        "recommended_decision": r.recommended_decision.value,
+        "optimal_counteroffer": r.optimal_counteroffer,
+        "total_savings_vs_worst_case": r.total_savings_vs_worst_case,
+        "paypal_cb_savings_usd": r.paypal_cb_savings_usd,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+    })
+
+
 @app.post("/api/oracle/dispute-clusters")
 async def api_dispute_clusters(request: Request):
     """
