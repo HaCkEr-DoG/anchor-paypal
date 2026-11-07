@@ -5684,5 +5684,75 @@ async def api_deadline_priority(request: Request):
     })
 
 
+@app.post("/api/oracle/evidence-assembly")
+async def api_evidence_assembly(request: Request):
+    """
+    POST /api/oracle/evidence-assembly
+
+    Wave 87 — Evidence Assembly Scorer.
+    Scores and ranks evidence items a merchant has available for a dispute,
+    identifies coverage gaps, and recommends whether evidence is sufficient to fight.
+
+    Body JSON fields:
+      dispute_id   str
+      claim_type   str    (INR|SNAD|UNAUTH|OTHER)
+      items        list of:
+        item_id      str
+        category     str  (TRACKING|DELIVERY|COMMS|PHOTO|POLICY)
+        description  str
+        quality      float  0–1, default 1.0
+        file_name    str    optional
+    """
+    from oracle.evidence_assembly_scorer import (
+        EvidenceItem, EvidenceCategory, score_evidence,
+    )
+    body = await request.json()
+    dispute_id = str(body.get("dispute_id", "UNKNOWN"))
+    claim_type = str(body.get("claim_type", "OTHER"))
+    raw_items = body.get("items", [])
+    items = []
+    for it in raw_items:
+        try:
+            cat = EvidenceCategory(str(it.get("category", "TRACKING")).upper())
+        except ValueError:
+            continue
+        items.append(EvidenceItem(
+            item_id=str(it.get("item_id", "E-?")),
+            category=cat,
+            description=str(it.get("description", "")),
+            quality=float(it.get("quality", 1.0)),
+            file_name=it.get("file_name"),
+        ))
+    r = score_evidence(dispute_id, claim_type, items)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "claim_type": r.claim_type,
+        "coverage_score": r.coverage_score,
+        "sufficient_to_fight": r.sufficient_to_fight,
+        "overall_recommendation": r.overall_recommendation,
+        "items": [
+            {
+                "submission_rank": s.submission_rank,
+                "item_id": s.item_id,
+                "category": s.category.value,
+                "description": s.description,
+                "quality": s.quality,
+                "file_name": s.file_name,
+                "weight": s.weight,
+                "contribution": s.contribution,
+            }
+            for s in r.items
+        ],
+        "gaps": [
+            {
+                "category": g.category.value,
+                "weight": g.weight,
+                "suggestion": g.suggestion,
+            }
+            for g in r.gaps
+        ],
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
