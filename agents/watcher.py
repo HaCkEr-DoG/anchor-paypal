@@ -10647,5 +10647,147 @@ async def api_analyze_win_loss(request: Request):
     })
 
 
+@app.post("/api/oracle/write-dispute-response")
+async def api_write_dispute_response(request: Request):
+    from oracle.dispute_response_writer import (
+        ResponseContext, EvidenceItem, write_dispute_response,
+    )
+    body = await request.json()
+    raw_evidence = body.get("evidence_items", [])
+    evidence_items = []
+    for item in raw_evidence:
+        try:
+            evidence_items.append(EvidenceItem(item.upper()))
+        except ValueError:
+            pass
+    ctx = ResponseContext(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        merchant_id=body.get("merchant_id", "M-001"),
+        merchant_name=body.get("merchant_name", "Merchant"),
+        reason_code=body.get("reason_code", "INR"),
+        order_id=body.get("order_id", "ORD-001"),
+        order_date=body.get("order_date", "2026-10-01"),
+        order_amount=float(body.get("order_amount", 100.0)),
+        currency=body.get("currency", "USD"),
+        item_description=body.get("item_description", ""),
+        buyer_name=body.get("buyer_name", ""),
+        ship_date=body.get("ship_date", ""),
+        carrier=body.get("carrier", ""),
+        tracking_number=body.get("tracking_number", ""),
+        delivery_date=body.get("delivery_date", ""),
+        delivery_status=body.get("delivery_status", ""),
+        subscription_start=body.get("subscription_start", ""),
+        last_billing_date=body.get("last_billing_date", ""),
+        cancellation_requested=bool(body.get("cancellation_requested", False)),
+        cancellation_date=body.get("cancellation_date", ""),
+        evidence_items=evidence_items,
+        win_probability=float(body.get("win_probability", 0.5)),
+        recommended_action=body.get("recommended_action", ""),
+        prior_contact_summary=body.get("prior_contact_summary", ""),
+    )
+    r = write_dispute_response(ctx)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "merchant_id": r.merchant_id,
+        "reason_code": r.reason_code,
+        "tone": r.tone.value,
+        "sections": [{"section": s.section, "content": s.content} for s in r.sections],
+        "full_response": r.full_response,
+        "evidence_count": r.evidence_count,
+        "evidence_items_referenced": [e.value for e in r.evidence_items_referenced],
+        "word_count": r.word_count,
+        "is_submission_ready": r.is_submission_ready,
+        "submission_note": r.submission_note,
+        "summary": r.summary,
+        "wave": 147,
+    })
+
+
+@app.post("/api/oracle/forecast-chargeback-rate")
+async def api_forecast_chargeback_rate(request: Request):
+    from oracle.chargeback_rate_forecaster import (
+        ChargebackForecastInput, MonthlyRecord, forecast_chargeback_rate,
+    )
+    body = await request.json()
+    raw_records = body.get("monthly_records", [])
+    records = [
+        MonthlyRecord(
+            month_label=r.get("month_label", "2026-01"),
+            total_transactions=int(r.get("total_transactions", 100)),
+            total_disputes=int(r.get("total_disputes", 1)),
+            unauth_disputes=int(r.get("unauth_disputes", 0)),
+            inr_disputes=int(r.get("inr_disputes", 0)),
+            snad_disputes=int(r.get("snad_disputes", 0)),
+        )
+        for r in raw_records
+    ]
+    if not records:
+        records = [MonthlyRecord(month_label="2026-11", total_transactions=1000, total_disputes=10)]
+    inp = ChargebackForecastInput(
+        merchant_id=body.get("merchant_id", "M-001"),
+        monthly_records=records,
+        high_season_active=bool(body.get("high_season_active", False)),
+        new_product_launch=bool(body.get("new_product_launch", False)),
+    )
+    r = forecast_chargeback_rate(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "base_rate": r.base_rate,
+        "trend": r.trend.value,
+        "trend_magnitude": r.trend_magnitude,
+        "forecast_rate": r.forecast_rate,
+        "confidence_low": r.confidence_low,
+        "confidence_high": r.confidence_high,
+        "alert_level": r.alert_level.value,
+        "contributing_factors": r.contributing_factors,
+        "recommendation": r.recommendation,
+        "days_to_threshold": r.days_to_threshold,
+        "wave": 148,
+    })
+
+
+@app.post("/api/oracle/analyze-buyer-pattern")
+async def api_analyze_buyer_pattern(request: Request):
+    from oracle.buyer_pattern_analyzer import (
+        BuyerPatternInput, DisputeRecord, analyze_buyer_pattern,
+    )
+    body = await request.json()
+    raw_history = body.get("dispute_history", [])
+    history = [
+        DisputeRecord(
+            dispute_id=d.get("dispute_id", f"PP-D-{i:03d}"),
+            amount_usd=float(d.get("amount_usd", 100.0)),
+            reason=d.get("reason", "INR"),
+            merchant_won=bool(d.get("merchant_won", False)),
+            escalated=bool(d.get("escalated", False)),
+            days_ago=int(d.get("days_ago", 30)),
+        )
+        for i, d in enumerate(raw_history)
+    ]
+    inp = BuyerPatternInput(
+        buyer_id=body.get("buyer_id", "B-001"),
+        total_transactions=int(body.get("total_transactions", 100)),
+        dispute_history=history,
+        community_trust_score=body.get("community_trust_score", None),
+    )
+    r = analyze_buyer_pattern(inp)
+    return JSONResponse({
+        "buyer_id": r.buyer_id,
+        "total_disputes": r.total_disputes,
+        "dispute_rate": r.dispute_rate,
+        "merchant_win_rate": r.merchant_win_rate,
+        "escalation_rate": r.escalation_rate,
+        "recency_score": r.recency_score,
+        "avg_claim_amount": r.avg_claim_amount,
+        "category_diversity": r.category_diversity,
+        "risk_score": r.risk_score,
+        "risk_level": r.risk_level.value,
+        "community_trust_adjusted": r.community_trust_adjusted,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+        "wave": 149,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
