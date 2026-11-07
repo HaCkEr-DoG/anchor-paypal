@@ -10363,5 +10363,133 @@ async def api_predict_dispute_escalation(request: Request):
     })
 
 
+@app.post("/api/oracle/advise-chargeback-prevention")
+async def api_advise_chargeback_prevention(request: Request):
+    from oracle.chargeback_prevention_advisor import (
+        PreventionInput, advise_chargeback_prevention,
+    )
+    body = await request.json()
+    inp = PreventionInput(
+        transaction_id=body.get("transaction_id", "TXN-001"),
+        merchant_id=body.get("merchant_id", "M-001"),
+        reason_code=body.get("reason_code", "INR"),
+        amount=float(body.get("amount", 100.0)),
+        hours_since_purchase=float(body.get("hours_since_purchase", 24.0)),
+        delivery_status=body.get("delivery_status", "UNKNOWN"),
+        days_past_expected_delivery=int(body.get("days_past_expected_delivery", 0)),
+        carrier_has_tracking=bool(body.get("carrier_has_tracking", False)),
+        buyer_tier=body.get("buyer_tier", "UNKNOWN"),
+        buyer_contacted_support=bool(body.get("buyer_contacted_support", False)),
+        buyer_complaint_unresolved=bool(body.get("buyer_complaint_unresolved", False)),
+        hours_since_buyer_contact=float(body.get("hours_since_buyer_contact", 0.0)),
+        is_inquiry_stage=bool(body.get("is_inquiry_stage", True)),
+        has_active_inquiry=bool(body.get("has_active_inquiry", False)),
+        is_digital_product=bool(body.get("is_digital_product", False)),
+        digital_access_active=bool(body.get("digital_access_active", True)),
+        response_cost=float(body.get("response_cost", 15.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+    )
+    r = advise_chargeback_prevention(inp)
+    return JSONResponse({
+        "transaction_id": r.transaction_id,
+        "merchant_id": r.merchant_id,
+        "urgency": r.urgency.value,
+        "prevention_probability": r.prevention_probability,
+        "primary_action": r.primary_action.value,
+        "recommended_steps": [
+            {
+                "step_number": s.step_number,
+                "action": s.action.value,
+                "rationale": s.rationale,
+                "time_to_complete": s.time_to_complete,
+                "expected_outcome": s.expected_outcome,
+                "cost_estimate": s.cost_estimate,
+            }
+            for s in r.recommended_steps
+        ],
+        "prevention_roi": r.prevention_roi,
+        "chargeback_cost_if_lost": r.chargeback_cost_if_lost,
+        "buyer_tier": r.buyer_tier.value,
+        "relationship_risk": r.relationship_risk,
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+        "wave": 141,
+    })
+
+
+@app.post("/api/oracle/advise-settlement-negotiation")
+async def api_advise_settlement_negotiation(request: Request):
+    from oracle.settlement_negotiation_advisor import (
+        SettlementNegotiationInput, advise_settlement,
+    )
+    body = await request.json()
+    inp = SettlementNegotiationInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        claimed_amount=float(body.get("claimed_amount", 100.0)),
+        settlement_offer_amount=float(body.get("settlement_offer_amount", 60.0)),
+        p_win=float(body.get("p_win", 0.5)),
+        response_cost_usd=float(body.get("response_cost_usd", 15.0)),
+        cb_fee_usd=float(body.get("cb_fee_usd", 20.0)),
+        already_responded=bool(body.get("already_responded", False)),
+    )
+    r = advise_settlement(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "ev_accept": r.ev_accept,
+        "ev_reject": r.ev_reject,
+        "settlement_threshold": r.settlement_threshold,
+        "recommended_decision": r.recommended_decision.value,
+        "optimal_counteroffer": r.optimal_counteroffer,
+        "total_savings_vs_worst_case": r.total_savings_vs_worst_case,
+        "paypal_cb_savings_usd": r.paypal_cb_savings_usd,
+        "recommendation": r.recommendation,
+        "paypal_signal": r.paypal_signal,
+        "wave": 142,
+    })
+
+
+@app.post("/api/oracle/score-dispute-portfolio")
+async def api_score_dispute_portfolio(request: Request):
+    from oracle.portfolio_risk_scorer import (
+        DisputeSnapshot, score_portfolio,
+    )
+    body = await request.json()
+    raw = body.get("disputes", [])
+    disputes = [
+        DisputeSnapshot(
+            dispute_id=d.get("dispute_id", f"PP-D-{i:03d}"),
+            claim_type=d.get("claim_type", "INR"),
+            amount_usd=float(d.get("amount_usd", 100.0)),
+            win_probability=float(d.get("win_probability", 0.5)),
+            days_until_deadline=int(d.get("days_until_deadline", 7)),
+        )
+        for i, d in enumerate(raw)
+    ]
+    r = score_portfolio(
+        merchant_id=body.get("merchant_id", "M-001"),
+        disputes=disputes,
+    )
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes": r.total_disputes,
+        "total_exposure_usd": r.total_exposure_usd,
+        "expected_loss_usd": r.expected_loss_usd,
+        "expected_recovery_usd": r.expected_recovery_usd,
+        "portfolio_risk_level": r.portfolio_risk_level.value,
+        "concentration": {
+            "flag": r.concentration.flag,
+            "dominant_claim_type": r.concentration.dominant_claim_type,
+            "dominant_fraction": r.concentration.dominant_fraction,
+            "description": r.concentration.description,
+        },
+        "critical_disputes": r.critical_disputes,
+        "high_value_disputes": r.high_value_disputes,
+        "avg_win_probability": r.avg_win_probability,
+        "recommendation": r.recommendation,
+        "risk_factors": r.risk_factors,
+        "wave": 143,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
