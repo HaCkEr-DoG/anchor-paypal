@@ -5862,5 +5862,60 @@ async def api_settlement_evaluate(request: Request):
     })
 
 
+@app.post("/api/oracle/portfolio-risk")
+async def api_portfolio_risk(request: Request):
+    """
+    POST /api/oracle/portfolio-risk
+
+    Wave 90 — Dispute Portfolio Risk Scorer.
+    Scores the full open dispute portfolio for a merchant: total exposure,
+    expected loss, claim-type concentration risk, critical deadline count,
+    and an overall portfolio risk level (LOW/MODERATE/HIGH/SEVERE).
+
+    Body JSON fields:
+      merchant_id  str
+      disputes     list of:
+        dispute_id           str
+        claim_type           str    (INR|SNAD|UNAUTH|OTHER)
+        amount_usd           float
+        win_probability      float  0–1
+        days_until_deadline  int
+    """
+    from oracle.portfolio_risk_scorer import DisputeSnapshot, score_portfolio
+    body = await request.json()
+    merchant_id = str(body.get("merchant_id", "UNKNOWN"))
+    raw = body.get("disputes", [])
+    disputes = [
+        DisputeSnapshot(
+            dispute_id=str(d.get("dispute_id", "?")),
+            claim_type=str(d.get("claim_type", "OTHER")).upper(),
+            amount_usd=float(d.get("amount_usd", 0.0)),
+            win_probability=float(d.get("win_probability", 0.5)),
+            days_until_deadline=int(d.get("days_until_deadline", 7)),
+        )
+        for d in raw
+    ]
+    r = score_portfolio(merchant_id, disputes)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "total_disputes": r.total_disputes,
+        "total_exposure_usd": r.total_exposure_usd,
+        "expected_loss_usd": r.expected_loss_usd,
+        "expected_recovery_usd": r.expected_recovery_usd,
+        "portfolio_risk_level": r.portfolio_risk_level.value,
+        "avg_win_probability": r.avg_win_probability,
+        "critical_disputes": r.critical_disputes,
+        "high_value_disputes": r.high_value_disputes,
+        "concentration": {
+            "flag": r.concentration.flag,
+            "dominant_claim_type": r.concentration.dominant_claim_type,
+            "dominant_fraction": r.concentration.dominant_fraction,
+            "description": r.concentration.description,
+        },
+        "risk_factors": r.risk_factors,
+        "recommendation": r.recommendation,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
