@@ -1,12 +1,9 @@
 """
 Morning Brief Generator
 
-Queries Elasticsearch for all autonomous actions taken since the
-merchant last logged in, then produces a human-readable summary
-sent via Zapier → Slack or SMS.
-
-This is the demo moment: the merchant wakes up and sees everything
-Anchor handled while they slept. No login required.
+Queries Elasticsearch for actions in the reporting window, then produces
+a human-readable summary that can be sent through the configured notification
+integration.
 """
 
 from dataclasses import dataclass, field
@@ -64,7 +61,7 @@ class Brief:
             self.invoices_reminded += 1
         elif action.action_type == "account_health":
             self.account_health_actions += 1
-        elif action.action_type == "recovery_attempted":
+        elif action.action_type == "recovery_capture" and action.outcome == "captured":
             self.orders_recovered += 1
             self.recovered_revenue += action.amount or 0
 
@@ -110,7 +107,7 @@ class Brief:
         if self.orders_recovered:
             lines.append(
                 f"*Abandoned checkouts:* {self.orders_recovered} recovered "
-                f"(${self.recovered_revenue:,.2f} in recovery invoices sent)"
+                f"(${self.recovered_revenue:,.2f} confirmed via PayPal capture)"
             )
 
         if self.account_health_actions:

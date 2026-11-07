@@ -190,7 +190,7 @@ async def run_guardian_demo():
 async def run_recovery_demo():
     header("Recovery Agent — Abandoned Checkout Recovery")
     print(f"\n  When a buyer approves payment on PayPal but the merchant's page errors,")
-    print(f"  the sale is lost. Recovery Agent detects this and sends a recovery invoice.\n")
+    print(f"  capture was missed. Recovery Agent resumes that same buyer-approved order.\n")
 
     step("FLOW", "Abandoned checkout lifecycle")
     print(f"""
@@ -198,23 +198,23 @@ async def run_recovery_demo():
     2. Merchant's page crashes before calling /v2/checkout/orders/{{id}}/capture
     3. CHECKOUT.ORDER.APPROVED webhook → Recovery Agent indexes the order
     4. Cron (every 15 min): scan for APPROVED orders older than 30 min
-    5. Verify order still uncaptured via GET /v2/checkout/orders/{{id}}
-    6. Create PayPal invoice → POST /v2/invoicing/invoices
-    7. Send invoice to buyer — they get a PayPal email with one-click pay
-    8. Log recovery_attempted to Elasticsearch
-    9. Morning brief: "3 abandoned orders recovered ($312)"{RESET}
+    5. Re-fetch order and require status=APPROVED, intent=CAPTURE
+    6. Retry the existing order capture with a stable PayPal-Request-Id
+    7. Unknown states stop for merchant review; no second invoice is created
+    8. Capture webhook confirms completion and closes the recovery record
+    9. Morning brief counts only confirmed captures{RESET}
     """)
 
     ok("Only triggers for highest-intent abandonment — buyer already authorized payment")
-    ok("PayPal invoice goes directly from PayPal to buyer — familiar, trusted UI")
-    ok("Max 2 attempts per order — never spams the buyer")
+    ok("The buyer already approved this order; recovery resumes its intended capture")
+    ok("Stable PayPal idempotency key prevents duplicate captures on retry")
 
     step("BRIEF", "Morning brief with recovery stats")
     print(f"""
     {CYAN}*Anchor — morning brief*
 
     *Disputes:* 3 arrived — fought 2, accepted 1 (low EV)
-    *Abandoned checkouts:* 3 recovered ($312.00 in recovery invoices sent)
+    *Abandoned checkouts:* 3 recovered ($312.00 captured on approved orders)
     *Account health:* 1 protective action to keep dispute rate below freeze threshold{RESET}
     """)
     ok("Recovery revenue shows up in the same brief as dispute handling")
@@ -243,9 +243,9 @@ async def run_morning_brief_demo():
 │  NEEDS REVIEW (1):                                    │
 │    PP-D-1237  $180 UNAUTH — approve fight or accept?  │
 │  RECOVERED (3):                                       │
-│    ORD-5501  $104 — buyer re-invoiced, payment pending │
-│    ORD-5502  $89  — buyer re-invoiced, payment pending │
-│    ORD-5503  $119 — buyer completed payment ✓          │
+│    ORD-5501  $104 — approved order capture completed ✓ │
+│    ORD-5502  $89  — capture pending; no duplicate retry│
+│    ORD-5503  $119 — approved order capture completed ✓ │
 └──────────────────────────────────────────────────────┘
     """
     print(CYAN + sample_brief + RESET)
@@ -277,7 +277,7 @@ async def run_full_demo():
   {GREEN}✓{RESET} Assumed Unauthorized base rate — 10%, configurable and not validated
   {GREEN}✓{RESET} Configurable thresholds — live actions require credentials and permitted PayPal links
   {GREEN}✓{RESET} Morning brief — scheduled while the web process is running
-  {GREEN}✓{RESET} Recovery Agent — finds approved-but-uncaptured orders, sends buyer invoices
+  {GREEN}✓{RESET} Recovery Agent — resumes approved PayPal captures idempotently
   {GREEN}✓{RESET} Two problems solved: disputes managed AND abandoned sales recovered
 
   Integrations overlap and vary by plan. Compare current vendor capabilities,

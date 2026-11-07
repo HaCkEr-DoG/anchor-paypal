@@ -1,8 +1,8 @@
 """
-Watcher Agent — 24/7 webhook listener.
+Watcher Agent — PayPal webhook listener while the service is running.
 
 Receives PayPal webhooks and routes to the correct downstream agent.
-This is what makes Anchor *autonomous* — it doesn't wait for a user
+This is what lets Anchor react to PayPal events — it doesn't wait for a user
 to open a dashboard. It reacts within seconds of a dispute being filed.
 
 PayPal webhook events we handle:
@@ -123,10 +123,10 @@ if not _API_SECRET:
 
 
 def _require_api_key(request: Request) -> None:
-    """Raise 401 unless the caller supplies the correct X-API-Key header or ?api_key= param."""
+    """Raise 401 unless the caller supplies the correct X-API-Key header."""
     if not _API_SECRET:
         return
-    key = request.headers.get("X-API-Key") or request.query_params.get("api_key", "")
+    key = request.headers.get("X-API-Key", "")
     if not hmac.compare_digest(key, _API_SECRET):
         raise HTTPException(401, "Unauthorized")
 
@@ -459,6 +459,16 @@ async def _handle_capture(event: dict, merchant_id: str = ""):
         timestamp=event.get("create_time", datetime.now(timezone.utc).isoformat()),
         merchant_id=merchant_id,
     )
+    order_id = (
+        resource.get("supplementary_data", {})
+        .get("related_ids", {})
+        .get("order_id")
+    )
+    if order_id:
+        try:
+            await RecoveryAgent().mark_order_captured(order_id)
+        except Exception as exc:
+            print(f"[Watcher] Could not mark recovered order {order_id}: {exc}")
     print(f"[Watcher] Capture {resource.get('id')} — indexing for dispute baseline")
 
 
@@ -739,12 +749,12 @@ async def api_stats(request: Request):
         fought_amt = r2.json().get("aggregations", {}).get("total", {}).get("value", 0)
 
         recovery_q = {
-            "query": {"term": {"merchant_id": merchant_id}},
+            "query": {"bool": {"must": [
+                {"term": {"merchant_id": merchant_id}},
+                {"term": {"recovered": True}},
+            ]}},
             "size": 0,
-            "aggs": {
-                "total_rev": {"sum": {"field": "amount"}},
-                "recovered_count": {"filter": {"term": {"recovered": True}}},
-            },
+            "aggs": {"total_rev": {"sum": {"field": "amount"}}},
         }
         async with httpx.AsyncClient() as c:
             r3 = await c.post(
@@ -758,6 +768,7 @@ async def api_stats(request: Request):
             "disputes_total":    sum(buckets.get(k, 0) for k in ("dispute_fought", "dispute_accepted", "dispute_pending")),
             "disputes_fought":   buckets.get("dispute_fought", 0),
             "disputes_accepted": buckets.get("dispute_accepted", 0),
+            "disputes_pending":  buckets.get("dispute_pending", 0),
             "revenue_protected": round(fought_amt, 2),
             "orders_recovered":  r3.json().get("hits", {}).get("total", {}).get("value", 0),
             "revenue_recovered": round(rec_data.get("total_rev", {}).get("value", 0), 2),
@@ -984,8 +995,9 @@ async def api_channel3_enrich(request: Request):
 
 
 @app.get("/api/recoveries")
-async def api_recoveries():
-    """Abandoned orders for the AG Grid recoveries table."""
+async def api_recoveries(request: Request):
+    """Abandoned orders for the AG Grid recoveries table. Requires X-API-Key."""
+    _require_api_key(request)
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
@@ -1110,7 +1122,7 @@ async def api_astropods_status():
     """
     Returns Astropods gateway config, available models with pricing,
     and current-month billing usage.
-    Falls back to demo data when ASTRO_GATEWAY_API_KEY is not set.
+    Reports configured provider data only. Missing credentials are not simulated.
     """
     from agents.astropods import AstropodsGateway
     gw = AstropodsGateway()
@@ -1121,34 +1133,17 @@ async def api_astropods_status():
 @app.post("/api/astropods/chat")
 async def api_astropods_chat(request: Request):
     """
-    Routes a chat completion through the Astropods AI Gateway.
+    Routes an explicitly requested chat completion through the configured gateway.
     Body: {"messages": [...], "model": "claude-sonnet-4-6"}
-    Demonstrates that Anchor can route LLM calls through Astropods for governance.
     """
+    _require_api_key(request)
     from agents.astropods import AstropodsGateway
     gw = AstropodsGateway()
     if not gw.gateway_enabled():
         return JSONResponse({
             "enabled": False,
             "note": "ASTRO_GATEWAY_URL and ASTRO_GATEWAY_API_KEY must be set",
-            "demo_response": {
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": (
-                            "[Astropods demo] Guardian Agent reasoning: "
-                            "Dispute PP-D-00112233 — ITEM_NOT_RECEIVED, $245.00. "
-                            "EV(fight)=$142.80 > EV(accept)=$−245.00. "
-                            "Recommended action: PROVIDE_EVIDENCE. "
-                            "This response was routed through Astropods AI Gateway "
-                            "for governance audit and spend control."
-                        ),
-                    }
-                }],
-                "model": "claude-sonnet-4-6",
-                "usage": {"prompt_tokens": 48, "completion_tokens": 72, "total_tokens": 120},
-            },
-        })
+        }, status_code=503)
     try:
         body = await request.json()
     except Exception:
@@ -1225,12 +1220,13 @@ async def paypal_status():
 
 
 @app.get("/api/paypal/disputes")
-async def paypal_disputes(state: str = "REQUIRED_ACTION", page_size: int = 10):
+async def paypal_disputes(request: Request, state: str = "REQUIRED_ACTION", page_size: int = 10):
     """
     GET /api/paypal/disputes?state=REQUIRED_ACTION&page_size=10
     Proxies PayPal's /v1/customer/disputes filtered by state.
     Returns demo data when keys are absent.
     """
+    _require_api_key(request)
     from agents.paypal_client import get_client, _demo_status
     client = get_client()
     if not client.configured():
@@ -1516,6 +1512,25 @@ async def demo_simulate_dispute(request: Request):
         seller_hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", 50)),
         high_volume_tier=scenario["high_volume"],
     )
+    from agents.dispute_ai_assistant import review_evidence
+    ai_review = await review_evidence(
+        dispute_id=scenario["dispute_id"],
+        reason_code=scenario["claim_type"],
+        amount=scenario["amount"],
+        sources=[
+            {"id": "scenario.claim", "kind": "simulated buyer claim", "text": scenario["narrative"]},
+            {
+                "id": "scenario.merchant_records",
+                "kind": "simulated merchant records",
+                "text": (
+                    f"tracking_present={scenario['has_tracking']}; "
+                    f"delivery_confirmation_present={scenario['has_delivery']}; "
+                    f"buyer_communication_present={scenario['has_comm']}; "
+                    f"item_description_proof_present={scenario['has_item_proof']}"
+                ),
+            },
+        ],
+    )
 
     # Guardian pre-auth threshold simulation
     auto_accept_below = float(os.environ.get("AUTO_ACCEPT_BELOW", 60))
@@ -1603,6 +1618,7 @@ async def demo_simulate_dispute(request: Request):
             "evidence_multiplier": round(score_evidence(evidence, ct), 4),
             "reasoning": oracle.reasoning,
         },
+        "ai_review": ai_review,
         "guardian": {
             "action": guardian_action,
             "reason": guardian_reason,
@@ -3859,15 +3875,14 @@ async def openapi_spec():
             },
             "/api/astropods/agent-registry": {
                 "get": {
-                    "summary": "Astropods Agent Registry",
-                    "description": "Governed oracle fleet manifest — budgets, capabilities, guardrails for all Anchor agents",
-                    "responses": {"200": {"description": "Fleet manifest with agent list and governance policies"}},
+                    "summary": "Astropods Capability Status",
+                    "description": "Reports the implemented evidence-review capability and whether its gateway is configured; live registry sync and usage telemetry are not connected",
+                    "responses": {"200": {"description": "Implemented capability and connection status; no invented usage metrics"}},
                 },
                 "post": {
-                    "summary": "Register Agent (Astropods)",
-                    "description": "Add a new governed oracle agent to the Anchor fleet",
-                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
-                    "responses": {"201": {"description": "Registered agent entry"}},
+                    "summary": "Register Agent (Unavailable)",
+                    "description": "Returns 501 because external Astropods registry synchronization is not connected",
+                    "responses": {"501": {"description": "Registry synchronization is not configured"}},
                 },
             },
             "/api/channel3/product-lookup": {
@@ -4019,7 +4034,7 @@ async def postman_collection():
                 "name": "Astropods",
                 "item": [
                     {"name": "Agent Registry (GET)", "request": {"method": "GET", "url": f"{base}/api/astropods/agent-registry"}},
-                    _pm_post("Register Agent", f"{base}/api/astropods/agent-registry", {"agent_id": "my-agent", "name": "My Custom Oracle", "capabilities": ["scoring"], "budget_usd_per_1k_calls": 0.02}),
+                    {"name": "Registry registration (not connected)", "request": {"method": "POST", "url": f"{base}/api/astropods/agent-registry", "description": "Returns 501 until external registry sync is implemented"}},
                 ],
             },
             {
@@ -4754,141 +4769,42 @@ def _pm_post(name: str, url: str, body: dict) -> dict:
     }
 
 
-# ─── Astropods — agentOS governance ──────────────────────────────────────────
-
-#: Anchor's oracle agent fleet — the governed manifest Astropods would manage.
-_ASTROPODS_REGISTRY: list[dict] = [
-    {
-        "agent_id": "anchor-oracle-ev-calculator",
-        "name": "EV Calculator",
-        "description": "Expected-value scorer for fight vs. refund decisions",
-        "capabilities": ["dispute_scoring", "ev_calculation"],
-        "budget_usd_per_1k_calls": 0.02,
-        "guardrails": ["no_pii_output", "read_only"],
-        "status": "active",
-        "calls_this_period": 1842,
-    },
-    {
-        "agent_id": "anchor-oracle-deadline-prioritizer",
-        "name": "Deadline Prioritizer",
-        "description": "Ranks open disputes by composite urgency score",
-        "capabilities": ["dispute_scheduling", "deadline_tracking"],
-        "budget_usd_per_1k_calls": 0.01,
-        "guardrails": ["no_pii_output", "read_only"],
-        "status": "active",
-        "calls_this_period": 923,
-    },
-    {
-        "agent_id": "anchor-oracle-seller-protection",
-        "name": "Seller Protection Checker",
-        "description": "PayPal Seller Protection eligibility assessor",
-        "capabilities": ["policy_evaluation", "eligibility_check"],
-        "budget_usd_per_1k_calls": 0.01,
-        "guardrails": ["no_pii_output", "read_only"],
-        "status": "active",
-        "calls_this_period": 741,
-    },
-    {
-        "agent_id": "anchor-oracle-evidence-strength",
-        "name": "Evidence Strength Scorer",
-        "description": "Rates evidence package quality before submission",
-        "capabilities": ["evidence_analysis", "win_probability"],
-        "budget_usd_per_1k_calls": 0.01,
-        "guardrails": ["no_pii_output", "read_only"],
-        "status": "active",
-        "calls_this_period": 618,
-    },
-    {
-        "agent_id": "anchor-oracle-merchant-benchmarker",
-        "name": "Merchant Benchmarker",
-        "description": "Peer benchmark percentile rankings for dispute metrics",
-        "capabilities": ["benchmarking", "risk_flags", "coaching"],
-        "budget_usd_per_1k_calls": 0.02,
-        "guardrails": ["anonymized_peers", "no_pii_output", "read_only"],
-        "status": "active",
-        "calls_this_period": 334,
-    },
-    {
-        "agent_id": "anchor-oracle-response-quality",
-        "name": "Response Quality Analyzer",
-        "description": "Grades written dispute responses before submission",
-        "capabilities": ["nlp_analysis", "response_grading", "coaching"],
-        "budget_usd_per_1k_calls": 0.03,
-        "guardrails": ["no_pii_output", "read_only"],
-        "status": "active",
-        "calls_this_period": 112,
-    },
-]
-
+# ─── Astropods — optional evidence-review capability status ──────────────────
 
 @app.get("/api/astropods/agent-registry")
 async def api_astropods_registry():
-    """
-    GET /api/astropods/agent-registry
+    """Report the one implemented AI capability without inventing telemetry."""
+    from agents.astropods import AstropodsGateway
 
-    Astropods agentOS integration — returns Anchor's governed oracle fleet.
-
-    Exposes the full agent registry in the Astropods manifest format:
-    each agent's capabilities, budget allocation, guardrails, and usage
-    counters. In a production deployment this would sync to the Astropods
-    platform so ops teams can govern Anchor's AI fleet centrally alongside
-    all other company agents.
-
-    PayPal benefit: PayPal can audit every AI oracle decision engine in
-    Anchor through a single governance pane — budget controls, capability
-    restrictions, and audit logs all in one place.
-    """
-    total_calls = sum(a["calls_this_period"] for a in _ASTROPODS_REGISTRY)
-    total_budget_usd = sum(
-        a["budget_usd_per_1k_calls"] * a["calls_this_period"] / 1000.0
-        for a in _ASTROPODS_REGISTRY
-    )
+    enabled = AstropodsGateway().gateway_enabled()
     return JSONResponse({
         "platform": "Astropods agentOS",
-        "org": "Anchor — PayPal Dispute Management",
-        "fleet_size": len(_ASTROPODS_REGISTRY),
-        "total_calls_this_period": total_calls,
-        "total_spend_usd_this_period": round(total_budget_usd, 4),
-        "governance_status": "compliant",
-        "agents": _ASTROPODS_REGISTRY,
-        "policies": [
-            {"id": "no-pii", "rule": "No PII in oracle outputs", "enforced": True},
-            {"id": "read-only", "rule": "Oracle agents are read-only — no writes to dispute APIs", "enforced": True},
-            {"id": "budget-cap", "rule": "Max $0.10 USD per 1k calls per agent", "enforced": True},
+        "registry_connected": False,
+        "agents": [
+            {
+                "agent_id": "anchor-dispute-evidence-review",
+                "name": "Dispute Evidence Reviewer",
+                "capabilities": ["source_cited_evidence_summary", "missing_evidence_suggestions"],
+                "status": "configured" if enabled else "unconfigured",
+                "guardrails": [
+                    "source IDs validated by application",
+                    "AI output is advisory and is not submitted to PayPal",
+                    "Settlement Oracle and payment actions remain deterministic",
+                ],
+            }
         ],
+        "usage": None,
+        "note": "Live registry synchronization, governance enforcement, and usage telemetry are not connected.",
     })
 
 
 @app.post("/api/astropods/agent-registry")
 async def api_astropods_register(request: Request):
-    """
-    POST /api/astropods/agent-registry
-
-    Register a new agent into the Anchor governed fleet.
-
-    PayPal benefit: Merchants or PayPal engineers can add custom oracle
-    agents to the fleet. Astropods governance policies are automatically
-    applied — the agent cannot go to production without budget and
-    guardrail declarations.
-    """
-    body = await request.json()
-    required = {"agent_id", "name", "capabilities", "budget_usd_per_1k_calls"}
-    missing = required - set(body.keys())
-    if missing:
-        raise HTTPException(status_code=422, detail=f"Missing fields: {missing}")
-
-    new_agent = {
-        "agent_id": body["agent_id"],
-        "name": body["name"],
-        "description": body.get("description", ""),
-        "capabilities": body["capabilities"],
-        "budget_usd_per_1k_calls": float(body["budget_usd_per_1k_calls"]),
-        "guardrails": body.get("guardrails", ["no_pii_output"]),
-        "status": "registered",
-        "calls_this_period": 0,
-    }
-    _ASTROPODS_REGISTRY.append(new_agent)
-    return JSONResponse({"registered": True, "agent": new_agent}, status_code=201)
+    """The external registry is not connected, so don't imply registration worked."""
+    return JSONResponse({
+        "registered": False,
+        "error": "Astropods registry synchronization is not configured",
+    }, status_code=501)
 
 
 # ─── Channel3 — agentic commerce product enrichment ───────────────────────────

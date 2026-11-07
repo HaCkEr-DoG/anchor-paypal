@@ -14,6 +14,8 @@ services:
         sync: false
       - key: PAYPAL_WEBHOOK_ID
         sync: false
+      - key: API_SECRET
+        generateValue: true
       - key: ELASTICSEARCH_URL
         sync: false
       - key: ELASTICSEARCH_API_KEY
@@ -38,6 +40,12 @@ services:
         value: "0.5"
       - key: MERCHANT_EMAIL
         sync: false
+      - key: ASTRO_GATEWAY_URL
+        sync: false
+      - key: ASTRO_GATEWAY_API_KEY
+        sync: false
+      - key: ANCHOR_AI_MODEL
+        value: claude-sonnet-4-6
       - key: RECOVERY_DELAY_MINUTES
         value: "30"
       - key: RECOVERY_MIN_AMOUNT

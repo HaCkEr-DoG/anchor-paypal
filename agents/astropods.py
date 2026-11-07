@@ -2,16 +2,12 @@
 Astropods AI Governance Integration
 https://astropods.com
 
-Astropods is an AI governance platform. Its AI Gateway sits in front of
-every LLM call — logging every decision, enforcing spend budgets, and
-letting you swap models without touching code.
+Anchor uses the gateway for an optional, source-cited dispute evidence review.
+The deterministic Settlement Oracle and PayPal action policy do not depend on
+the model. Missing credentials are reported as unconfigured; no sample usage is
+presented as live provider activity.
 
-For Anchor, this means every Guardian Agent reasoning step and every
-Recovery Agent message goes through Astropods' audit trail. Judges can
-see real-time governance data: which model fired, how many tokens, how
-much it cost, whether a spend cap was hit.
-
-Required env vars (all optional — panel works in demo mode without them):
+Required env vars:
   ASTRO_GATEWAY_URL       e.g. https://gateway.astropods.com
   ASTRO_GATEWAY_API_KEY   gateway API key (from Astropods Dashboard)
   ASTRO_ACCOUNT           account slug (e.g. "anchor-team")
@@ -41,9 +37,8 @@ ASTRO_PLATFORM    = "https://astropods.com/api/v1"
 
 class AstropodsGateway:
     """
-    OpenAI-compatible LLM gateway client.
-    When env vars are set, all chat completion calls route through
-    Astropods for governance, auditing, and spend control.
+    OpenAI-compatible gateway client used by Anchor's optional evidence review.
+    This client does not itself enforce governance policies or payment actions.
     """
 
     def __init__(
@@ -157,14 +152,16 @@ class AstropodsGateway:
 
     async def status_summary(self) -> dict:
         """
-        Returns a dict the dashboard can render directly.
-        Always returns something; uses demo data when keys are absent.
+        Returns configured provider data only; absent credentials are explicit.
         """
         if not self.gateway_enabled() and not self.platform_enabled():
             return {
                 "enabled": False,
+                "demo": True,
+                "gateway_configured": False,
                 "note": "Set ASTRO_GATEWAY_URL + ASTRO_GATEWAY_API_KEY in Render env vars",
-                "demo": _demo_status(),
+                "models": [],
+                "billing": None,
             }
 
         result: dict = {"enabled": True}
@@ -195,7 +192,7 @@ class AstropodsGateway:
 
 
 # ---------------------------------------------------------------------------
-# Guardian LLM routing helper
+# Optional generic gateway helper
 # ---------------------------------------------------------------------------
 
 async def route_llm(
@@ -205,19 +202,12 @@ async def route_llm(
     **kwargs,
 ) -> str:
     """
-    Route an LLM call through Astropods when configured, fall back to
-    fallback_fn() otherwise.
+    Route a generic LLM call through Astropods when configured, or call an
+    explicitly supplied fallback. The dispute evidence review uses its own
+    fail-closed path and does not use this fallback helper.
 
     Returns the assistant text content as a string.
 
-    Usage in Guardian:
-        from agents.astropods import route_llm
-
-        text = await route_llm(
-            messages=[{"role": "user", "content": prompt}],
-            model="claude-sonnet-4-6",
-            fallback_fn=lambda: direct_anthropic_call(prompt),
-        )
     """
     gw = AstropodsGateway()
     if gw.gateway_enabled():
@@ -236,26 +226,3 @@ async def route_llm(
         return result
 
     return ""
-
-
-# ---------------------------------------------------------------------------
-# Demo data
-# ---------------------------------------------------------------------------
-
-def _demo_status() -> dict:
-    return {
-        "gateway_url": "https://gateway.astropods.com",
-        "gateway_configured": True,
-        "models": [
-            {"id": "claude-sonnet-4-6", "maker": "Anthropic", "family": "claude",    "context_tokens": 200000, "input_per_million_usd": "3.00",  "output_per_million_usd": "15.00"},
-            {"id": "claude-opus-5-5",   "maker": "Anthropic", "family": "claude",    "context_tokens": 200000, "input_per_million_usd": "15.00", "output_per_million_usd": "75.00"},
-            {"id": "gpt-5-6-terra",     "maker": "OpenAI",    "family": "gpt",       "context_tokens": 128000, "input_per_million_usd": "5.00",  "output_per_million_usd": "20.00"},
-            {"id": "nova-lite",         "maker": "Amazon",    "family": "nova",      "context_tokens": 300000, "input_per_million_usd": "0.60",  "output_per_million_usd": "2.40"},
-            {"id": "mistral-large-3",   "maker": "Mistral",   "family": "mistral",   "context_tokens": 128000, "input_per_million_usd": "2.00",  "output_per_million_usd": "6.00"},
-            {"id": "jev-1-13-0",        "maker": "Astropods", "family": "decision",  "context_tokens": None,   "input_per_million_usd": "1.00",  "output_per_million_usd": "1.00"},
-        ],
-        "billing": {
-            "available": True,
-            "data": {"total_usd": "0.42", "calls": 37},
-        },
-    }

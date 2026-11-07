@@ -340,6 +340,13 @@
       font-size: 12.5px;
       color: var(--muted);
     }
+    .queue-context {
+      font-size: 11.5px;
+      color: var(--muted-2);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
     .status-pill {
       display: inline-flex;
       align-items: center;
@@ -731,11 +738,11 @@
 
     <div class="page-header">
       <h1 id="greeting">Good morning, Acme</h1>
-      <p id="subheading">Your next decision is ready.</p>
+      <p id="subheading">Run a labeled sample decision or connect merchant data to begin.</p>
     </div>
 
     <!-- Hero dispute card -->
-    <div class="hero-card" id="hero-card" aria-label="Urgent dispute requiring review">
+    <div class="hero-card" id="hero-card" aria-label="Urgent dispute requiring review" style="display:none">
       <div class="hero-left">
         <div class="hero-eyebrow">Needs your review</div>
         <div class="hero-amount" id="hero-amount">$245</div>
@@ -745,26 +752,26 @@
             <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.2" opacity="0.6"/>
             <path d="M6.5 3.5V6.5L8.5 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
           </svg>
-          <span id="hero-due-text">Due in 8 hours</span>
+          <span id="hero-due-text">Merchant approval required</span>
         </div>
       </div>
 
       <div class="hero-signals" aria-label="Oracle signals">
         <div class="hero-signal">
           <div class="icon check" aria-hidden="true">✓</div>
-          <span id="signal-1">Delivery confirmed</span>
+          <span id="signal-1">Awaiting your decision</span>
         </div>
         <div class="hero-signal">
           <div class="icon" aria-hidden="true">ℹ</div>
           <div>
-            <div id="signal-2">Oracle suggests fighting</div>
-            <div style="font-size:11.5px;color:var(--hero-muted);margin-top:2px;" id="hero-ev">Estimated EV +$120</div>
+            <div id="signal-2">Open the recorded reasoning</div>
+            <div style="font-size:11.5px;color:var(--hero-muted);margin-top:2px;" id="hero-ev">—</div>
           </div>
         </div>
       </div>
 
       <div class="hero-action">
-        <button class="btn-primary" id="review-btn" onclick="openReviewDispute()" aria-label="Review dispute PP-D-0284">
+        <button class="btn-primary" id="review-btn" onclick="openReviewDispute()" aria-label="Review dispute">
           Review dispute
         </button>
       </div>
@@ -772,27 +779,27 @@
 
     <!-- No urgent disputes state (hidden by default) -->
     <div id="hero-empty" style="display:none; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:28px 24px; margin-bottom:20px; color:var(--muted); font-size:14px;">
-      No urgent disputes — all responses are on track.
+      No dispute decisions are waiting for your review.
     </div>
 
     <!-- Metrics strip -->
     <div class="metrics-strip" role="region" aria-label="Portfolio metrics">
       <div class="metric-cell">
-        <div class="metric-label">Open disputes</div>
-        <div class="metric-value" id="m-open">7</div>
+        <div class="metric-label">Disputes handled</div>
+        <div class="metric-value" id="m-open">0</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-label">At risk</div>
-        <div class="metric-value" id="m-risk">$2,410</div>
+        <div class="metric-label">Awaiting review</div>
+        <div class="metric-value" id="m-risk">0</div>
       </div>
       <div class="metric-cell">
         <div class="metric-label">Recovered</div>
-        <div class="metric-value" id="m-recovered">$824</div>
+        <div class="metric-value" id="m-recovered">$0</div>
       </div>
       <div class="metric-cell">
-        <div class="metric-label">Win rate</div>
-        <div class="metric-value" id="m-winrate">88%</div>
-        <div class="metric-sub">90 days</div>
+        <div class="metric-label">Win estimate</div>
+        <div class="metric-value" id="m-winrate">—</div>
+        <div class="metric-sub" id="m-winrate-sub">outcomes not calibrated</div>
       </div>
     </div>
 
@@ -806,29 +813,11 @@
           <div class="queue-thead" role="row">
             <div class="queue-th" role="columnheader">Case</div>
             <div class="queue-th" role="columnheader">Amount</div>
-            <div class="queue-th" role="columnheader">Due</div>
-            <div class="queue-th" role="columnheader">Status</div>
+            <div class="queue-th" role="columnheader">Decision</div>
+            <div class="queue-th" role="columnheader">Context</div>
           </div>
           <div id="queue-body">
-            <!-- Rows injected by JS -->
-            <div class="queue-row" role="row" onclick="switchPanel('disputes')">
-              <div class="queue-case-id" role="cell">PP-D-0285</div>
-              <div class="queue-amount" role="cell">$189</div>
-              <div class="queue-due" role="cell">Due tomorrow</div>
-              <div role="cell"><span class="status-pill status-evidence">Evidence needed</span></div>
-            </div>
-            <div class="queue-row" role="row" onclick="switchPanel('disputes')">
-              <div class="queue-case-id" role="cell">PP-D-0286</div>
-              <div class="queue-amount" role="cell">$67</div>
-              <div class="queue-due" role="cell">Due in 2 days</div>
-              <div role="cell"><span class="status-pill status-progress">In progress</span></div>
-            </div>
-            <div class="queue-row" role="row" onclick="switchPanel('disputes')">
-              <div class="queue-case-id" role="cell">PP-D-0287</div>
-              <div class="queue-amount" role="cell">$34</div>
-              <div class="queue-due" role="cell">Due in 3 days</div>
-              <div role="cell"><span class="status-pill status-progress">In progress</span></div>
-            </div>
+            <div class="queue-row" role="row"><div class="queue-context" role="cell">No live dispute activity loaded.</div></div>
           </div>
         </div>
       </div>
@@ -837,12 +826,12 @@
       <div>
         <div class="section-title">Checkout recovery</div>
         <div class="recovery-card">
-          <div class="recovery-title">3 orders approved, not captured</div>
-          <div class="recovery-sub" id="recovery-sub">3 orders approved, not captured</div>
-          <div class="recovery-amount" id="recovery-amount">$420</div>
-          <div class="recovery-est">estimated recovery</div>
+          <div class="recovery-title">Approved orders awaiting capture</div>
+          <div class="recovery-sub" id="recovery-sub">No live order activity loaded</div>
+          <div class="recovery-amount" id="recovery-amount">$0</div>
+          <div class="recovery-est" id="recovery-est">confirmed captures by Anchor</div>
           <div class="recovery-bar-bg" aria-hidden="true">
-            <div class="recovery-bar-fill" id="recovery-bar"></div>
+            <div class="recovery-bar-fill" id="recovery-bar" style="width:0%"></div>
           </div>
           <a class="recovery-link" onclick="switchPanel('recoveries')" tabindex="0" role="link">View orders</a>
         </div>
@@ -857,14 +846,14 @@
         <div>
           <span class="oracle-label">Settlement Oracle</span>
           <div class="oracle-ev">
-            EV(fight) <span id="ev-fight">+$120</span>
+            EV(fight) <span id="ev-fight">—</span>
             &nbsp;·&nbsp;
-            EV(accept) <span id="ev-accept">$0</span>
+            EV(accept) <span id="ev-accept">—</span>
           </div>
         </div>
       </div>
       <div style="display:flex;align-items:center;gap:16px;">
-        <span class="oracle-model">model estimate</span>
+        <span class="oracle-model">sample calculation</span>
         <button class="oracle-cta" onclick="openDrawer()" aria-haspopup="dialog" aria-expanded="false" id="try-sample-btn">
           Try a sample decision
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -935,30 +924,30 @@
     <div class="drawer-label">Simulated · No PayPal action will be executed</div>
 
     <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
-      Choose a scenario and Anchor runs the full oracle pipeline — Settlement Oracle calculates EV(fight) vs EV(accept), Guardian checks evidence strength, and you see the recommended decision.
+      Choose a labeled sample. The deterministic Oracle calculates EV(fight) vs EV(accept); a configured Astropods model reviews only the supplied records and cites its sources. No PayPal action is executed.
     </p>
 
     <div class="scenario-grid" id="scenario-grid" role="group" aria-label="Select a scenario">
-      <button class="scenario-btn" onclick="selectScenario(this,'inr')" aria-pressed="false">
+      <button class="scenario-btn" onclick="selectScenario(this,'inr_fight')" aria-pressed="false">
         <div class="scenario-name">Item not received</div>
         <div class="scenario-desc">$245 · INR · Delivery tracking present</div>
       </button>
-      <button class="scenario-btn" onclick="selectScenario(this,'snad')" aria-pressed="false">
+      <button class="scenario-btn" onclick="selectScenario(this,'snad_fight')" aria-pressed="false">
         <div class="scenario-name">Significantly not as described</div>
-        <div class="scenario-desc">$189 · SNAD · Product mismatch</div>
+        <div class="scenario-desc">$320 · SNAD · Product and buyer evidence</div>
       </button>
-      <button class="scenario-btn" onclick="selectScenario(this,'unauth')" aria-pressed="false">
+      <button class="scenario-btn" onclick="selectScenario(this,'unauthorized_accept')" aria-pressed="false">
         <div class="scenario-name">Unauthorized transaction</div>
-        <div class="scenario-desc">$67 · UNAUTH · Buyer-initiated</div>
+        <div class="scenario-desc">$180 · UNAUTH · No authorization evidence</div>
       </button>
-      <button class="scenario-btn" onclick="selectScenario(this,'subscription')" aria-pressed="false">
-        <div class="scenario-name">Subscription cancellation</div>
-        <div class="scenario-desc">$34 · SUB · Cancellation dispute</div>
+      <button class="scenario-btn" onclick="selectScenario(this,'micro_accept')" aria-pressed="false">
+        <div class="scenario-name">Micro dispute</div>
+        <div class="scenario-desc">$18.50 · INR · No delivery evidence</div>
       </button>
     </div>
 
     <button class="drawer-run-btn" id="run-btn" onclick="runScenario()" disabled>
-      Run oracle pipeline
+      Run sample review
     </button>
     <div class="drawer-disclaimer" aria-live="polite">
       This is a simulated decision. No action is taken in PayPal.
@@ -984,6 +973,12 @@
       <div class="result-row">
         <span class="result-label">Evidence strength</span>
         <span class="result-value" id="res-evidence">—</span>
+      </div>
+      <div class="result-row" style="display:block;border-top:1px solid var(--border);padding-top:14px;margin-top:8px;">
+        <span class="result-label">AI evidence review</span>
+        <div id="res-ai-status" style="font-size:12px;color:var(--muted);margin-top:6px;">Not run</div>
+        <ul id="res-ai-claims" style="font-size:12px;color:var(--text);padding-left:18px;margin:6px 0;"></ul>
+        <div id="res-ai-gaps" style="font-size:12px;color:var(--muted);"></div>
       </div>
       <div class="result-no-action" aria-atomic="true">
         ✓ Simulated — no action taken in PayPal. This is a model estimate only.
@@ -1017,46 +1012,50 @@
   async function loadData() {
     try {
       const [stats, disputes, recoveries] = await Promise.all([
-        fetch('/api/stats').then(r => r.json()).catch(() => null),
-        fetch('/api/disputes').then(r => r.json()).catch(() => null),
-        fetch('/api/recoveries').then(r => r.json()).catch(() => null),
+        fetch('/api/stats').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/disputes').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/recoveries').then(r => r.ok ? r.json() : null).catch(() => null),
       ]);
 
-      if (stats) {
+      if (stats && stats.demo !== true && Object.hasOwn(stats, 'disputes_total')) {
         const badge = document.getElementById('env-badge');
         badge.textContent = 'Live';
         badge.classList.add('live');
+        document.getElementById('m-open').textContent = stats.disputes_total ?? 0;
+        document.getElementById('m-risk').textContent = stats.disputes_pending ?? 0;
+        document.getElementById('m-recovered').textContent = '$' + Number(stats.revenue_recovered || 0).toLocaleString('en-US', {maximumFractionDigits:0});
+        document.getElementById('m-winrate').textContent = '—';
+        document.getElementById('m-winrate-sub').textContent = 'outcomes not calibrated';
       }
 
-      if (disputes && disputes.disputes && disputes.disputes.length > 0) {
-        const d = disputes.disputes;
-        const urgent = d.find(x => x.status === 'WAITING_FOR_SELLER_RESPONSE') || d[0];
-        if (urgent) {
-          document.getElementById('hero-amount').textContent = '$' + (urgent.disputed_amount || urgent.amount || '—');
-          document.getElementById('hero-desc').textContent =
-            (urgent.reason || 'Dispute') + ' · ' + (urgent.dispute_id || urgent.id || '');
-          const dueH = urgent.seller_response_due_date
-            ? Math.max(0, Math.round((new Date(urgent.seller_response_due_date) - Date.now()) / 3600000))
-            : null;
-          if (dueH !== null) {
-            document.getElementById('hero-due-text').textContent =
-              dueH < 24 ? `Due in ${dueH}h` : `Due in ${Math.round(dueH/24)} days`;
-          }
+      if (disputes && disputes.demo !== true && Array.isArray(disputes.rows)) {
+        const rows = disputes.rows;
+        const pending = rows.find(x => x.action_type === 'dispute_pending');
+        const hero = document.getElementById('hero-card');
+        const empty = document.getElementById('hero-empty');
+        if (pending) {
+          hero.style.display = 'flex';
+          empty.style.display = 'none';
+          document.getElementById('hero-amount').textContent = '$' + Number(pending.amount || 0).toLocaleString('en-US', {maximumFractionDigits:0});
+          document.getElementById('hero-desc').textContent = `Dispute needs approval · ${pending.dispute_id || 'PayPal case'}`;
+          document.getElementById('hero-due-text').textContent = 'Merchant approval required';
+          document.getElementById('signal-1').textContent = 'Awaiting your decision';
+          document.getElementById('signal-2').textContent = 'Open the recorded reasoning';
+          document.getElementById('hero-ev').textContent = pending.reasoning || 'Model estimate; inspect the dispute record';
+        } else {
+          hero.style.display = 'none';
+          empty.style.display = 'block';
         }
-        document.getElementById('m-open').textContent = d.filter(x => x.status !== 'RESOLVED').length;
-        const atRisk = d.reduce((s, x) => s + parseFloat(x.disputed_amount || x.amount || 0), 0);
-        document.getElementById('m-risk').textContent = '$' + atRisk.toLocaleString('en-US', {maximumFractionDigits:0});
-
-        // Queue rows from live disputes (skip hero)
-        renderQueue(d.filter(x => x.dispute_id !== (urgent && urgent.dispute_id)).slice(0,4));
+        renderQueue(rows.slice(0,4));
       }
 
-      if (recoveries && recoveries.recoveries) {
-        const rec = recoveries.recoveries;
-        const total = rec.reduce((s,x) => s + parseFloat(x.amount || 0), 0);
-        document.getElementById('recovery-amount').textContent = '$' + total.toLocaleString('en-US', {maximumFractionDigits:0});
-        document.getElementById('recovery-sub').textContent = rec.length + ' orders approved, not captured';
-        document.getElementById('recovery-bar').style.width = Math.min(100, rec.length * 10) + '%';
+      if (recoveries && recoveries.demo !== true && Array.isArray(recoveries.rows)) {
+        const rows = recoveries.rows;
+        const pending = rows.filter(x => !x.recovered && !['needs_review','completed_externally'].includes(x.recovery_status));
+        document.getElementById('recovery-amount').textContent = '$' + Number(stats?.revenue_recovered || 0).toLocaleString('en-US', {maximumFractionDigits:0});
+        document.getElementById('recovery-est').textContent = 'captured by Anchor';
+        document.getElementById('recovery-sub').textContent = `${pending.length} approved orders waiting for capture`;
+        document.getElementById('recovery-bar').style.width = Math.min(100, pending.length * 10) + '%';
       }
 
     } catch(e) {
@@ -1065,28 +1064,37 @@
   }
 
   function renderQueue(disputes) {
-    if (!disputes || disputes.length === 0) return;
+    if (!disputes) return;
     const body = document.getElementById('queue-body');
-    body.innerHTML = '';
+    body.replaceChildren();
     disputes.forEach(d => {
-      const dueH = d.seller_response_due_date
-        ? Math.max(0, Math.round((new Date(d.seller_response_due_date) - Date.now()) / 3600000))
-        : null;
-      const dueText = dueH === null ? '—' : dueH < 24 ? `Due in ${dueH}h` : dueH < 48 ? 'Due tomorrow' : `Due in ${Math.round(dueH/24)} days`;
-      const isEvidence = d.status === 'WAITING_FOR_SELLER_RESPONSE';
+      const action = String(d.action_type || 'dispute_action').replaceAll('_',' ');
       const row = document.createElement('div');
       row.className = 'queue-row';
       row.setAttribute('role','row');
       row.setAttribute('tabindex','0');
       row.onclick = () => switchPanel('disputes');
-      row.innerHTML = `
-        <div class="queue-case-id" role="cell">${d.dispute_id || d.id || '—'}</div>
-        <div class="queue-amount" role="cell">$${parseFloat(d.disputed_amount || d.amount || 0).toFixed(0)}</div>
-        <div class="queue-due" role="cell">${dueText}</div>
-        <div role="cell"><span class="status-pill ${isEvidence ? 'status-evidence' : 'status-progress'}">${isEvidence ? 'Evidence needed' : 'In progress'}</span></div>
-      `;
+      const cells = [
+        [d.dispute_id || d.id || 'PayPal dispute', 'queue-case-id'],
+        ['$' + Number(d.amount || d.disputed_amount || 0).toFixed(2), 'queue-amount'],
+        [action, 'queue-due'],
+        [d.reasoning || d.outcome || 'Recorded decision', 'queue-context'],
+      ];
+      cells.forEach(([text, className]) => {
+        const cell = document.createElement('div');
+        cell.className = className;
+        cell.setAttribute('role','cell');
+        cell.textContent = text;
+        row.appendChild(cell);
+      });
       body.appendChild(row);
     });
+    if (!disputes.length) {
+      const empty = document.createElement('div');
+      empty.className = 'queue-row';
+      empty.textContent = 'No recorded dispute decisions yet.';
+      body.appendChild(empty);
+    }
   }
 
   function openReviewDispute() {
@@ -1099,22 +1107,10 @@
   let _selectedScenario = null;
 
   const SCENARIOS = {
-    inr: {
-      amount: 245, reason: 'INR', p_win: 0.78, evidence_coverage: 0.85,
-      ev_fight: '+$120', ev_accept: '$0', rec: 'Fight', win_prob: '78%', evidence: 'Strong'
-    },
-    snad: {
-      amount: 189, reason: 'SNAD', p_win: 0.52, evidence_coverage: 0.60,
-      ev_fight: '+$38', ev_accept: '$0', rec: 'Fight (marginal)', win_prob: '52%', evidence: 'Moderate'
-    },
-    unauth: {
-      amount: 67, reason: 'UNAUTH', p_win: 0.28, evidence_coverage: 0.30,
-      ev_fight: '−$44', ev_accept: '$0', rec: 'Accept / Refund', win_prob: '28%', evidence: 'Weak'
-    },
-    subscription: {
-      amount: 34, reason: 'SUB', p_win: 0.65, evidence_coverage: 0.75,
-      ev_fight: '+$18', ev_accept: '$0', rec: 'Fight', win_prob: '65%', evidence: 'Good'
-    },
+    inr_fight: { amount: 245, reason: 'ITEM_NOT_RECEIVED' },
+    snad_fight: { amount: 320, reason: 'SIGNIFICANTLY_NOT_AS_DESCRIBED' },
+    unauthorized_accept: { amount: 180, reason: 'UNAUTHORIZED' },
+    micro_accept: { amount: 18.5, reason: 'ITEM_NOT_RECEIVED' },
   };
 
   function selectScenario(btn, key) {
@@ -1133,42 +1129,63 @@
     if (!_selectedScenario) return;
     const btn = document.getElementById('run-btn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Running oracle…';
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Reviewing evidence…';
 
-    // Try live API first; fall back to static model
-    let result = null;
+    let result;
     try {
-      const s = SCENARIOS[_selectedScenario];
       const resp = await fetch('/api/demo/simulate-dispute', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          reason_code: s.reason,
-          amount: s.amount,
-          evidence_coverage: s.evidence_coverage,
-        })
+        body: JSON.stringify({scenario: _selectedScenario})
       });
-      if (resp.ok) result = await resp.json();
-    } catch(e) {}
+      if (!resp.ok) throw new Error(`Scenario request failed (${resp.status})`);
+      result = await resp.json();
+    } catch(e) {
+      document.getElementById('res-ai-status').textContent = 'Could not reach Anchor. Please try again.';
+      document.getElementById('drawer-result').classList.add('show');
+      btn.disabled = false;
+      btn.textContent = 'Try again';
+      return;
+    }
 
-    const s = SCENARIOS[_selectedScenario];
-    document.getElementById('res-rec').textContent = result?.recommendation || s.rec;
-    document.getElementById('res-ev-fight').textContent = result?.ev_fight != null ? (result.ev_fight >= 0 ? '+$' : '−$') + Math.abs(result.ev_fight).toFixed(0) : s.ev_fight;
-    document.getElementById('res-ev-accept').textContent = result?.ev_accept != null ? '$' + result.ev_accept.toFixed(0) : s.ev_accept;
-    document.getElementById('res-win-prob').textContent = result?.win_probability != null ? (result.win_probability * 100).toFixed(0) + '%' : s.win_prob;
-    document.getElementById('res-evidence').textContent = result?.evidence_strength || s.evidence;
+    const oracle = result.oracle || {};
+    document.getElementById('res-rec').textContent = oracle.recommendation || 'Review required';
+    document.getElementById('res-ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
+    document.getElementById('res-ev-accept').textContent = oracle.ev_accept != null ? '$' + oracle.ev_accept.toFixed(2) : '—';
+    document.getElementById('res-win-prob').textContent = oracle.win_probability != null ? (oracle.win_probability * 100).toFixed(0) + '% · model estimate' : '—';
+    document.getElementById('res-evidence').textContent = oracle.evidence_multiplier != null ? oracle.evidence_multiplier.toFixed(2) + '× · rule-based' : '—';
 
     const rec = document.getElementById('res-rec');
     rec.className = 'result-value';
-    const rt = (result?.recommendation || s.rec).toLowerCase();
+    const rt = String(oracle.recommendation || '').toLowerCase();
     rec.classList.add(rt.includes('fight') || rt.includes('reject') ? 'fight' : '');
+
+    const ai = result.ai_review || {};
+    const aiStatus = document.getElementById('res-ai-status');
+    const aiClaims = document.getElementById('res-ai-claims');
+    aiClaims.replaceChildren();
+    document.getElementById('res-ai-gaps').textContent = '';
+    if (ai.status === 'ready') {
+      aiStatus.textContent = `Live AI review · ${ai.provider} · ${ai.model}`;
+      (ai.claims || []).forEach(claim => {
+        const li = document.createElement('li');
+        li.textContent = `${claim.statement} [${claim.source_ids.join(', ')}]`;
+        aiClaims.appendChild(li);
+      });
+      const gaps = ai.missing_evidence || [];
+      if (gaps.length) document.getElementById('res-ai-gaps').textContent = `Could request: ${gaps.join(' · ')}`;
+    } else {
+      aiStatus.textContent = ai.status === 'not_configured'
+        ? 'AI gateway not configured; no AI output was generated.'
+        : `AI review unavailable (${ai.status || 'unknown'}); no AI output was generated.`;
+    }
 
     document.getElementById('drawer-result').classList.add('show');
     btn.disabled = false;
-    btn.innerHTML = 'Run oracle pipeline';
+    btn.innerHTML = 'Run sample review';
 
     // Update oracle bar
-    document.getElementById('ev-fight').textContent = result?.ev_fight != null ? (result.ev_fight >= 0 ? '+$' : '−$') + Math.abs(result.ev_fight).toFixed(0) : s.ev_fight;
+    document.getElementById('ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
   }
 
   function openDrawer() {
@@ -1180,7 +1197,7 @@
     _selectedScenario = null;
     document.querySelectorAll('.scenario-btn').forEach(b => { b.classList.remove('selected'); b.setAttribute('aria-pressed','false'); });
     document.getElementById('run-btn').disabled = true;
-    document.getElementById('run-btn').innerHTML = 'Run oracle pipeline';
+    document.getElementById('run-btn').innerHTML = 'Run sample review';
     document.getElementById('drawer-result').classList.remove('show');
   }
 
@@ -1253,10 +1270,11 @@
     },
     {
       key: 'astropods', name: 'Astropods', logo: '🤖', category: 'Agent Governance',
-      desc: 'AgentOS registry — Anchor\'s full oracle fleet registered as governed AI agents with metadata.',
+      desc: 'Optional source-cited dispute evidence review. The model does not control EV decisions or PayPal actions.',
       endpoints: ['GET /api/astropods/status', 'GET /api/astropods/agent-registry'],
       statusUrl: '/api/astropods/status',
-      statusKey: 'status',
+      statusKey: 'gateway_configured',
+      statusLabel: 'Configured',
     },
     {
       key: 'channel3', name: 'Channel3', logo: '🛍️', category: 'Commerce Enrichment',
@@ -1309,12 +1327,13 @@
         if (res.ok) {
           const data = await res.json().catch(() => ({}));
           const statusVal = s.statusKey ? (data[s.statusKey] || '') : '';
-          const isDemo = String(statusVal).toLowerCase().includes('demo') ||
+          const isDemo = data.demo === true || statusVal === false || !statusVal ||
+                         String(statusVal).toLowerCase().includes('demo') ||
                          String(statusVal).toLowerCase().includes('simulated');
           el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
           el.innerHTML = isDemo
-            ? '<span class="conn-dot demo"></span>Demo mode'
-            : '<span class="conn-dot ok"></span>Connected';
+            ? `<span class="conn-dot demo"></span>${s.statusKey === 'gateway_configured' ? 'Not configured' : 'Demo mode'}`
+            : `<span class="conn-dot ok"></span>${s.statusLabel || 'Connected'}`;
           // Extra detail if available
           if (data.version) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">v${data.version}</span>`;
           if (data.requests_indexed != null) el.innerHTML += ` <span style="font-size:11px;color:var(--muted-2);margin-left:4px;">${data.requests_indexed} requests</span>`;

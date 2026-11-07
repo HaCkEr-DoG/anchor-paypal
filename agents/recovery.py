@@ -7,17 +7,14 @@ the buyer completed the full PayPal auth flow — the merchant's page likely err
 before calling /capture.
 
 Flow:
-  CHECKOUT.ORDER.APPROVED webhook  → store order in Elasticsearch
-  POST /recovery-check (cron 15m)  → scan approved+uncaptured orders >DELAY_MINUTES
-                                   → generate PayPal invoice for same amount
-                                   → send buyer a one-click payment link via Zapier
-                                   → log recovery_attempted to anchor-actions
-  Morning brief                    → "3 abandoned orders recovered ($312)"
+  CHECKOUT.ORDER.APPROVED webhook  → store the approved order in Elasticsearch
+  recovery scan after delay         → re-fetch PayPal order state
+  status APPROVED                   → retry capture on the same order, idempotently
+  capture webhook                   → mark recovered and update the merchant history
 
-Why invoices over re-capture:
-  Capturing an abandoned order hours later without re-engaging the buyer risks
-  confusion and chargebacks. A PayPal invoice gives the buyer a clear payment
-  prompt from PayPal itself, with full context, that they can complete or ignore.
+The buyer already approved this PayPal order. Resuming its intended capture avoids
+creating a second invoice/payment request for the same purchase. Unknown or
+unexpected PayPal states fail closed and require merchant review.
 """
 
 import asyncio
@@ -54,6 +51,8 @@ class AbandonedOrder:
     approved_at: str = ""
     recovery_attempts: int = 0
     recovered: bool = False
+    recovery_status: str = "pending_recovery"
+    capture_id: str = ""
 
 
 class RecoveryAgent:
@@ -101,7 +100,7 @@ class RecoveryAgent:
                     "currency": item.get("unit_amount", {}).get("currency_code", currency),
                 })
 
-        if not buyer_email or amount < self.config.min_amount:
+        if amount < self.config.min_amount:
             return
 
         order = AbandonedOrder(
@@ -115,14 +114,14 @@ class RecoveryAgent:
             approved_at=event.get("create_time", datetime.now(timezone.utc).isoformat()),
         )
         await self._index_abandoned_order(order)
-        print(f"[Recovery] Tracked approved order {order_id}: ${amount:.2f} for {buyer_email}")
+        print(f"[Recovery] Tracked approved order {order_id}: ${amount:.2f}")
 
     # ── Cron entry point ────────────────────────────────────────────────────
 
     async def scan_and_recover(self, merchant_id: str) -> dict:
         """
         Called every 15 minutes by the /recovery-check cron endpoint.
-        Finds stale approved orders, generates invoices, and sends recovery emails.
+        Finds stale approved orders and safely resumes their existing capture.
         Returns a summary of actions taken.
         """
         from datetime import timedelta
@@ -137,6 +136,7 @@ class RecoveryAgent:
 
         recovered = 0
         skipped = 0
+        pending = 0
         for order in stale_orders:
             if order.recovery_attempts >= self.config.max_attempts:
                 skipped += 1
@@ -145,25 +145,69 @@ class RecoveryAgent:
                 skipped += 1
                 continue
 
-            # Verify order is still uncaptured before bothering buyer
-            token = await self._get_token()
-            status = await self._get_order_status(order.order_id, token)
-            if status in ("COMPLETED", "VOIDED"):
-                await self._mark_no_longer_needed(order.order_id)
+            # Re-fetch source-of-truth state. Only an explicitly APPROVED order
+            # is eligible; UNKNOWN and other states never trigger a payment.
+            try:
+                token = await self._get_token()
+                paypal_order = await self._get_order_details(order.order_id, token)
+                status = str((paypal_order or {}).get("status", "UNKNOWN")).upper()
+            except Exception as exc:
+                print(f"[Recovery] State check failed for {order.order_id}: {exc}")
+                await self._mark_recovery_state(order.order_id, "needs_review", "PayPal state lookup failed")
+                skipped += 1
+                continue
+            if status == "COMPLETED":
+                if order.recovery_status == "capture_pending" or order.capture_id:
+                    await self._record_capture_result(
+                        order, merchant_id, "captured", {"capture_id": order.capture_id}
+                    )
+                    recovered += 1
+                else:
+                    await self._mark_no_longer_needed(order.order_id)
+                    skipped += 1
+                continue
+            if order.recovery_status == "capture_pending":
+                await self._mark_recovery_state(
+                    order.order_id,
+                    "needs_review",
+                    "PayPal capture did not reach COMPLETED; verify its status before taking payment action",
+                )
+                skipped += 1
+                continue
+            intent = str((paypal_order or {}).get("intent", "")).upper()
+            if status != "APPROVED" or intent != "CAPTURE":
+                await self._mark_recovery_state(
+                    order.order_id,
+                    "needs_review",
+                    f"PayPal order state/intent {status}/{intent or 'UNKNOWN'} is not eligible for automatic capture",
+                )
                 skipped += 1
                 continue
 
-            invoice_link = await self._create_recovery_invoice(order, token)
-            if invoice_link:
-                await self._send_recovery_email(order, invoice_link)
-                await self._log_recovery_attempt(order, invoice_link, merchant_id)
-                recovered += 1
-                print(
-                    f"[Recovery] Sent recovery for {order.order_id} "
-                    f"${order.amount:.2f} → {order.buyer_email}"
-                )
+            if not await self._claim_recovery_order(order.order_id):
+                skipped += 1
+                continue
 
-        return {"scanned": len(stale_orders), "recovered": recovered, "skipped": skipped}
+            capture = await self._capture_approved_order(order.order_id, token)
+            if not capture:
+                # Retry is safe because the same PayPal-Request-Id is reused.
+                state = "needs_review" if order.recovery_attempts + 1 >= self.config.max_attempts else "retry_safe"
+                await self._record_capture_result(order, merchant_id, state, None)
+                pending += 1
+                continue
+
+            capture_status = str(capture.get("status", "UNKNOWN")).upper()
+            if capture_status == "COMPLETED":
+                await self._record_capture_result(order, merchant_id, "captured", capture)
+                recovered += 1
+            elif capture_status in {"PENDING", "PENDING_REVIEW"}:
+                await self._record_capture_result(order, merchant_id, "capture_pending", capture)
+                pending += 1
+            else:
+                await self._record_capture_result(order, merchant_id, "needs_review", capture)
+                skipped += 1
+
+        return {"scanned": len(stale_orders), "recovered": recovered, "pending": pending, "skipped": skipped}
 
     # ── PayPal API calls ────────────────────────────────────────────────────
 
@@ -190,6 +234,10 @@ class RecoveryAgent:
             return self._token
 
     async def _get_order_status(self, order_id: str, token: str) -> str:
+        """Compatibility helper returning only the current order status."""
+        return str((await self._get_order_details(order_id, token) or {}).get("status", "UNKNOWN"))
+
+    async def _get_order_details(self, order_id: str, token: str) -> Optional[dict]:
         async with httpx.AsyncClient() as c:
             r = await c.get(
                 f"{self.paypal_base}/v2/checkout/orders/{order_id}",
@@ -197,15 +245,81 @@ class RecoveryAgent:
                 timeout=5.0,
             )
         if r.status_code != 200:
-            return "UNKNOWN"
-        return r.json().get("status", "UNKNOWN")
+            return None
+        return r.json()
+
+    async def _capture_approved_order(self, order_id: str, token: str) -> Optional[dict]:
+        """Capture the buyer-approved order with a stable PayPal idempotency key."""
+        import hashlib
+
+        request_id = "an-" + hashlib.sha256(order_id.encode("utf-8")).hexdigest()[:32]
+        try:
+            async with httpx.AsyncClient() as c:
+                response = await c.post(
+                    f"{self.paypal_base}/v2/checkout/orders/{order_id}/capture",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                        "PayPal-Request-Id": request_id,
+                    },
+                    json={},
+                    timeout=10.0,
+                )
+            if response.status_code not in (200, 201):
+                print(f"[Recovery] Capture request failed for {order_id}: {response.status_code} {response.text}")
+                return None
+            payload = response.json()
+            purchase_units = payload.get("purchase_units", [])
+            captures = [
+                capture
+                for unit in purchase_units
+                for capture in unit.get("payments", {}).get("captures", [])
+            ]
+            status = captures[0].get("status", payload.get("status", "UNKNOWN")) if captures else payload.get("status", "UNKNOWN")
+            return {"status": status, "capture_id": captures[0].get("id") if captures else None}
+        except Exception as exc:
+            print(f"[Recovery] Capture request uncertain for {order_id}: {exc}")
+            return None
+
+    async def _claim_recovery_order(self, order_id: str) -> bool:
+        """Atomically lease an order so overlapping scheduler scans do not race."""
+        es_url = os.environ.get("ELASTICSEARCH_URL")
+        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+        if not es_url or not es_key:
+            return False
+        now_ms = int(time.time() * 1000)
+        update = {
+            "script": {
+                "source": (
+                    "def state = ctx._source.recovery_status; "
+                    "if (state == 'captured' || state == 'needs_review' || state == 'completed_externally') { ctx.op = 'noop'; } "
+                    "else if (state == 'processing' && ctx._source.recovery_started_at_ms != null && params.now_ms - ctx._source.recovery_started_at_ms < params.lease_ms) { ctx.op = 'noop'; } "
+                    "else { ctx._source.recovery_status = 'processing'; ctx._source.recovery_started_at_ms = params.now_ms; }"
+                ),
+                "params": {"now_ms": now_ms, "lease_ms": 10 * 60 * 1000},
+            }
+        }
+        try:
+            async with httpx.AsyncClient() as c:
+                response = await c.post(
+                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
+                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                    json=update,
+                    timeout=3.0,
+                )
+            return response.status_code == 200 and response.json().get("result") == "updated"
+        except Exception as exc:
+            print(f"[Recovery] Could not claim order {order_id}: {exc}")
+            return False
 
     async def _create_recovery_invoice(
         self, order: AbandonedOrder, token: str
     ) -> Optional[str]:
         """
-        Creates a PayPal invoice for the abandoned order amount.
-        Returns the invoice payment link the buyer can click to complete purchase.
+        Legacy invoice helper retained for existing callers.
+
+        The automated recovery scan does not use invoices; it resumes the
+        buyer-approved order capture to avoid creating a second payment request.
         """
         merchant_email = os.environ.get("MERCHANT_EMAIL", "")
         if not merchant_email:
@@ -298,26 +412,6 @@ class RecoveryAgent:
 
     # ── Notification ────────────────────────────────────────────────────────
 
-    async def _send_recovery_email(self, order: AbandonedOrder, invoice_link: str) -> None:
-        """
-        Notifies the merchant via Slack so they know a recovery was triggered.
-        The buyer gets the email directly from PayPal's invoice system.
-        """
-        slack_url = os.environ.get("SLACK_WEBHOOK_URL")
-        if not slack_url:
-            return
-
-        msg = (
-            f"*Anchor Recovery* — abandoned order recovered\n"
-            f"Order `{order.order_id}`: ${order.amount:.2f} for {order.buyer_email}\n"
-            f"Invoice sent. Buyer can complete payment here: {invoice_link}"
-        )
-        try:
-            async with httpx.AsyncClient() as c:
-                await c.post(slack_url, json={"text": msg}, timeout=5.0)
-        except Exception:
-            pass
-
     # ── Elasticsearch ───────────────────────────────────────────────────────
 
     async def _index_abandoned_order(self, order: AbandonedOrder) -> None:
@@ -337,11 +431,12 @@ class RecoveryAgent:
             "recovery_attempts": 0,
             "recovered": False,
             "status": "pending_recovery",
+            "recovery_status": "pending_recovery",
         }
         try:
             async with httpx.AsyncClient() as c:
-                await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_doc/{order.order_id}",
+                response = await c.post(
+                    f"{es_url}/anchor-abandoned-orders/_create/{order.order_id}",
                     headers={
                         "Authorization": f"ApiKey {es_key}",
                         "Content-Type": "application/json",
@@ -349,6 +444,10 @@ class RecoveryAgent:
                     json=doc,
                     timeout=3.0,
                 )
+                # PayPal may redeliver CHECKOUT.ORDER.APPROVED. Preserve any
+                # recovery state already recorded for the same order.
+                if response.status_code not in (200, 201, 409):
+                    print(f"[Recovery] ES index failed for {order.order_id}: {response.status_code} {response.text}")
         except Exception as e:
             print(f"[Recovery] ES index failed: {e}")
 
@@ -367,7 +466,14 @@ class RecoveryAgent:
                         {"term": {"merchant_id": merchant_id}},
                         {"term": {"recovered": False}},
                         {"range": {"approved_at": {"lte": cutoff_iso}}},
+                    ],
+                    "should": [
                         {"range": {"recovery_attempts": {"lt": self.config.max_attempts}}},
+                        {"term": {"recovery_status": "capture_pending"}},
+                    ],
+                    "minimum_should_match": 1,
+                    "must_not": [
+                        {"terms": {"recovery_status": ["captured", "needs_review", "not_eligible", "completed_externally"]}}
                     ]
                 }
             },
@@ -393,63 +499,111 @@ class RecoveryAgent:
                     merchant_id=src["merchant_id"],
                     amount=src["amount"],
                     currency=src.get("currency", "USD"),
-                    buyer_email=src["buyer_email"],
+                    buyer_email=src.get("buyer_email", ""),
                     buyer_name=src.get("buyer_name", ""),
                     items=src.get("items", []),
                     approved_at=src.get("approved_at", ""),
                     recovery_attempts=src.get("recovery_attempts", 0),
                     recovered=src.get("recovered", False),
+                    recovery_status=src.get("recovery_status", "pending_recovery"),
+                    capture_id=src.get("capture_id", ""),
                 ))
             return orders
         except Exception as e:
             print(f"[Recovery] ES query failed: {e}")
             return []
 
-    async def _log_recovery_attempt(
-        self, order: AbandonedOrder, invoice_link: str, merchant_id: str
+    async def _record_capture_result(
+        self,
+        order: AbandonedOrder,
+        merchant_id: str,
+        state: str,
+        capture: Optional[dict],
     ) -> None:
-        """Update ES doc + write to anchor-actions for morning brief."""
-        from agents.briefing import ActionRecord, log_action
-
+        """Persist capture state so scans and webhooks cannot misreport recovery."""
         es_url = os.environ.get("ELASTICSEARCH_URL")
         es_key = os.environ.get("ELASTICSEARCH_API_KEY")
         if es_url and es_key:
             update = {
                 "script": {
-                    "source": "ctx._source.recovery_attempts += 1; ctx._source.last_recovery_at = params.ts",
-                    "params": {"ts": datetime.now(timezone.utc).isoformat()},
+                    "source": "ctx._source.recovery_status = params.state; ctx._source.last_recovery_at = params.ts; ctx._source.recovery_attempts = (ctx._source.recovery_attempts ?: 0) + 1; if (params.state == 'captured') { ctx._source.recovered = true; } if (params.capture_id != null) { ctx._source.capture_id = params.capture_id; }",
+                    "params": {
+                        "state": state,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "capture_id": (capture or {}).get("capture_id"),
+                    },
                 }
             }
             try:
                 async with httpx.AsyncClient() as c:
                     await c.post(
                         f"{es_url}/anchor-abandoned-orders/_update/{order.order_id}",
-                        headers={
-                            "Authorization": f"ApiKey {es_key}",
-                            "Content-Type": "application/json",
-                        },
+                        headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
                         json=update,
                         timeout=3.0,
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"[Recovery] Could not persist capture state for {order.order_id}: {exc}")
 
+        from agents.briefing import ActionRecord, log_action
+        outcome = "captured" if state == "captured" else state
         action = ActionRecord(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            action_type="recovery_attempted",
+            action_type="recovery_capture",
+            dispute_id=None,
             amount=order.amount,
-            outcome="invoice_sent",
-            reasoning=f"Approved order {order.order_id} uncaptured >{self.config.delay_minutes}m — invoice sent to buyer",
-            requires_attention=False,
+            outcome=outcome,
+            reasoning=(
+                f"Approved PayPal order {order.order_id}: {state}; "
+                f"capture_id={(capture or {}).get('capture_id') or 'pending'}"
+            ),
+            requires_attention=state in {"needs_review", "retry_safe"},
         )
         await log_action(merchant_id, action)
+
+    async def _mark_recovery_state(self, order_id: str, state: str, reason: str) -> None:
+        es_url = os.environ.get("ELASTICSEARCH_URL")
+        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+        if not es_url or not es_key:
+            return
+        try:
+            async with httpx.AsyncClient() as c:
+                await c.post(
+                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
+                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                    json={"doc": {"recovery_status": state, "recovery_note": reason}},
+                    timeout=3.0,
+                )
+        except Exception as exc:
+            print(f"[Recovery] Could not update state for {order_id}: {exc}")
+
+    async def mark_order_captured(self, order_id: str) -> None:
+        """Update an approved-order record from the PayPal capture webhook."""
+        es_url = os.environ.get("ELASTICSEARCH_URL")
+        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+        if not es_url or not es_key or not order_id:
+            return
+        try:
+            async with httpx.AsyncClient() as c:
+                await c.post(
+                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
+                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                    json={
+                        "script": {
+                            "source": "if (ctx._source.recovery_status == 'pending_recovery') { ctx._source.recovery_status = 'completed_externally'; ctx._source.recovered = false; } else { ctx._source.recovery_status = 'captured'; ctx._source.recovered = true; }",
+                        }
+                    },
+                    timeout=3.0,
+                )
+        except Exception as exc:
+            print(f"[Recovery] Could not mark captured order {order_id}: {exc}")
 
     async def _mark_no_longer_needed(self, order_id: str) -> None:
         es_url = os.environ.get("ELASTICSEARCH_URL")
         es_key = os.environ.get("ELASTICSEARCH_API_KEY")
         if not es_url or not es_key:
             return
-        update = {"doc": {"recovered": True, "status": "completed_externally"}}
+        update = {"doc": {"recovered": False, "recovery_status": "completed_externally"}}
         try:
             async with httpx.AsyncClient() as c:
                 await c.post(

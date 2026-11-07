@@ -290,7 +290,7 @@ class DisputeClassifier:
                 buyer_email=transaction_info.get("buyer", {}).get("email", ""),
             )
             hours_remaining = self._hours_until(deadline)
-            return oracle_calculate(
+            decision = oracle_calculate(
                 dispute_amount=dispute_amount,
                 claim_type=claim_type,
                 evidence=evidence,
@@ -298,6 +298,21 @@ class DisputeClassifier:
                 similar_dispute_win_rate=similar_win_rate,
                 high_volume_tier=high_volume_tier,
             )
+            # AI reviews actual PayPal records for source-backed context. Its
+            # output is advisory only; it never changes EV or authorizes action.
+            from agents.dispute_ai_assistant import evidence_sources_from_paypal, review_evidence
+            sources = evidence_sources_from_paypal(dispute_detail, transaction_info, messages)
+            decision.ai_review = await review_evidence(
+                dispute_id=dispute_id,
+                reason_code=reason_code,
+                amount=dispute_amount,
+                sources=sources,
+            )
+            print(
+                f"[Classifier] AI evidence review {decision.ai_review.get('status')} "
+                f"for {dispute_id}; Oracle decision remains deterministic"
+            )
+            return decision
         except Exception as e:
             print(f"[Classifier] _run_oracle failed for {dispute_id}: {e}")
             return None

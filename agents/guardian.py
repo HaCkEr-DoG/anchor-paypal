@@ -108,10 +108,10 @@ class Guardian:
                 return
             win_probability = decision.win_probability
 
-        # Stash on instance so outcome recording in _accept_dispute/_fight_dispute can use them
-        self._last_win_prob = win_probability or 0.0
-        self._last_ev_fight = getattr(decision, "ev_fight", 0.0)
-        self._last_reason_code = reason_code
+        # Keep per-dispute context on the decision object; this Guardian instance
+        # handles concurrent webhook tasks, so mutable instance fields can cross cases.
+        decision.reason_code = reason_code
+        decision.oracle_win_probability = win_probability or 0.0
 
         # ── Oracle Enrichment Layer (Wave 52-58 modules) ─────────────────────────
         # Win probability calibrator — refine the base Oracle probability with
@@ -133,7 +133,7 @@ class Guardian:
                     f"({_cal.confidence.value} confidence)"
                 )
                 win_probability = _cal.final_probability
-                self._last_win_prob = win_probability
+                decision.oracle_win_probability = win_probability
         except Exception as _exc:
             print(f"[Guardian] WinCalibrator error (non-fatal): {_exc}")
 
@@ -199,8 +199,8 @@ class Guardian:
                 dispute_id=dispute_id,
                 buyer_id="unknown",
                 dispute_amount=dispute_amount,
-                oracle_ev_fight=self._last_ev_fight,
-                oracle_win_probability=self._last_win_prob,
+                oracle_ev_fight=getattr(decision, "ev_fight", 0.0),
+                oracle_win_probability=win_probability or 0.0,
                 oracle_recommendation=decision.recommendation if hasattr(decision, "recommendation") else "FIGHT",
             ))
             if _ltv_oracle.overrides_oracle:
@@ -233,7 +233,8 @@ class Guardian:
                     # Accept strategically but log rate-protection as the reason
                     await self._accept_dispute(
                         dispute_id, dispute_amount,
-                        reason=f"rate_protection:{health.threshold_status}"
+                        reason=f"rate_protection:{health.threshold_status}",
+                        decision=decision,
                     )
                     await self._notify(
                         f"🛡️ Rate protection: accepted ${dispute_amount:.2f} dispute `{dispute_id}` "
@@ -266,17 +267,14 @@ class Guardian:
                     )
                     return
 
-        # Astropods AI Gateway — when configured, all LLM reasoning routes through
-        # the governance layer for audit trail, spend control, and model switching.
+        # Source-cited AI evidence review is performed by the classifier. This
+        # block reports provider configuration only; it does not imply a call.
         from agents.astropods import AstropodsGateway
         _astro = AstropodsGateway()
         if _astro.gateway_enabled():
-            print(
-                f"[Guardian] Astropods gateway active — "
-                f"LLM calls routed via {_astro.gateway_url} for governance audit"
-            )
+            print(f"[Guardian] Astropods gateway configured for source-cited evidence review")
         else:
-            print("[Guardian] Astropods gateway not configured — set ASTRO_GATEWAY_URL + ASTRO_GATEWAY_API_KEY")
+            print("[Guardian] AI evidence review unavailable; deterministic Oracle remains active")
 
         # APIMatic context grounding — verify correct endpoint + required fields before
         # making any PayPal API call. Prevents hallucinated paths or wrong parameters.
@@ -310,7 +308,7 @@ class Guardian:
                 )
                 await self._request_approval(dispute_id, dispute_amount, win_probability, decision)
                 return
-            await self._accept_dispute(dispute_id, dispute_amount, reason="below_threshold")
+            await self._accept_dispute(dispute_id, dispute_amount, reason="below_threshold", decision=decision)
 
         elif (
             cfg.auto_fight(dispute_amount, win_probability)
@@ -385,7 +383,7 @@ class Guardian:
         else:
             await self._request_approval(dispute_id, dispute_amount, win_probability, decision)
 
-    async def _accept_dispute(self, dispute_id: str, amount: float, reason: str):
+    async def _accept_dispute(self, dispute_id: str, amount: float, reason: str, decision=None):
         token = await self._get_token()
         async with httpx.AsyncClient() as c:
             r = await c.post(
@@ -407,7 +405,7 @@ class Guardian:
             dispute_id=dispute_id,
             amount=amount,
             outcome="accepted" if success else "failed",
-            reasoning=f"Auto-accepted: {reason}",
+            reasoning=f"Auto-accepted: {reason}" + self._ai_review_log_suffix(decision),
             requires_attention=False,
         )
         await log_action(self.merchant_id or MERCHANT_ID, action)
@@ -423,9 +421,9 @@ class Guardian:
             await record_outcome(OutcomeRecord(
                 dispute_id=dispute_id,
                 merchant_id=self.merchant_id or MERCHANT_ID,
-                claim_type=getattr(self, "_last_reason_code", "UNKNOWN"),
-                oracle_prediction=getattr(self, "_last_win_prob", 0.0),
-                oracle_ev=getattr(self, "_last_ev_fight", 0.0),
+                claim_type=getattr(decision, "reason_code", "UNKNOWN"),
+                oracle_prediction=getattr(decision, "oracle_win_probability", 0.0),
+                oracle_ev=getattr(decision, "ev_fight", 0.0),
                 oracle_action="ACCEPT",
                 actual_action="ACCEPT",
                 actual_outcome="ACCEPTED",
@@ -522,7 +520,7 @@ class Guardian:
         # This converts 15 minutes of manual tracking lookups into <2 seconds
         # and dramatically improves evidence quality for INR fights.
         carrier_result = None
-        if tracking_number and reason_code.upper() in {
+        if tracking_number and getattr(decision, "reason_code", "").upper() in {
             "ITEM_NOT_RECEIVED", "INR", "MERCHANDISE_OR_SERVICE_NOT_RECEIVED"
         }:
             try:
@@ -578,7 +576,10 @@ class Guardian:
             amount=amount,
             win_probability=win_prob,
             outcome="evidence_submitted" if result else "insufficient_evidence",
-            reasoning=(f"Evidence submitted after approval; model win estimate {win_prob:.0%}" if result else f"Evidence unavailable or insufficient; review needed ({win_prob:.0%} model win estimate)"),
+            reasoning=(
+                f"Evidence submitted after approval; model win estimate {win_prob:.0%}"
+                if result else f"Evidence unavailable or insufficient; review needed ({win_prob:.0%} model win estimate)"
+            ) + self._ai_review_log_suffix(decision),
             requires_attention=result is None,
         )
         await log_action(self.merchant_id or MERCHANT_ID, action)
@@ -595,6 +596,17 @@ class Guardian:
                     f"⚠️ ${amount:.2f} dispute `{dispute_id}` — evidence insufficient, "
                     "needs your documents."
                 )
+
+    def _ai_review_log_suffix(self, decision=None) -> str:
+        """Include source-cited AI context in the audit trail, never as proof."""
+        review = getattr(decision, "ai_review", {}) or {} if decision is not None else {}
+        if review.get("status") != "ready":
+            return f" | AI evidence review: {review.get('status', 'not run')}"
+        cited = "; ".join(
+            f"{claim['statement']} [sources: {', '.join(claim['source_ids'])}]"
+            for claim in review.get("claims", [])[:3]
+        )
+        return f" | AI evidence review ({review.get('model', 'model')}): {cited}"
 
     def _make_approval_token(self, dispute_id: str, action: str) -> str:
         """Generate a time-limited HMAC token bound to this dispute + merchant + action."""
@@ -622,7 +634,8 @@ class Guardian:
             amount=amount,
             win_probability=win_prob,
             outcome="pending_approval",
-            reasoning=" | ".join(decision.reasoning) if decision else "manual review needed",
+            reasoning=(" | ".join(decision.reasoning) if decision else "manual review needed")
+            + self._ai_review_log_suffix(decision),
             requires_attention=True,
         )
         mid = self.merchant_id or MERCHANT_ID

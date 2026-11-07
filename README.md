@@ -1,7 +1,7 @@
 # Anchor — Autonomous PayPal Dispute & Recovery Agent
 
 > **PayPal AI Hackathon 2026**
-> While you sleep, Anchor handles your PayPal disputes and recovers your abandoned sales.
+> Anchor helps merchants make evidence-aware dispute decisions and complete buyer-approved PayPal orders that were never captured.
 
 **[Live dashboard →](https://anchor-paypal.onrender.com/dashboard)** · [API health](https://anchor-paypal.onrender.com/health)
 
@@ -9,11 +9,11 @@
 
 ## For Judges — 90-second eval path
 
-**No credentials needed.** Everything below runs live on the demo.
+The sample decision flow needs no PayPal credentials. A live AI evidence review requires Astropods gateway credentials; live PayPal actions require sandbox credentials and a registered webhook.
 
 | What to try | Where |
 |---|---|
-| **Live Dispute Simulator** — pick a scenario, see Oracle + Guardian + simulated API calls | [Dashboard → Live Dispute Simulator panel](https://anchor-paypal.onrender.com/dashboard) |
+| **Sample dispute review** — run the real deterministic Oracle on a labeled scenario; see source-cited AI review when the gateway is configured | [Dashboard → Sample decision](https://anchor-paypal.onrender.com/dashboard) |
 | **Settlement Oracle Calculator** — adjust amount / evidence / tier, recalculate | Same page → Settlement Oracle panel |
 | **AG Grid disputes table** — grouped columns, floating filters, global search, CSV, row detail | Same page → Disputes tab |
 | **Merchant ROI Calculator** — edit assumptions and see annual value estimate | Same page → Merchant ROI Calculator |
@@ -23,10 +23,10 @@
 **Sponsor prizes targeted:**
 - **AG Grid** ($5K) — Community 31.3.2 disputes + recovery tables with live data, column grouping, custom renderers
 - **Render** (credits) — live deployment auto-deployed from GitHub, free tier, `render.yaml` in repo
-- **Best Use of AI + PayPal** ($5K) — Settlement Oracle calculates fight-vs-accept EV using the actual PayPal fee model; Guardian Agent checks HATEOAS links before every call
-- **Best Use of Agentic Commerce** ($5K) — full autonomous loop: webhook → Oracle → Guardian → PayPal action, plus abandoned checkout recovery via PayPal Invoicing
+- **Best Use of PayPal + AI** — AI summarizes only supplied PayPal/merchant records with source IDs; the deterministic Oracle owns EV math and Guardian owns permitted actions
+- **Agentic commerce** — webhook → evidence review → Oracle → Guardian → state-checked PayPal action; approved orders are resumed through idempotent capture
 
-**Submission screenshots to capture:** (1) dashboard simulator showing an evaluated scenario and the “no PayPal action was executed” audit entry; (2) Oracle calculator with its assumptions visible; (3) AG Grid dispute table with filters and row details; (4) ROI calculator with editable assumptions; (5) live `/health` response. The public dashboard is a demo surface; screenshots should not imply that simulated events are production merchant activity.
+**Submission screenshots to capture:** (1) sample decision with the visible “No PayPal action will be executed” disclosure; (2) Oracle calculator with its assumptions visible; (3) dispute table with filters and row details; (4) ROI calculator with editable assumptions; (5) live `/health` response. The public dashboard is a demo surface; screenshots should not imply that simulated events are production merchant activity.
 
 **Key innovation:** Anchor makes the fight-or-accept decision visible and cost-aware, using a merchant-configurable handling cost and the standard/high-volume fee assumptions shown in the calculator. Those fee assumptions and win probabilities are estimates that merchants should validate against their own PayPal account and outcomes.
 
@@ -39,7 +39,7 @@ PayPal merchants lose money in two silent ways:
 1. **Disputes they should have won** — manually fighting every chargeback is expensive and inconsistent. Most merchants accept everything or fight everything. Neither is right.
 2. **Abandoned checkouts** — buyers approve the PayPal payment but the merchant's page errors before capture. The sale disappears.
 
-Anchor pairs two event-driven agents with PayPal APIs. The Settlement Oracle is a deterministic rules-and-probability model; optional integrations can enrich evidence, but this repository does not currently call Claude or another LLM for the core decision.
+Anchor pairs two event-driven agents with PayPal APIs. A configured Astropods model reviews supplied dispute records and returns source-cited claims plus missing-evidence suggestions. The Settlement Oracle remains deterministic: AI does not set win probability, compute EV, or authorize a PayPal action.
 
 ### Guardian Agent — dispute economics
 - Receives `CUSTOMER.DISPUTE.CREATED` webhooks instantly
@@ -48,15 +48,16 @@ Anchor pairs two event-driven agents with PayPal APIs. The Settlement Oracle is 
 - Uses the dispute's current HATEOAS links to choose among actions PayPal exposes; a buyer message is sent only when `send-message` is permitted
 - Autonomously fights high-EV disputes, accepts low-EV ones, asks the merchant for decisions in between
 - Approval links are **HMAC-SHA256 signed**, bound to the specific dispute, expire in 48h
+- When configured, Astropods reviews a PII-minimized evidence pack and returns claims only when they cite supplied source IDs; model output never becomes submitted evidence
 
 ### Recovery Agent — abandoned checkout recovery
 - Receives `CHECKOUT.ORDER.APPROVED` webhooks (buyer authorized, merchant hasn't captured)
 - Cron every 15 minutes: finds approved-but-uncaptured orders older than 30 minutes
-- Verifies the order is still open via `GET /v2/checkout/orders/{id}`
-- Creates a **PayPal invoice** via `POST /v2/invoicing/invoices` and sends it directly to the buyer
-- Buyer gets a PayPal-branded email with one-click payment — familiar and trusted
+- Re-fetches `GET /v2/checkout/orders/{id}` and proceeds only when PayPal explicitly reports `APPROVED`
+- Resumes the existing checkout through `POST /v2/checkout/orders/{id}/capture` with a stable `PayPal-Request-Id`
+- Unknown or unexpected states stop for review; a completed capture webhook closes the recovery record
 
-**Demo boundary:** the dashboard simulator computes a local sample decision and displays the API calls that a live agent would consider. It does not call PayPal or submit evidence. Live webhook actions require configured sandbox credentials and a registered webhook.
+**Demo boundary:** dashboard scenarios are labeled samples. They run the real deterministic Oracle and, if configured, a live Astropods evidence-review call against sample records. They never call PayPal or submit evidence. Live PayPal actions require configured sandbox credentials and a registered webhook.
 
 ### Morning Brief
 - The app's APScheduler can prepare a morning brief at 08:00 UTC while the web process is running
@@ -68,31 +69,31 @@ Anchor pairs two event-driven agents with PayPal APIs. The Settlement Oracle is 
 
 | Integration | Role |
 |---|---|
-| **PayPal API** | Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2 — the entire runtime |
+| **PayPal API** | Disputes v1, Orders v2, Webhooks, OAuth2; recovery resumes the approved order capture |
 | **Settlement Oracle** | Closed-form EV engine: `P(win) × amount − effective_cost` with evidence scoring |
 | **AG Grid Community 31.3.2** | Disputes and recoveries tables: grouped columns, filters, status bar, export |
 | **Bryntum Scheduler 6.0.7** | Timeline view using CrudManager data format |
-| **APIMatic** | PayPal endpoint context and parameter guidance |
+| **APIMatic** | PayPal endpoint and parameter context used by Guardian before API actions |
 | **Channel3** | Optional product context; it is not submitted as evidence without merchant verification |
 | **Postman Collection v2.1** | Importable API examples in [`postman_collection.json`](postman_collection.json) |
 | **Render** | FastAPI demo deployment; deploy status requires Render API credentials |
-| **Astropods** | Optional AI governance gateway; Guardian's decision path is deterministic today |
+| **Astropods** | Optional live model gateway for source-cited dispute evidence review; no authority over EV or payment actions |
 | **Kernel** | Optional browser-based carrier tracking capture |
 
 ---
 
 ## Built With
 
-- **PayPal APIs** — Disputes v1, Orders v2, Invoicing v2, Webhooks, OAuth2
+- **PayPal APIs** — Disputes v1, Orders v2, Webhooks, OAuth2
 - **Settlement Oracle** — closed-form expected-value engine with evidence scoring and historical win-rate blending
 - **FastAPI** + **APScheduler** — webhook server, in-process recovery scan and morning brief
 - **AG Grid Community 31.3.2** — disputes and recoveries data grid
 - **Bryntum Scheduler 6.0.7** — timeline / Gantt view
-- **APIMatic** — deterministic API context plugin for grounded LLM calls
+- **APIMatic** — deterministic PayPal endpoint and parameter context
 - **Channel3** — product graph enrichment for ITEM_DESCRIPTION evidence
 - **Postman** — Anchor's full API surface as a shareable collection
 - **Render** — free-tier deployment, auto-deploys on GitHub push
-- **Astropods** — AI governance gateway
+- **Astropods** — configured model gateway for evidence review (`ASTRO_GATEWAY_URL`, `ASTRO_GATEWAY_API_KEY`, optional `ANCHOR_AI_MODEL`)
 - **Kernel** — stealth browser for carrier tracking
 - **Elasticsearch** — action log, dispute history, deduplication
 
@@ -100,7 +101,7 @@ Anchor pairs two event-driven agents with PayPal APIs. The Settlement Oracle is 
 
 ## Try it — zero credentials needed
 
-The Settlement Oracle runs entirely offline. See how Anchor makes the fight-vs-accept decision:
+The deterministic Settlement Oracle runs offline. The dashboard sample flow can also invoke Astropods when gateway credentials are configured. Live PayPal actions always require sandbox credentials and a webhook:
 
 ```bash
 git clone https://github.com/HaCkEr-DoG/anchor-paypal
@@ -156,6 +157,8 @@ uvicorn agents.watcher:app --reload
 6. Register webhook: `https://anchor-paypal.onrender.com/webhooks/paypal`
 
 The web process schedules recovery checks every 15 minutes and the morning brief at 08:00 UTC. Render's Free web services sleep after inactivity, so in-process schedules do not provide guaranteed 24/7 processing while the instance is asleep. For continuous webhook and schedule handling, use an always-on paid web service or move scheduled work to a durable external queue/worker. The dashboard remains suitable for demos on the Free plan, but the service should not be described as continuously autonomous there. [Render documents this Free instance limitation](https://render.com/docs/free).
+
+Merchant endpoints (`/api/stats`, `/api/disputes`, `/api/recoveries`, `/api/paypal/disputes`) and the paid model chat endpoint require the `X-API-Key` header matching `API_SECRET`. Render generates `API_SECRET` from `render.yaml`; keep it private and do not embed it in the public dashboard. For a local setup, set a random `API_SECRET` in `.env` and send it from a trusted admin client.
 
 ---
 
@@ -214,7 +217,7 @@ Anchor focuses on merchant-configurable economics and PayPal lifecycle actions. 
 | Dimension | Anchor | Publicly stated alternatives |
 |---|---|---|
 | Pricing model | Proposed pricing below; not yet commercial | Chargeflow: 25% per recovered chargeback; Disputifier: 20% per won chargeback |
-| PayPal scope | PayPal Disputes, Orders, Invoicing, and Webhooks APIs in this prototype | Chargeflow advertises PayPal inquiry automation; Chargehound lists PayPal support |
+| PayPal scope | PayPal Disputes, Orders, and Webhooks APIs in this prototype | Chargeflow advertises PayPal inquiry automation; Chargehound lists PayPal support |
 | Decision economics | Explicit EV calculator with editable fees and cost assumptions | Verify each vendor's current contract and workflow before comparing decisions |
 | Evidence | PayPal dispute data plus optional Channel3 / carrier evidence paths | Vendor-specific integrations and evidence pipelines vary |
 | Best fit | Teams that want to inspect and tune their PayPal decision policy | Merchants seeking an established managed service and broader integrations |
@@ -252,7 +255,7 @@ agents/
   bryntum.py         # Bryntum Scheduler data — CrudManager format
   channel3.py        # Channel3 product graph — dispute evidence enrichment
   kernel_browser.py  # Kernel cloud browser — carrier tracking screenshots
-  paypal_client.py   # PayPal REST API client (OAuth2, Disputes, Orders, Invoices)
+  paypal_client.py   # PayPal REST API client (OAuth2, Disputes, Orders)
   postman.py         # Postman Collection v2.1 — full API surface
 
 oracle/
