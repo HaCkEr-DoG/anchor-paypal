@@ -2881,6 +2881,71 @@ async def api_velocity_monitor(request: Request):
     })
 
 
+@app.post("/api/oracle/dispute-forecast")
+async def dispute_probability_forecast(request: Request):
+    """
+    POST /api/oracle/dispute-forecast
+    Score a shipped order's probability of generating a PayPal dispute in the next 30 days.
+
+    Body: { orders: [ OrderProfile fields... ] }
+    Returns: list of DisputeForecast sorted by probability desc
+    """
+    from oracle.dispute_probability_forecaster import (
+        batch_forecast, OrderProfile,
+    )
+    body = await request.json()
+    orders = []
+    for o in body.get("orders", [body]):
+        orders.append(OrderProfile(
+            order_id=o.get("order_id", ""),
+            merchant_id=o.get("merchant_id", "ANCHOR"),
+            buyer_id=o.get("buyer_id", ""),
+            amount=float(o.get("amount", 100.0)),
+            is_digital=bool(o.get("is_digital", False)),
+            is_subscription=bool(o.get("is_subscription", False)),
+            item_category=o.get("item_category", ""),
+            has_tracking=bool(o.get("has_tracking", True)),
+            tracking_number=o.get("tracking_number", ""),
+            carrier=o.get("carrier", ""),
+            days_since_ship=int(o.get("days_since_ship", 0)),
+            delivery_status=o.get("delivery_status", "IN_TRANSIT"),
+            has_delivery_confirmation=bool(o.get("has_delivery_confirmation", False)),
+            has_signature_confirmation=bool(o.get("has_signature_confirmation", False)),
+            is_international=bool(o.get("is_international", False)),
+            express_on_time=bool(o.get("express_on_time", True)),
+            buyer_prior_disputes_at_merchant=int(o.get("buyer_prior_disputes_at_merchant", 0)),
+            buyer_total_orders_at_merchant=int(o.get("buyer_total_orders_at_merchant", 1)),
+            is_new_buyer=bool(o.get("is_new_buyer", False)),
+            days_since_last_buyer_contact=int(o.get("days_since_last_buyer_contact", -1)),
+            is_peak_season=bool(o.get("is_peak_season", False)),
+            subscription_days_until_renewal=int(o.get("subscription_days_until_renewal", -1)),
+        ))
+    results = batch_forecast(orders)
+    return JSONResponse([
+        {
+            "order_id": r.order_id,
+            "merchant_id": r.merchant_id,
+            "dispute_probability": r.dispute_probability,
+            "probability_tier": r.probability_tier.value,
+            "likely_dispute_type": r.likely_dispute_type.value,
+            "no_tracking_signal": r.no_tracking_signal,
+            "delivery_exception_signal": r.delivery_exception_signal,
+            "high_value_no_sig_signal": r.high_value_no_sig_signal,
+            "prior_dispute_signal": r.prior_dispute_signal,
+            "subscription_signal": r.subscription_signal,
+            "peak_season_signal": r.peak_season_signal,
+            "international_signal": r.international_signal,
+            "prevention_actions": [
+                {"action_type": a.action_type.value, "urgency": a.urgency, "description": a.description}
+                for a in r.prevention_actions
+            ],
+            "key_risk_factor": r.key_risk_factor,
+            "summary": r.summary,
+        }
+        for r in results
+    ])
+
+
 @app.post("/api/oracle/merchant-health")
 async def merchant_health_advisor(request: Request):
     """
