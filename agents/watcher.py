@@ -5814,5 +5814,53 @@ async def api_chargeback_forecast(request: Request):
     })
 
 
+@app.post("/api/oracle/settlement-evaluate")
+async def api_settlement_evaluate(request: Request):
+    """
+    POST /api/oracle/settlement-evaluate
+
+    Wave 89 — Settlement Offer Evaluator.
+    Given a buyer settlement offer for a dispute, computes EV(fight) vs
+    EV(settle) and returns ACCEPT / COUNTER / REJECT with a counter-offer
+    amount if applicable. Deadline override: forces ACCEPT when deadline ≤ 1
+    day and evidence is weak.
+
+    Body JSON fields:
+      dispute_id              str
+      claim_type              str    (INR|SNAD|UNAUTH|OTHER)
+      original_amount_usd     float
+      offer_amount_usd        float
+      win_probability         float  0–1
+      chargeback_fee_usd      float  optional, default 20
+      response_cost_usd       float  optional, default 10
+      days_until_deadline     int    optional, default 7
+      evidence_strength       float  optional, 0–1, default 0.5
+    """
+    from oracle.settlement_evaluator import SettlementOfferInput, evaluate_settlement
+    body = await request.json()
+    inp = SettlementOfferInput(
+        dispute_id=str(body.get("dispute_id", "UNKNOWN")),
+        claim_type=str(body.get("claim_type", "OTHER")),
+        original_amount_usd=float(body.get("original_amount_usd", 0.0)),
+        offer_amount_usd=float(body.get("offer_amount_usd", 0.0)),
+        win_probability=float(body.get("win_probability", 0.5)),
+        chargeback_fee_usd=float(body.get("chargeback_fee_usd", 20.0)),
+        response_cost_usd=float(body.get("response_cost_usd", 10.0)),
+        days_until_deadline=int(body.get("days_until_deadline", 7)),
+        evidence_strength=float(body.get("evidence_strength", 0.5)),
+    )
+    r = evaluate_settlement(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "decision": r.decision.value,
+        "ev_fight": r.ev_fight,
+        "ev_settle": r.ev_settle,
+        "counter_offer_usd": r.counter_offer_usd,
+        "accept_threshold_usd": r.accept_threshold_usd,
+        "reasoning": r.reasoning,
+        "factors": r.factors,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
