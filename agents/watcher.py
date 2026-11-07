@@ -6434,5 +6434,164 @@ async def api_surge_alert(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 93 — Dispute Resolution Time Analyzer  POST /api/oracle/resolution-time
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/resolution-time")
+async def api_resolution_time(request: Request):
+    """
+    Predict resolution time and cost-of-delay for a dispute.
+
+    Request body:
+      {
+        "dispute_id": str,          // optional label
+        "claim_type": str,          // "ITEM_NOT_RECEIVED" | "SIGNIFICANTLY_NOT_AS_DESCRIBED" | "UNAUTHORIZED" | "OTHER"
+        "amount_usd": float,
+        "seller_response_days": int, // optional, default 10
+        "days_open": int,            // how long the dispute has been open already
+        "win_probability": float,    // 0–1
+        "hourly_cost_usd": float     // optional, merchant's hourly cost of time, default 50
+      }
+
+    Response:
+      {
+        "dispute_id": str,
+        "claim_type": str,
+        "amount_usd": float,
+        "estimated_resolution_days": int,
+        "confidence": "high" | "medium" | "low",
+        "days_remaining": int,
+        "urgency": "critical" | "high" | "medium" | "low",
+        "cost_of_delay_per_day_usd": float,
+        "total_time_cost_usd": float,
+        "settlement_break_even_usd": float,
+        "fight_ev_usd": float,
+        "settle_recommendation": "fight" | "settle" | "negotiate",
+        "settle_max_usd": float,
+        "reasoning": str
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    dispute_id = body.get("dispute_id", "UNKNOWN")
+    raw_claim = str(body.get("claim_type", "OTHER")).upper()
+    # Normalize claim type
+    _known = {"ITEM_NOT_RECEIVED", "SIGNIFICANTLY_NOT_AS_DESCRIBED", "UNAUTHORIZED", "OTHER"}
+    claim_type = raw_claim if raw_claim in _known else "OTHER"
+
+    amount_usd = float(body.get("amount_usd", 0.0))
+    seller_response_days = int(body.get("seller_response_days", 10))
+    days_open = int(body.get("days_open", 0))
+    win_probability = float(body.get("win_probability", 0.5))
+    hourly_cost = float(body.get("hourly_cost_usd", 50.0))
+
+    # Clamp inputs
+    amount_usd = max(0.0, amount_usd)
+    seller_response_days = max(1, min(seller_response_days, 20))
+    days_open = max(0, days_open)
+    win_probability = max(0.0, min(1.0, win_probability))
+    hourly_cost = max(0.0, hourly_cost)
+
+    # Resolution time model (PayPal SLA-based heuristics)
+    # PayPal standard timeline: 10 days seller response + review + resolution
+    _base_days = {
+        "ITEM_NOT_RECEIVED": 20,
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": 25,
+        "UNAUTHORIZED": 10,   # PayPal handles fraud faster
+        "OTHER": 18,
+    }
+    _std_dev = {
+        "ITEM_NOT_RECEIVED": 5,
+        "SIGNIFICANTLY_NOT_AS_DESCRIBED": 7,
+        "UNAUTHORIZED": 3,
+        "OTHER": 5,
+    }
+
+    base = _base_days[claim_type]
+    # Adjust for seller response time commitment
+    if seller_response_days < 7:
+        base = int(base * 0.85)  # faster response → faster resolution
+    elif seller_response_days > 14:
+        base = int(base * 1.15)  # slow response → slower resolution
+
+    estimated_total = base
+    days_remaining = max(0, estimated_total - days_open)
+
+    # Confidence based on claim type (unauthorized = most predictable)
+    if claim_type == "UNAUTHORIZED":
+        confidence = "high"
+    elif claim_type in ("ITEM_NOT_RECEIVED",):
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    # Urgency
+    if days_remaining <= 2:
+        urgency = "critical"
+    elif days_remaining <= 5:
+        urgency = "high"
+    elif days_remaining <= 10:
+        urgency = "medium"
+    else:
+        urgency = "low"
+
+    # Cost of delay: merchant time per day (8 working hours × hourly_cost / num_active_disputes estimate)
+    daily_time_hours = 1.5  # avg hours per dispute per day for merchant
+    cost_per_day = round(daily_time_hours * hourly_cost, 2)
+    total_time_cost = round(cost_per_day * days_remaining, 2)
+
+    # EV of fighting
+    fight_ev = round(win_probability * amount_usd - (1 - win_probability) * amount_usd, 2)
+
+    # Settlement break-even: at what settlement amount does settling equal fighting EV minus time cost?
+    # settle_break_even = fight_ev - total_time_cost  (what we'd recover net of time cost by fighting)
+    settle_break_even = round(max(0.0, fight_ev - total_time_cost), 2)
+
+    # Maximum we should settle at: cover the break-even with a small buffer
+    settle_max = round(min(amount_usd, settle_break_even * 1.1), 2)
+
+    # Recommendation
+    if fight_ev >= total_time_cost * 1.5 and win_probability >= 0.6:
+        settle_rec = "fight"
+        reason = (
+            f"Fight EV (${fight_ev:.2f}) well exceeds time cost (${total_time_cost:.2f}) "
+            f"with {win_probability:.0%} win probability. Contesting is worth it."
+        )
+    elif fight_ev <= 0 or (fight_ev < total_time_cost and amount_usd < 150):
+        settle_rec = "settle"
+        reason = (
+            f"Fight EV (${fight_ev:.2f}) is below time cost (${total_time_cost:.2f}). "
+            f"Settling saves ${total_time_cost - fight_ev:.2f} in net value."
+        )
+    else:
+        settle_rec = "negotiate"
+        reason = (
+            f"Borderline case — fight EV ${fight_ev:.2f} vs time cost ${total_time_cost:.2f}. "
+            f"Negotiate: offer up to ${settle_max:.2f} to close quickly."
+        )
+
+    return JSONResponse({
+        "dispute_id": dispute_id,
+        "claim_type": claim_type,
+        "amount_usd": amount_usd,
+        "estimated_resolution_days": estimated_total,
+        "confidence": confidence,
+        "days_open": days_open,
+        "days_remaining": days_remaining,
+        "urgency": urgency,
+        "cost_of_delay_per_day_usd": cost_per_day,
+        "total_time_cost_usd": total_time_cost,
+        "fight_ev_usd": fight_ev,
+        "settlement_break_even_usd": settle_break_even,
+        "settle_recommendation": settle_rec,
+        "settle_max_usd": settle_max,
+        "reasoning": reason,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
