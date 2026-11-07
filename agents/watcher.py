@@ -6593,5 +6593,161 @@ async def api_resolution_time(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 94 — Buyer Risk Profiler  POST /api/oracle/buyer-risk
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/buyer-risk")
+async def api_buyer_risk(request: Request):
+    """
+    Assess buyer risk level based on transaction and dispute history signals.
+
+    Request body:
+      {
+        "buyer_email": str,                 // optional, for reference only
+        "buyer_account_age_days": int,      // 0 = brand new
+        "total_transactions": int,
+        "total_disputes": int,
+        "unauthorized_disputes": int,       // subset of total_disputes
+        "dispute_rate": float,              // 0–1 (or omit to auto-compute)
+        "avg_transaction_usd": float,
+        "current_transaction_usd": float,
+        "country_code": str,                // ISO 2-letter
+        "is_guest_checkout": bool
+      }
+
+    Response:
+      {
+        "buyer_email": str,
+        "risk_score": float,          // 0–100
+        "risk_level": "low" | "medium" | "high" | "critical",
+        "flags": [str],
+        "trust_signals": [str],
+        "dispute_rate_pct": float,
+        "recommendation": str,
+        "accept_transaction": bool,
+        "require_review": bool
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    buyer_email = body.get("buyer_email", "unknown")
+    account_age = int(body.get("buyer_account_age_days", 0))
+    total_tx = max(0, int(body.get("total_transactions", 0)))
+    total_disputes = max(0, int(body.get("total_disputes", 0)))
+    unauthorized = max(0, int(body.get("unauthorized_disputes", 0)))
+    avg_tx = float(body.get("avg_transaction_usd", 0.0))
+    current_tx = float(body.get("current_transaction_usd", 0.0))
+    country_code = str(body.get("country_code", "US")).upper()[:2]
+    is_guest = bool(body.get("is_guest_checkout", False))
+
+    # Dispute rate
+    if "dispute_rate" in body:
+        dispute_rate = float(body["dispute_rate"])
+    elif total_tx > 0:
+        dispute_rate = total_disputes / total_tx
+    else:
+        dispute_rate = 0.0
+
+    dispute_rate = max(0.0, min(1.0, dispute_rate))
+
+    # Risk scoring (additive)
+    score = 0.0
+    flags = []
+    trust_signals = []
+
+    # --- Account age ---
+    if account_age == 0:
+        score += 20
+        flags.append("Brand-new account (0 days old)")
+    elif account_age < 30:
+        score += 12
+        flags.append(f"Very new account ({account_age} days)")
+    elif account_age < 90:
+        score += 5
+    else:
+        trust_signals.append(f"Established account ({account_age} days old)")
+
+    # --- Dispute rate ---
+    if dispute_rate >= 0.20:
+        score += 35
+        flags.append(f"Very high dispute rate ({dispute_rate:.0%})")
+    elif dispute_rate >= 0.10:
+        score += 20
+        flags.append(f"High dispute rate ({dispute_rate:.0%})")
+    elif dispute_rate >= 0.05:
+        score += 8
+        flags.append(f"Elevated dispute rate ({dispute_rate:.0%})")
+    elif dispute_rate == 0 and total_tx >= 5:
+        trust_signals.append(f"Zero disputes across {total_tx} transactions")
+
+    # --- Unauthorized disputes (fraud signals) ---
+    if unauthorized >= 3:
+        score += 25
+        flags.append(f"{unauthorized} unauthorized transaction disputes (fraud pattern)")
+    elif unauthorized >= 1:
+        score += 10
+        flags.append(f"{unauthorized} unauthorized dispute(s) in history")
+
+    # --- Transaction amount vs history ---
+    if avg_tx > 0 and current_tx > avg_tx * 3:
+        score += 15
+        flags.append(f"Transaction ${current_tx:.2f} is {current_tx/avg_tx:.1f}x buyer's avg (${avg_tx:.2f})")
+    elif current_tx > 500:
+        score += 5
+
+    # --- Guest checkout ---
+    if is_guest:
+        score += 10
+        flags.append("Guest checkout (no account history linkable)")
+    else:
+        trust_signals.append("Logged-in account checkout")
+
+    # --- Transaction volume (trust) ---
+    if total_tx >= 20:
+        trust_signals.append(f"High transaction volume ({total_tx} transactions)")
+        score -= 5  # slight positive signal
+
+    # Clamp
+    score = max(0.0, min(100.0, score))
+
+    # Risk level
+    if score >= 70:
+        risk_level = "critical"
+        recommendation = "Block or manually review this transaction before accepting. High fraud/chargeback probability."
+        accept = False
+        require_review = True
+    elif score >= 45:
+        risk_level = "high"
+        recommendation = "Require manual review. Consider requesting additional verification or limiting order size."
+        accept = False
+        require_review = True
+    elif score >= 20:
+        risk_level = "medium"
+        recommendation = "Accept with monitoring. Flag account for elevated dispute watch."
+        accept = True
+        require_review = False
+    else:
+        risk_level = "low"
+        recommendation = "Low risk buyer. Accept transaction normally."
+        accept = True
+        require_review = False
+
+    return JSONResponse({
+        "buyer_email": buyer_email,
+        "risk_score": round(score, 1),
+        "risk_level": risk_level,
+        "flags": flags,
+        "trust_signals": trust_signals,
+        "dispute_rate_pct": round(dispute_rate * 100, 2),
+        "recommendation": recommendation,
+        "accept_transaction": accept,
+        "require_review": require_review,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
