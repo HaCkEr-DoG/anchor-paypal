@@ -5626,5 +5626,63 @@ async def api_kernel_stats():
     })
 
 
+@app.post("/api/oracle/deadline-priority")
+async def api_deadline_priority(request: Request):
+    """
+    POST /api/oracle/deadline-priority
+
+    Wave 86 — Dispute Deadline Prioritizer.
+    Ranks a list of open disputes by urgency using time pressure (exponential
+    decay), expected-value impact, and claim-type risk weight. Returns a ranked
+    list with CRITICAL/HIGH/MEDIUM/LOW labels and per-dispute action recommendations.
+
+    Body JSON — a list of dispute objects, each with:
+      dispute_id           str
+      claim_type           str   (UNAUTH|INR|SNAD|OTHER)
+      amount_usd           float
+      days_until_deadline  int   (0 = today is last day)
+      win_probability      float  optional, default 0.50
+      evidence_ready       bool   optional, default false
+    """
+    from oracle.dispute_deadline_prioritizer import (
+        OpenDispute, prioritize_disputes,
+    )
+    body = await request.json()
+    items = body if isinstance(body, list) else body.get("disputes", [])
+    disputes = [
+        OpenDispute(
+            dispute_id=str(d.get("dispute_id", "UNKNOWN")),
+            claim_type=str(d.get("claim_type", "OTHER")).upper(),
+            amount_usd=float(d.get("amount_usd", 0.0)),
+            days_until_deadline=int(d.get("days_until_deadline", 7)),
+            win_probability=float(d.get("win_probability", 0.5)),
+            evidence_ready=bool(d.get("evidence_ready", False)),
+        )
+        for d in items
+    ]
+    r = prioritize_disputes(disputes)
+    return JSONResponse({
+        "critical_count": r.critical_count,
+        "high_count": r.high_count,
+        "total_ev_at_risk_usd": r.total_ev_at_risk_usd,
+        "recommendation_summary": r.recommendation_summary,
+        "disputes": [
+            {
+                "rank": pd.rank,
+                "dispute_id": pd.dispute_id,
+                "claim_type": pd.claim_type,
+                "amount_usd": pd.amount_usd,
+                "days_until_deadline": pd.days_until_deadline,
+                "win_probability": pd.win_probability,
+                "evidence_ready": pd.evidence_ready,
+                "priority_score": pd.priority_score,
+                "urgency_label": pd.urgency_label.value,
+                "action_recommendation": pd.action_recommendation,
+            }
+            for pd in r.disputes
+        ],
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
