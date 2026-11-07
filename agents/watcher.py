@@ -8891,5 +8891,104 @@ async def api_dispute_trend(request: Request):
     })
 
 
+# ── Response Template endpoint (wave 111) ────────────────────────────────────
+
+@app.post("/api/oracle/response-template")
+async def api_response_template(request: Request):
+    """
+    Generate a full dispute response package (text to submit to PayPal, buyer
+    message, checklist, estimated strength) from dispute context.
+
+    Required body fields:
+      dispute_id, claim_type, dispute_amount, order_id, order_date
+
+    Optional: tracking_number, carrier, delivery_date, has_signature,
+      item_description, prior_order_count, return_policy_url, tone, ...
+    """
+    from oracle.response_template_engine import DisputeContext, generate_response, ResponseTone
+    from dataclasses import fields as _dc_fields
+    body = await request.json()
+    merchant_id = body.get("merchant_id", os.environ.get("MERCHANT_ID", "default"))
+
+    # Build DisputeContext from body — unknown keys are ignored
+    allowed = {f.name for f in _dc_fields(DisputeContext)}
+    ctx_kwargs = {k: v for k, v in body.items() if k in allowed}
+    ctx_kwargs.setdefault("dispute_id", body.get("dispute_id", "UNKNOWN"))
+    ctx_kwargs.setdefault("claim_type", body.get("claim_type", "INR"))
+    ctx_kwargs.setdefault("dispute_amount", float(body.get("dispute_amount", 0)))
+    ctx_kwargs.setdefault("order_id", body.get("order_id", ""))
+    ctx_kwargs.setdefault("order_date", body.get("order_date", ""))
+
+    tone_raw = str(ctx_kwargs.pop("tone", "FORMAL")).upper()
+    ctx_kwargs["tone"] = ResponseTone(tone_raw) if tone_raw in ResponseTone._value2member_map_ else ResponseTone.FORMAL
+
+    ctx = DisputeContext(**ctx_kwargs)
+    report = generate_response(ctx)
+
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "dispute_id": report.dispute_id,
+        "claim_type": report.claim_type,
+        "estimated_strength": report.estimated_strength,
+        "summary": report.summary,
+        "paypal_response_text": report.paypal_response_text,
+        "buyer_message_text": report.buyer_message_text,
+        "internal_summary": report.internal_summary,
+        "submission_checklist": report.submission_checklist,
+        "blocks": [
+            {"section": b.section, "heading": b.heading, "body": b.body,
+             "evidence_references": b.evidence_references}
+            for b in report.blocks
+        ],
+        "wave": 111,
+    })
+
+
+# ── Response Timing Advisor endpoint (wave 112) ───────────────────────────────
+
+@app.post("/api/oracle/response-timing")
+async def api_response_timing(request: Request):
+    """
+    Advise when and whether to submit a dispute response based on
+    days elapsed since filing, evidence completeness, and claim type.
+
+    Required body fields:
+      dispute_filed_at   — ISO datetime when PayPal notified the merchant
+
+    Optional:
+      claim_type                  (default: ITEM_NOT_RECEIVED)
+      evidence_completeness       float 0-1 (default: 0.5)
+      still_gathering_evidence    bool (default: false)
+      hours_to_complete_evidence  float (default: 0)
+      response_window_days        int (default: 10)
+    """
+    from oracle.response_optimizer import plan_response
+    body = await request.json()
+    merchant_id = body.get("merchant_id", os.environ.get("MERCHANT_ID", "default"))
+
+    filed_at = body.get("dispute_filed_at", datetime.now(timezone.utc).isoformat())
+    plan = plan_response(
+        dispute_filed_at=filed_at,
+        claim_type=body.get("claim_type", "ITEM_NOT_RECEIVED"),
+        evidence_completeness=float(body.get("evidence_completeness", 0.5)),
+        still_gathering_evidence=bool(body.get("still_gathering_evidence", False)),
+        hours_to_complete_evidence=float(body.get("hours_to_complete_evidence", 0)),
+        response_window_days=int(body.get("response_window_days", 10)),
+    )
+
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "urgency": plan.urgency,
+        "hours_remaining": plan.hours_remaining,
+        "respond_by": plan.respond_by,
+        "should_respond_now": plan.should_respond_now,
+        "timing_penalty": plan.timing_penalty,
+        "win_rate_at_current_timing": plan.win_rate_at_current_timing,
+        "evidence_completeness_threshold": plan.evidence_completeness_threshold,
+        "advice": plan.advice,
+        "wave": 112,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
