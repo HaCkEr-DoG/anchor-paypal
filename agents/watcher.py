@@ -3419,3 +3419,75 @@ async def evidence_strength(request: Request):
             for i in r.items
         ],
     })
+
+
+@app.post("/api/oracle/merchant-benchmark")
+async def merchant_benchmark(request: Request):
+    """
+    POST /api/oracle/merchant-benchmark
+    Compare a merchant's dispute metrics against anonymized peer benchmarks.
+
+    Body: { merchant_id, segment, category, total_orders, total_disputes,
+            disputes_won, disputes_fought, disputes_escalated, preemptive_refunds,
+            avg_response_days, inr_disputes, unauthorized_disputes }
+    Returns: benchmarks (per-metric percentile), overall_health_tier,
+             risk_flags, paypal_signal, merchant_coaching, summary
+    """
+    from oracle.merchant_benchmarker import (
+        benchmark_merchant, MerchantMetrics, MerchantSegment, MerchantCategory,
+    )
+    body = await request.json()
+
+    try:
+        seg = MerchantSegment(body.get("segment", "SMALL_BUSINESS"))
+    except ValueError:
+        seg = MerchantSegment.SMALL_BUSINESS
+    try:
+        cat = MerchantCategory(body.get("category", "GENERAL"))
+    except ValueError:
+        cat = MerchantCategory.GENERAL
+
+    metrics = MerchantMetrics(
+        merchant_id=body.get("merchant_id", "UNKNOWN"),
+        segment=seg,
+        category=cat,
+        total_orders=int(body.get("total_orders", 1000)),
+        total_disputes=int(body.get("total_disputes", 10)),
+        disputes_won=int(body.get("disputes_won", 5)),
+        disputes_fought=int(body.get("disputes_fought", 10)),
+        disputes_escalated=int(body.get("disputes_escalated", 1)),
+        preemptive_refunds=int(body.get("preemptive_refunds", 2)),
+        avg_response_days=float(body.get("avg_response_days", 4.0)),
+        inr_disputes=int(body.get("inr_disputes", 5)),
+        unauthorized_disputes=int(body.get("unauthorized_disputes", 2)),
+    )
+    r = benchmark_merchant(metrics)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "segment": r.segment.value,
+        "category": r.category.value,
+        "dispute_rate": r.dispute_rate,
+        "win_rate": r.win_rate,
+        "avg_response_days": r.avg_response_days,
+        "refund_rate": r.refund_rate,
+        "chargeback_escalation_rate": r.chargeback_escalation_rate,
+        "inr_share": r.inr_share,
+        "unauthorized_share": r.unauthorized_share,
+        "overall_health_tier": r.overall_health_tier.value,
+        "risk_flags": [f.value for f in r.risk_flags],
+        "benchmarks": [
+            {
+                "metric": b.metric,
+                "merchant_value": b.merchant_value,
+                "peer_p50": b.peer_p50,
+                "percentile_rank": b.percentile_rank,
+                "tier": b.tier.value,
+                "lower_is_better": b.lower_is_better,
+                "insight": b.insight,
+            }
+            for b in r.benchmarks
+        ],
+        "paypal_signal": r.paypal_signal,
+        "merchant_coaching": r.merchant_coaching,
+        "summary": r.summary,
+    })
