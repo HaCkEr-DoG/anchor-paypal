@@ -213,6 +213,12 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
     event_id = event.get("id", "")
     event_type = event.get("event_type", "")
 
+    # ── Webhook outbox: persist BEFORE processing ────────────────────────────
+    # Saves the verified event to durable storage first so a background-task
+    # crash cannot silently drop it. PayPal retries delivery, but a premature
+    # duplicate-check mark would block the retry — the outbox prevents that.
+    _save_webhook_outbox(event_id, event_type, event)
+
     if event_id and await _is_duplicate(event_id):
         print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored")
         return
@@ -292,15 +298,73 @@ async def _get_access_token() -> str:
     return await get_client().get_token()
 
 
+def _save_webhook_outbox(event_id: str, event_type: str, event: dict) -> None:
+    """
+    Persist the verified webhook event to durable storage BEFORE processing.
+
+    Design: write to Elasticsearch (if configured) with 'status: pending'.
+    After successful processing the caller can mark it 'processed'.
+    If ES is unavailable, fall back to a local append-only JSONL file so
+    no event is silently dropped even in development mode.
+
+    This prevents the race condition where a background task crashes after
+    the duplicate-check mark is set but before the event is handled — a
+    PayPal retry would then be blocked by the duplicate check.
+    """
+    import json as _json
+    import pathlib
+    outbox_path = os.environ.get("WEBHOOK_OUTBOX_PATH", "webhook_outbox.jsonl")
+    es_url  = os.environ.get("ELASTICSEARCH_URL", "")
+    es_key  = os.environ.get("ELASTICSEARCH_API_KEY", "")
+
+    record = {
+        "event_id": event_id,
+        "event_type": event_type,
+        "received_utc": datetime.now(timezone.utc).isoformat(),
+        "status": "pending",
+        "payload": event,
+    }
+
+    # Try Elasticsearch first (async is awkward here — use a sync fallback
+    # since this runs in a sync context before the background task starts)
+    if es_url and es_key:
+        try:
+            import httpx
+            httpx.put(
+                f"{es_url}/anchor-webhook-outbox/_doc/{event_id}",
+                headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
+                json=record,
+                timeout=2.0,
+            )
+            return
+        except Exception as exc:
+            print(f"[Watcher] Outbox ES write failed (falling back to file): {exc}")
+
+    # Append to local JSONL — always succeeds unless disk is full
+    try:
+        with open(outbox_path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(record, default=str) + "\n")
+    except Exception as exc:
+        print(f"[Watcher] Outbox file write failed: {exc}")
+
+
 async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     """
     Main dispute pipeline entry point.
-    Runs entirely without human intervention:
-      1. Classify the dispute
-      2. Score available evidence
-      3. Run Settlement Oracle
-      4. If FIGHT → assemble + submit evidence
-      5. If ACCEPT → accept claim
+
+    Safety gate: checks production safety (fail-closed policy, shadow mode,
+    recovery validation) before allowing autonomous actions. If SHADOW_MODE=1,
+    runs the oracle pipeline and logs the decision but does NOT submit any
+    PayPal API calls — this lets operators validate decision quality before
+    enabling live actions.
+
+    Pipeline:
+      1. Production safety check → BLOCKED or SHADOW → human review or log-only
+      2. Classify the dispute
+      3. Score available evidence
+      4. Run Settlement Oracle
+      5. If FIGHT → assemble + submit evidence (unless shadow mode)
+      5. If ACCEPT → accept claim (unless shadow mode)
       6. If GATHER → alert seller with specific evidence checklist
     """
     resource = event.get("resource", {})
@@ -347,7 +411,54 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     except Exception as _dt_exc:
         print(f"[Watcher] Deadline tracker store failed (non-fatal): {_dt_exc}")
 
-    # Route through Guardian — applies pre-auth thresholds before acting
+    # ── Production safety gate ────────────────────────────────────────────────
+    # Fail closed: if merchant policy isn't loaded, shadow mode is on, or a
+    # hard safety check fails, do NOT take autonomous action on live disputes.
+    from oracle.production_safety import check_from_env, SafetyLevel
+    safety = check_from_env()
+
+    is_shadow = safety.safety_level == SafetyLevel.SHADOW
+    is_blocked = safety.safety_level == SafetyLevel.BLOCKED
+    is_human_review = safety.safety_level == SafetyLevel.HUMAN_REVIEW
+
+    if is_blocked:
+        print(
+            f"[Watcher] SAFETY BLOCKED dispute {dispute_id}: "
+            f"{safety.recommendation} — routing to human review"
+        )
+        # Send for human review without touching PayPal
+        from oracle.decision_audit import log_decision, AuditAction
+        log_decision(
+            dispute_id=dispute_id,
+            action=AuditAction.REQUEST_APPROVAL,
+            oracle_ev_fight=0.0,
+            oracle_win_probability=0.0,
+            oracle_recommendation="SAFETY_BLOCKED",
+            guardian_reason=f"Production safety BLOCKED: {'; '.join(safety.blocking_reasons)}",
+            amount_usd=dispute_amount,
+            claim_type=reason,
+            paypal_api_calls=[],
+            is_sandbox=os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
+            notes="Fail-closed: safety check failed before oracle evaluation",
+        )
+        return
+
+    if is_shadow:
+        print(
+            f"[Watcher] SHADOW MODE dispute {dispute_id}: "
+            f"oracle will run but no PayPal action will be taken"
+        )
+
+    if is_human_review:
+        print(
+            f"[Watcher] HUMAN REVIEW required for dispute {dispute_id}: "
+            f"{safety.recommendation}"
+        )
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Route through Guardian — applies pre-auth thresholds before acting.
+    # Guardian respects SHADOW_MODE env var: in shadow mode it logs the
+    # decision but skips the actual PayPal API submit calls.
     guardian = Guardian(
         merchant_id=merchant_id or os.environ.get("MERCHANT_ID", "default"),
         approval_secret=APPROVAL_TOKEN_SECRET,
@@ -435,8 +546,44 @@ async def _handle_order_approved(event: dict, merchant_id: str = ""):
     """
     Buyer authorized the PayPal payment but merchant hasn't captured yet.
     Store in Elasticsearch; Recovery Agent will follow up if capture never arrives.
+
+    Recovery validation (RECOVERY_VALIDATION_ENABLED, default on):
+    Before scheduling a delayed capture, verify the order belongs to this
+    merchant and that amount/currency match the original purchase.
+    Without this check, a wrong-merchant or tampered order could be captured.
     """
     mid = merchant_id or os.environ.get("MERCHANT_ID", "default")
+
+    # Validate order ownership + amount match before scheduling capture
+    # This check is ON by default; set RECOVERY_VALIDATION_ENABLED=0 to disable
+    # (only for development — never disable in production).
+    if os.environ.get("RECOVERY_VALIDATION_ENABLED", "1") != "0":
+        resource = event.get("resource", {})
+        order_id = resource.get("id", "")
+        order_merchant = (
+            resource.get("purchase_units", [{}])[0]
+            .get("payee", {})
+            .get("merchant_id", "")
+        )
+        # If PayPal provides a payee merchant_id and it doesn't match ours, skip.
+        our_merchant_paypal_id = os.environ.get("PAYPAL_MERCHANT_ID", "")
+        if order_merchant and our_merchant_paypal_id and order_merchant != our_merchant_paypal_id:
+            print(
+                f"[Watcher] Recovery validation FAILED for order {order_id}: "
+                f"payee merchant_id {order_merchant!r} != configured {our_merchant_paypal_id!r} — skipping"
+            )
+            return
+        # Currency must be present (amount validation happens in RecoveryAgent.capture)
+        amount_info = (
+            resource.get("purchase_units", [{}])[0]
+            .get("amount", {})
+        )
+        if not amount_info.get("value") or not amount_info.get("currency_code"):
+            print(
+                f"[Watcher] Recovery validation: order {order_id} missing amount/currency "
+                f"— storing for later but capture will re-validate"
+            )
+
     recovery = RecoveryAgent()
     await recovery.store_approved_order(event, mid)
 
@@ -1936,6 +2083,45 @@ async def api_audit_stats():
     from oracle.decision_audit import get_stats
     stats = get_stats()
     return JSONResponse(stats)
+
+
+@app.get("/api/safety/check")
+async def api_safety_check():
+    """
+    GET /api/safety/check
+
+    Returns the current production safety status of this Anchor deployment.
+    Checks all six production-readiness blockers:
+      - Fail-closed merchant policy
+      - Shadow mode status
+      - Durable storage configuration
+      - API secret and approval link security
+      - Webhook outbox enablement
+      - Recovery validation
+
+    Returns safety_level: SAFE | SHADOW | HUMAN_REVIEW | BLOCKED
+    and allow_autonomous_action: true|false
+    """
+    from oracle.production_safety import check_from_env
+    from dataclasses import asdict
+    r = check_from_env()
+    return JSONResponse({
+        "safety_level": r.safety_level.value,
+        "allow_autonomous_action": r.allow_autonomous_action,
+        "allow_live_credentials": r.allow_live_credentials,
+        "blocking_reasons": r.blocking_reasons,
+        "warnings": r.warnings,
+        "recommendation": r.recommendation,
+        "checks": [
+            {
+                "name": c.name,
+                "status": c.status.value,
+                "detail": c.detail,
+                "is_hard": c.is_hard,
+            }
+            for c in r.checks
+        ],
+    })
 
 
 @app.get("/api/demo/scenarios")

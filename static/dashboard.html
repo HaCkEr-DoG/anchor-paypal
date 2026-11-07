@@ -717,6 +717,7 @@
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-recoveries" onclick="switchPanel('recoveries')" id="tab-recoveries">Recoveries</button>
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-insights"   onclick="switchPanel('insights')"   id="tab-insights">Insights</button>
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-audit"      onclick="switchPanel('audit')"      id="tab-audit">Audit Trail</button>
+      <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-safety"     onclick="switchPanel('safety')"     id="tab-safety">Safety</button>
       <button class="nav-link"        role="tab" aria-selected="false" aria-controls="panel-connections" onclick="switchPanel('connections')" id="tab-connections">Connections</button>
     </div>
   </div>
@@ -941,6 +942,20 @@
         </tbody>
       </table>
     </div>
+  </div>
+
+  <!-- ══ Safety Panel ═════════════════════════════════════ -->
+  <div class="panel" id="panel-safety" role="tabpanel" aria-labelledby="tab-safety">
+    <div class="page-header">
+      <h1>Production Safety</h1>
+      <p>Six-check gate that must be green before Anchor acts autonomously on live disputes.</p>
+    </div>
+    <div style="display:flex;gap:12px;margin-bottom:20px;">
+      <button onclick="loadSafety()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Refresh</button>
+    </div>
+    <div id="safety-level-banner" style="display:none;padding:14px 20px;border-radius:8px;margin-bottom:20px;font-weight:700;font-size:15px;"></div>
+    <div id="safety-checks-list" style="display:flex;flex-direction:column;gap:10px;"></div>
+    <div id="safety-recommendation" style="margin-top:20px;padding:14px 18px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--muted);display:none;"></div>
   </div>
 
   <!-- ══ Connections Panel ═══════════════════════════════ -->
@@ -1414,6 +1429,7 @@
       loadConnections();
     }
     if (id === 'audit') loadAudit();
+    if (id === 'safety') loadSafety();
   };
 
   // ── Audit Trail panel ──────────────────────────────────
@@ -1487,6 +1503,56 @@
         <td style="padding:8px 12px;">${sandboxBadge}</td>
         <td style="padding:8px 12px;color:var(--muted);font-size:12px;">${ts}</td>
       </tr>`;
+    }).join('');
+  }
+
+  // ── Safety panel ───────────────────────────────────────
+  const SAFETY_LEVEL_STYLES = {
+    SAFE:         { bg: '#dcfce7', color: '#166534', label: '✓ SAFE — autonomous actions permitted' },
+    SHADOW:       { bg: '#fef3c7', color: '#92400e', label: '◎ SHADOW MODE — decisions logged, no PayPal actions' },
+    HUMAN_REVIEW: { bg: '#fef9c3', color: '#854d0e', label: '⚠ HUMAN REVIEW REQUIRED — soft checks failed' },
+    BLOCKED:      { bg: '#fee2e2', color: '#991b1b', label: '✗ BLOCKED — hard safety checks failed' },
+  };
+  const CHECK_STATUS_STYLES = {
+    PASS: { icon: '✓', color: '#16a34a', bg: '#f0fdf4' },
+    WARN: { icon: '⚠', color: '#d97706', bg: '#fffbeb' },
+    FAIL: { icon: '✗', color: '#dc2626', bg: '#fef2f2' },
+  };
+
+  async function loadSafety() {
+    try {
+      const res = await fetch('/api/safety/check');
+      const data = await res.json();
+      renderSafety(data);
+    } catch(e) {
+      document.getElementById('safety-checks-list').innerHTML =
+        '<div style="color:var(--muted);padding:16px;">Could not reach safety API</div>';
+    }
+  }
+
+  function renderSafety(data) {
+    const banner = document.getElementById('safety-level-banner');
+    const style = SAFETY_LEVEL_STYLES[data.safety_level] || SAFETY_LEVEL_STYLES['BLOCKED'];
+    banner.style.display = 'block';
+    banner.style.background = style.bg;
+    banner.style.color = style.color;
+    banner.textContent = style.label;
+
+    const rec = document.getElementById('safety-recommendation');
+    rec.style.display = 'block';
+    rec.textContent = data.recommendation;
+
+    const list = document.getElementById('safety-checks-list');
+    list.innerHTML = (data.checks || []).map(c => {
+      const s = CHECK_STATUS_STYLES[c.status] || CHECK_STATUS_STYLES['FAIL'];
+      return `<div style="display:flex;gap:12px;padding:12px 16px;background:${s.bg};border-radius:8px;align-items:flex-start;">
+        <div style="font-size:16px;font-weight:900;color:${s.color};width:20px;text-align:center;flex-shrink:0;">${s.icon}</div>
+        <div>
+          <div style="font-weight:700;font-size:13px;color:${s.color};">${c.name.replace(/_/g,' ').toUpperCase()}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;">${c.detail}</div>
+          ${c.is_hard && c.status === 'FAIL' ? '<div style="font-size:11px;font-weight:700;color:#dc2626;margin-top:4px;">HARD CHECK — blocks autonomous action</div>' : ''}
+        </div>
+      </div>`;
     }).join('');
   }
 
