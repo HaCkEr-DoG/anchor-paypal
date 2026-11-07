@@ -2879,3 +2879,87 @@ async def api_velocity_monitor(request: Request):
         "key_insight": r.key_insight,
         "summary": r.summary,
     })
+
+
+@app.post("/api/oracle/merchant-health")
+async def merchant_health_advisor(request: Request):
+    """
+    POST /api/oracle/merchant-health
+    Analyze a merchant's full dispute history and produce a 30-day action plan.
+
+    Body:
+      merchant_id: str
+      total_orders_in_period: int
+      baseline_industry_dispute_rate: float (optional, default 0.01)
+      paypal_threshold: float (optional, default 0.0075)
+      disputes: list of {
+        dispute_id, reason_code, amount, outcome,
+        days_to_respond, had_tracking, had_invoice,
+        had_buyer_communication, carrier, sku
+      }
+
+    Returns: health_score, health_tier, dispute_rate, win_rate,
+             root_causes, recommendations, projected_rate,
+             paypal_risk_signal, paypal_opportunity_signal,
+             key_insight, summary
+    """
+    from oracle.merchant_health_advisor import (
+        analyze_merchant_health, MerchantHealthInput, HistoricalDispute,
+    )
+    body = await request.json()
+    disputes = []
+    for d in body.get("disputes", []):
+        disputes.append(HistoricalDispute(
+            dispute_id=d.get("dispute_id", ""),
+            reason_code=d.get("reason_code", "SNAD"),
+            amount=float(d.get("amount", 100.0)),
+            outcome=d.get("outcome", "LOST"),
+            days_to_respond=int(d.get("days_to_respond", 3)),
+            had_tracking=bool(d.get("had_tracking", False)),
+            had_invoice=bool(d.get("had_invoice", False)),
+            had_buyer_communication=bool(d.get("had_buyer_communication", False)),
+            carrier=d.get("carrier", ""),
+            sku=d.get("sku", ""),
+            dispute_month=d.get("dispute_month", ""),
+        ))
+    inp = MerchantHealthInput(
+        merchant_id=body.get("merchant_id", "ANCHOR"),
+        disputes=disputes,
+        total_orders_in_period=int(body.get("total_orders_in_period", 1000)),
+        baseline_industry_dispute_rate=float(body.get("baseline_industry_dispute_rate", 0.01)),
+        paypal_threshold=float(body.get("paypal_threshold", 0.0075)),
+    )
+    r = analyze_merchant_health(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "health_score": r.health_score,
+        "health_tier": r.health_tier.value,
+        "current_dispute_rate": r.current_dispute_rate,
+        "dispute_rate_vs_threshold": r.dispute_rate_vs_threshold,
+        "total_disputes": r.total_disputes,
+        "won_count": r.won_count,
+        "lost_count": r.lost_count,
+        "refunded_count": r.refunded_count,
+        "win_rate": r.win_rate,
+        "inr_pct": r.inr_pct,
+        "snad_pct": r.snad_pct,
+        "unauthorized_pct": r.unauthorized_pct,
+        "subscription_pct": r.subscription_pct,
+        "root_causes": [c.value for c in r.root_causes],
+        "recommendations": [
+            {
+                "priority": rec.priority.value,
+                "action": rec.action,
+                "expected_impact": rec.expected_impact,
+                "effort": rec.effort,
+                "root_cause_addressed": rec.root_cause_addressed.value,
+            }
+            for rec in r.recommendations
+        ],
+        "projected_dispute_rate": r.projected_dispute_rate_if_actions_taken,
+        "projected_health_score": r.projected_health_score_if_actions_taken,
+        "paypal_risk_signal": r.paypal_risk_signal,
+        "paypal_opportunity_signal": r.paypal_opportunity_signal,
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+    })
