@@ -10491,5 +10491,161 @@ async def api_score_dispute_portfolio(request: Request):
     })
 
 
+@app.post("/api/oracle/assess-hdr-war-room")
+async def api_assess_hdr_war_room(request: Request):
+    from oracle.hdr_war_room import HDRWarRoomInput, assess_hdr_war_room
+    body = await request.json()
+    inp = HDRWarRoomInput(
+        current_hdr_rate=float(body.get("current_hdr_rate", 0.012)),
+        disputes_last_90d=int(body.get("disputes_last_90d", 50)),
+        transactions_last_90d=int(body.get("transactions_last_90d", 4000)),
+        disputes_last_30d=int(body.get("disputes_last_30d", 0)),
+        transactions_last_30d=int(body.get("transactions_last_30d", 0)),
+        monthly_gmv=float(body.get("monthly_gmv", 100000.0)),
+        avg_dispute_amount=float(body.get("avg_dispute_amount", 150.0)),
+        has_carrier_upgrade=bool(body.get("has_carrier_upgrade", False)),
+        has_buyer_vetting=bool(body.get("has_buyer_vetting", False)),
+        has_address_verification=bool(body.get("has_address_verification", False)),
+        high_risk_product_pct=float(body.get("high_risk_product_pct", 0.30)),
+        high_risk_channel_pct=float(body.get("high_risk_channel_pct", 0.20)),
+        open_at_risk_disputes=int(body.get("open_at_risk_disputes", 0)),
+        avg_at_risk_dispute_amount=float(body.get("avg_at_risk_dispute_amount", 100.0)),
+        months_in_hdr_program=int(body.get("months_in_hdr_program", 0)),
+    )
+    r = assess_hdr_war_room(inp)
+    return JSONResponse({
+        "current_hdr_rate": r.current_hdr_rate,
+        "current_zone": r.current_zone.value,
+        "is_emergency": r.is_emergency,
+        "bps_to_next_threshold": r.bps_to_next_threshold,
+        "bps_from_prev_threshold": r.bps_from_prev_threshold,
+        "monthly_hdr_fee": r.monthly_hdr_fee,
+        "fee_tier_annual_cost": r.fee_tier_annual_cost,
+        "projections": [
+            {"scenario": p.scenario, "days_out": p.days_out,
+             "projected_rate": p.projected_rate, "projected_zone": p.projected_zone.value,
+             "assumptions": p.assumptions}
+            for p in r.projections
+        ],
+        "interventions": [
+            {"intervention_type": i.intervention_type.value, "title": i.title,
+             "description": i.description,
+             "expected_rate_reduction": i.expected_rate_reduction,
+             "implementation_effort": i.implementation_effort,
+             "time_to_impact_days": i.time_to_impact_days,
+             "revenue_impact_estimate": i.revenue_impact_estimate,
+             "priority": i.priority}
+            for i in r.interventions
+        ],
+        "zone_assessment": r.zone_assessment,
+        "immediate_actions": r.immediate_actions,
+        "this_week_actions": r.this_week_actions,
+        "avoid_actions": r.avoid_actions,
+        "summary": r.summary,
+        "wave": 144,
+    })
+
+
+@app.post("/api/oracle/analyze-refund-impact")
+async def api_analyze_refund_impact(request: Request):
+    from oracle.refund_impact_analyzer import RefundImpactInput, analyze_refund_impact
+    body = await request.json()
+    inp = RefundImpactInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        cogs=float(body.get("cogs", 0.0)),
+        gross_margin_pct=float(body.get("gross_margin_pct", 0.40)),
+        paypal_processing_fee=float(body.get("paypal_processing_fee", 0.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+        hdr_fee_per_dispute=float(body.get("hdr_fee_per_dispute", 0.0)),
+        p_win=float(body.get("p_win", 0.50)),
+        fight_cost=float(body.get("fight_cost", 10.0)),
+        customer_ltv=float(body.get("customer_ltv", 0.0)),
+        is_repeat_customer=bool(body.get("is_repeat_customer", False)),
+        is_vip=bool(body.get("is_vip", False)),
+        partial_refund_pct=float(body.get("partial_refund_pct", 0.60)),
+        claim_type=body.get("claim_type", "INR"),
+        is_fraud_risk=bool(body.get("is_fraud_risk", False)),
+    )
+    r = analyze_refund_impact(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "transaction_amount": r.transaction_amount,
+        "cogs": r.cogs,
+        "gross_margin": r.gross_margin,
+        "cost_full_refund": r.cost_full_refund,
+        "cost_partial_refund": r.cost_partial_refund,
+        "cost_fight_win": r.cost_fight_win,
+        "cost_fight_lose": r.cost_fight_lose,
+        "ev_fight": r.ev_fight,
+        "ltv_adjustment": r.ltv_adjustment,
+        "cost_full_refund_ltv_adj": r.cost_full_refund_ltv_adj,
+        "ev_fight_ltv_adj": r.ev_fight_ltv_adj,
+        "recommendation": r.recommendation.value,
+        "partial_refund_amount": r.partial_refund_amount,
+        "net_savings_vs_full_refund": r.net_savings_vs_full_refund,
+        "hdr_fee_applicable": r.hdr_fee_applicable,
+        "hdr_note": r.hdr_note,
+        "rationale": r.rationale,
+        "immediate_actions": r.immediate_actions,
+        "summary": r.summary,
+        "wave": 145,
+    })
+
+
+@app.post("/api/oracle/analyze-win-loss")
+async def api_analyze_win_loss(request: Request):
+    from oracle.win_loss_analyzer import DisputeOutcomeRecord, OutcomeType, analyze_outcomes
+    body = await request.json()
+    raw = body.get("outcomes", [])
+    outcomes = []
+    for o in raw:
+        try:
+            outcome_type = OutcomeType(o.get("outcome", "WON_INITIAL").upper())
+        except ValueError:
+            outcome_type = OutcomeType.WON_INITIAL
+        outcomes.append(DisputeOutcomeRecord(
+            dispute_id=o.get("dispute_id", "PP-D-001"),
+            claim_type=o.get("claim_type", "INR"),
+            dispute_amount=float(o.get("dispute_amount", 100.0)),
+            outcome=outcome_type,
+            had_tracking=bool(o.get("had_tracking", False)),
+            had_delivery_confirmation=bool(o.get("had_delivery_confirmation", False)),
+            had_buyer_signature=bool(o.get("had_buyer_signature", False)),
+            had_product_photos=bool(o.get("had_product_photos", False)),
+            had_communication_history=bool(o.get("had_communication_history", False)),
+            evidence_quality_tier=o.get("evidence_quality_tier", "MODERATE"),
+        ))
+    r = analyze_outcomes(outcomes)
+    return JSONResponse({
+        "generated_date": r.generated_date.isoformat(),
+        "total_outcomes": r.total_outcomes,
+        "total_wins": r.total_wins,
+        "total_losses": r.total_losses,
+        "total_settled": r.total_settled,
+        "overall_win_rate": r.overall_win_rate,
+        "win_rate_by_claim_type": [
+            {"segment_name": s.segment_name, "segment_value": s.segment_value,
+             "win_rate": s.win_rate, "wins": s.wins, "sample_size": s.sample_size}
+            for s in r.win_rate_by_claim_type
+        ],
+        "win_rate_by_evidence_quality": [
+            {"segment_name": s.segment_name, "segment_value": s.segment_value,
+             "win_rate": s.win_rate, "sample_size": s.sample_size}
+            for s in r.win_rate_by_evidence_quality
+        ],
+        "insights": [
+            {"insight_type": i.insight_type, "finding": i.finding,
+             "impact": i.impact, "confidence": i.confidence,
+             "sample_size": i.sample_size, "recommendation": i.recommendation}
+            for i in r.insights
+        ],
+        "calibration_updates": r.calibration_updates,
+        "settled_vs_fought_comparison": r.settled_vs_fought_comparison,
+        "summary": r.summary,
+        "wave": 146,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
