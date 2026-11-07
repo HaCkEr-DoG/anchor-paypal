@@ -3624,3 +3624,246 @@ async def zapier_sample():
         "event_type": "dispute.scored",
         "anchor_version": "71",
     }])
+
+
+# ─── Elastic Integration Endpoints ───────────────────────────────────────────
+#
+# Elastic enables:
+#   1. Full-text + structured search across all ingested disputes
+#   2. Kibana dashboard integration (dispute stats, trend charts)
+#   3. Anomaly detection on dispute rate spikes
+#
+# In production: Anchor would push to a real Elasticsearch cluster.
+# For the sandbox demo: in-memory document store that mirrors the ES API shape.
+
+
+_elastic_index: list[dict] = [
+    {"_id": "PP-D-10041", "dispute_id": "PP-D-10041", "merchant_id": "MERCH_A", "amount": 299.00,  "reason_code": "INR",          "status": "OPEN",   "priority": "P0_CRITICAL", "urgency_score": 0.95, "win_probability": 0.72, "days_remaining": 0},
+    {"_id": "PP-D-10042", "dispute_id": "PP-D-10042", "merchant_id": "MERCH_A", "amount": 850.00,  "reason_code": "UNAUTHORIZED", "status": "OPEN",   "priority": "P0_CRITICAL", "urgency_score": 0.91, "win_probability": 0.80, "days_remaining": 1},
+    {"_id": "PP-D-10043", "dispute_id": "PP-D-10043", "merchant_id": "MERCH_B", "amount": 149.00,  "reason_code": "SNAD",         "status": "OPEN",   "priority": "P1_HIGH",     "urgency_score": 0.75, "win_probability": 0.55, "days_remaining": 2},
+    {"_id": "PP-D-10044", "dispute_id": "PP-D-10044", "merchant_id": "MERCH_A", "amount": 420.00,  "reason_code": "INR",          "status": "OPEN",   "priority": "P1_HIGH",     "urgency_score": 0.68, "win_probability": 0.68, "days_remaining": 3},
+    {"_id": "PP-D-10045", "dispute_id": "PP-D-10045", "merchant_id": "MERCH_C", "amount": 59.99,   "reason_code": "SUBSCRIPTION", "status": "OPEN",   "priority": "P2_MEDIUM",   "urgency_score": 0.42, "win_probability": 0.45, "days_remaining": 5},
+    {"_id": "PP-D-10046", "dispute_id": "PP-D-10046", "merchant_id": "MERCH_B", "amount": 1200.00, "reason_code": "UNAUTHORIZED", "status": "OPEN",   "priority": "P2_MEDIUM",   "urgency_score": 0.38, "win_probability": 0.76, "days_remaining": 7},
+    {"_id": "PP-D-10047", "dispute_id": "PP-D-10047", "merchant_id": "MERCH_C", "amount": 89.00,   "reason_code": "INR",          "status": "CLOSED", "priority": "P3_LOW",      "urgency_score": 0.20, "win_probability": 0.60, "days_remaining": 10},
+    {"_id": "PP-D-10048", "dispute_id": "PP-D-10048", "merchant_id": "MERCH_A", "amount": 35.00,   "reason_code": "SUBSCRIPTION", "status": "CLOSED", "priority": "P4_DEFER",    "urgency_score": 0.08, "win_probability": 0.30, "days_remaining": 14},
+]
+
+
+@app.post("/api/elastic/search")
+async def elastic_search(request: Request):
+    """
+    POST /api/elastic/search
+    Elasticsearch-compatible search endpoint for disputes.
+    Mirrors the ES _search API shape so dashboards can swap to real ES.
+
+    Body: { query?: { match?: {field: value}, range?: {field: {gte, lte}} },
+            sort?: [{field: order}], size?: int, from?: int }
+    Returns: { hits: { total, hits: [{ _id, _source }] }, aggregations? }
+    """
+    body = await request.json()
+    docs = list(_elastic_index)
+
+    # Simple query processing (match + range)
+    q = body.get("query", {})
+    if "match" in q:
+        for field, value in q["match"].items():
+            docs = [d for d in docs if str(d.get(field, "")).lower() == str(value).lower()]
+    if "match_all" in q:
+        pass  # return all
+    if "range" in q:
+        for field, bounds in q["range"].items():
+            gte = bounds.get("gte")
+            lte = bounds.get("lte")
+            if gte is not None:
+                docs = [d for d in docs if d.get(field, 0) >= gte]
+            if lte is not None:
+                docs = [d for d in docs if d.get(field, 0) <= lte]
+    if "term" in q:
+        for field, value in q["term"].items():
+            docs = [d for d in docs if d.get(field) == value]
+
+    # Sorting
+    sort = body.get("sort", [{"urgency_score": "desc"}])
+    if sort:
+        for s in reversed(sort):
+            for field, direction in s.items():
+                docs.sort(key=lambda d: d.get(field, 0), reverse=(direction == "desc"))
+
+    # Pagination
+    total = len(docs)
+    from_ = int(body.get("from", 0))
+    size = int(body.get("size", 10))
+    page = docs[from_:from_ + size]
+
+    # Aggregations (dispute_rate by reason_code)
+    reason_agg: dict[str, int] = {}
+    for d in docs:
+        rc = d.get("reason_code", "UNKNOWN")
+        reason_agg[rc] = reason_agg.get(rc, 0) + 1
+
+    return JSONResponse({
+        "hits": {
+            "total": {"value": total, "relation": "eq"},
+            "hits": [{"_id": d["_id"], "_source": d} for d in page],
+        },
+        "aggregations": {
+            "reason_codes": {
+                "buckets": [
+                    {"key": k, "doc_count": v}
+                    for k, v in sorted(reason_agg.items(), key=lambda x: -x[1])
+                ]
+            }
+        },
+    })
+
+
+@app.post("/api/elastic/index")
+async def elastic_index_doc(request: Request):
+    """
+    POST /api/elastic/index
+    Index a new dispute document (called by Anchor after scoring).
+    Mirrors POST /<index>/_doc behavior.
+    """
+    import uuid
+    body = await request.json()
+    doc_id = body.get("dispute_id", str(uuid.uuid4())[:12])
+    # Remove old version if exists
+    _elastic_index[:] = [d for d in _elastic_index if d.get("dispute_id") != doc_id]
+    doc = {"_id": doc_id, **body}
+    _elastic_index.append(doc)
+    return JSONResponse({"_id": doc_id, "result": "created", "total_indexed": len(_elastic_index)})
+
+
+@app.get("/api/elastic/stats")
+async def elastic_stats():
+    """
+    GET /api/elastic/stats
+    Returns index statistics for the Kibana-style overview panel.
+    """
+    open_docs = [d for d in _elastic_index if d.get("status") == "OPEN"]
+    total_ev = sum(d.get("amount", 0) * d.get("win_probability", 0.5) for d in open_docs)
+    p0_count = sum(1 for d in open_docs if d.get("priority", "").startswith("P0"))
+
+    return JSONResponse({
+        "index": "anchor-disputes",
+        "total_documents": len(_elastic_index),
+        "open_disputes": len(open_docs),
+        "closed_disputes": len(_elastic_index) - len(open_docs),
+        "total_ev_at_stake": round(total_ev, 2),
+        "p0_critical_count": p0_count,
+        "reason_code_distribution": {
+            rc: sum(1 for d in _elastic_index if d.get("reason_code") == rc)
+            for rc in ["INR", "UNAUTHORIZED", "SNAD", "SUBSCRIPTION"]
+        },
+    })
+
+
+# ─── APIMatic OpenAPI Spec ────────────────────────────────────────────────────
+#
+# APIMatic can consume this endpoint's OpenAPI JSON to auto-generate:
+#   - SDKs in Python, JS, C#, Java, Ruby, PHP, Go
+#   - Interactive API documentation
+#   - Postman collection
+#
+# This endpoint returns the OpenAPI 3.0 spec for Anchor's oracle API layer.
+
+
+@app.get("/api/openapi.json")
+async def openapi_spec():
+    """
+    GET /api/openapi.json
+    OpenAPI 3.0 specification for the Anchor oracle API.
+    Import into APIMatic to auto-generate SDKs and documentation.
+    """
+    spec = {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "Anchor — Autonomous PayPal Dispute Management API",
+            "description": (
+                "Anchor is an AI-powered PayPal dispute management oracle. "
+                "It provides 11 specialized oracle endpoints that score, rank, "
+                "and recommend actions for every open dispute — integrating with "
+                "PayPal, Zapier, Bryntum, Elastic, and AG Grid."
+            ),
+            "version": "1.0.0",
+            "contact": {"name": "Anchor API Support"},
+        },
+        "servers": [
+            {"url": "https://anchor-paypal.onrender.com", "description": "Production (Render)"},
+            {"url": "http://localhost:8000", "description": "Local development"},
+        ],
+        "paths": {
+            "/api/oracle/refund-roi": {
+                "post": {
+                    "summary": "Refund ROI Calculator",
+                    "description": "Calculate fight vs. refund EV using segment-aware response costs",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "ROI report with EV analysis"}},
+                }
+            },
+            "/api/oracle/buyer-satisfaction-risk": {
+                "post": {
+                    "summary": "Buyer Satisfaction Risk Scorer",
+                    "description": "Predict post-dispute churn, negative reviews, bank chargebacks",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Risk report with tier and retention actions"}},
+                }
+            },
+            "/api/oracle/deadline-prioritizer": {
+                "post": {
+                    "summary": "Dispute Deadline Prioritizer",
+                    "description": "Rank open disputes by urgency × EV with time-budget analysis",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Ranked queue with P0-P4 priorities"}},
+                }
+            },
+            "/api/oracle/seller-protection": {
+                "post": {
+                    "summary": "Seller Protection Eligibility Checker",
+                    "description": "Verify PayPal Seller Protection eligibility before fighting",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Eligibility status and recommended action"}},
+                }
+            },
+            "/api/oracle/evidence-strength": {
+                "post": {
+                    "summary": "Evidence Strength Scorer",
+                    "description": "Rate dispute evidence quality before submission",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Score, tier, missing items, win probability"}},
+                }
+            },
+            "/api/oracle/merchant-benchmark": {
+                "post": {
+                    "summary": "Merchant Dispute Benchmarker",
+                    "description": "Compare merchant metrics to anonymized peer benchmarks",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Percentile rankings, risk flags, coaching"}},
+                }
+            },
+            "/api/zapier/ingest": {
+                "post": {
+                    "summary": "Zapier Dispute Ingest",
+                    "description": "Receive a dispute from Zapier, score it, fire webhooks",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Scored dispute event"}},
+                }
+            },
+            "/api/elastic/search": {
+                "post": {
+                    "summary": "Elastic-compatible Dispute Search",
+                    "description": "Search disputes using Elasticsearch-compatible query DSL",
+                    "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
+                    "responses": {"200": {"description": "Search results with aggregations"}},
+                }
+            },
+            "/api/stats": {
+                "get": {
+                    "summary": "System Statistics",
+                    "description": "Returns live Anchor system stats",
+                    "responses": {"200": {"description": "Stats including disputes_total, oracle endpoints"}},
+                }
+            },
+        },
+    }
+    return JSONResponse(spec)
