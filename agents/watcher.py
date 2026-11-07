@@ -10033,5 +10033,168 @@ async def api_detect_fraud_patterns(request: Request):
     })
 
 
+# ── Evidence Package Builder endpoint (wave 135) ─────────────────────────────
+
+@app.post("/api/oracle/build-evidence-package")
+async def api_build_evidence_package(request: Request):
+    from oracle.evidence_package_builder import EvidencePackageInput, build_evidence_package
+    body = await request.json()
+    inp = EvidencePackageInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        has_tracking_number=bool(body.get("has_tracking_number", False)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        has_signature_confirmation=bool(body.get("has_signature_confirmation", False)),
+        has_shipment_date_proof=bool(body.get("has_shipment_date_proof", False)),
+        tracking_shows_delivered=bool(body.get("tracking_shows_delivered", False)),
+        has_ip_log=bool(body.get("has_ip_log", False)),
+        has_device_fingerprint=bool(body.get("has_device_fingerprint", False)),
+        has_order_history=bool(body.get("has_order_history", False)),
+        has_3ds_authentication=bool(body.get("has_3ds_authentication", False)),
+        has_avs_match=bool(body.get("has_avs_match", False)),
+        has_cvv_match=bool(body.get("has_cvv_match", False)),
+        has_product_listing=bool(body.get("has_product_listing", False)),
+        has_product_photos=bool(body.get("has_product_photos", False)),
+        has_digital_delivery_proof=bool(body.get("has_digital_delivery_proof", False)),
+        product_matches_listing=bool(body.get("product_matches_listing", True)),
+        has_refund_policy_at_checkout=bool(body.get("has_refund_policy_at_checkout", False)),
+        has_tos_acceptance=bool(body.get("has_tos_acceptance", False)),
+        has_cancellation_policy=bool(body.get("has_cancellation_policy", False)),
+        has_subscription_terms=bool(body.get("has_subscription_terms", False)),
+        has_buyer_communication=bool(body.get("has_buyer_communication", False)),
+        communication_supports_merchant=bool(body.get("communication_supports_merchant", False)),
+        has_invoice=bool(body.get("has_invoice", False)),
+        has_partial_refund_proof=bool(body.get("has_partial_refund_proof", False)),
+    )
+    r = build_evidence_package(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "network": r.network,
+        "completeness_score": r.completeness_score,
+        "evidence_strength": r.evidence_strength.value,
+        "can_file": r.can_file,
+        "win_rate_boost": r.win_rate_boost,
+        "missing_required": r.missing_required,
+        "gaps": [
+            {"field_name": g.field_name, "is_blocking": g.is_blocking, "remediation": g.remediation}
+            for g in r.gaps
+        ],
+        "recommendations": r.recommendations,
+        "summary": r.summary,
+        "wave": 135,
+    })
+
+
+# ── Policy Defensibility Scorer endpoint (wave 136) ──────────────────────────
+
+@app.post("/api/oracle/score-policy-defensibility")
+async def api_score_policy_defensibility(request: Request):
+    from oracle.policy_defensibility_scorer import (
+        PolicyEvidenceInput, PolicyType, DisclosureLevel, score_policy_defensibility,
+    )
+    body = await request.json()
+    try:
+        pt = PolicyType(body.get("policy_type", "RETURN_REFUND").upper())
+    except ValueError:
+        pt = PolicyType.RETURN_REFUND
+    try:
+        dl = DisclosureLevel(body.get("disclosure_level", "MISSING").upper())
+    except ValueError:
+        dl = DisclosureLevel.MISSING
+    inp = PolicyEvidenceInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        policy_type=pt,
+        reason_code=body.get("reason_code", "INR"),
+        disclosure_level=dl,
+        buyer_checked_policy_box=bool(body.get("buyer_checked_policy_box", False)),
+        policy_text_at_checkout=bool(body.get("policy_text_at_checkout", False)),
+        policy_linked_from_checkout=bool(body.get("policy_linked_from_checkout", False)),
+        policy_in_order_confirmation=bool(body.get("policy_in_order_confirmation", False)),
+        has_clear_timeframe=bool(body.get("has_clear_timeframe", False)),
+        has_specific_conditions=bool(body.get("has_specific_conditions", False)),
+        has_no_refund_statement=bool(body.get("has_no_refund_statement", False)),
+        final_sale_clearly_stated=bool(body.get("final_sale_clearly_stated", False)),
+        has_cancellation_instructions=bool(body.get("has_cancellation_instructions", False)),
+        has_renewal_reminder=bool(body.get("has_renewal_reminder", False)),
+        cancellation_days_notice=int(body.get("cancellation_days_notice", 0)),
+        policy_applied_consistently=bool(body.get("policy_applied_consistently", True)),
+        exceptions_made_before=bool(body.get("exceptions_made_before", False)),
+        policy_overrides_network_rules=bool(body.get("policy_overrides_network_rules", False)),
+    )
+    r = score_policy_defensibility(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "policy_type": r.policy_type.value,
+        "total_score": r.total_score,
+        "defensibility": r.defensibility.value,
+        "strengths": r.strengths,
+        "weaknesses": r.weaknesses,
+        "network_compliance_ok": r.network_compliance_ok,
+        "win_rate_adjustment": r.win_rate_adjustment,
+        "recommendation": r.recommendation,
+        "summary": r.summary,
+        "wave": 136,
+    })
+
+
+# ── Refund Policy Advisor endpoint (wave 137) ────────────────────────────────
+
+@app.post("/api/oracle/advise-refund-policy")
+async def api_advise_refund_policy(request: Request):
+    from oracle.refund_policy_advisor import (
+        RefundPolicyInput, PolicyDetails, PolicyType, advise_refund_policy,
+    )
+    body = await request.json()
+    raw_policies = body.get("policies", [])
+    policies = []
+    for p in raw_policies:
+        try:
+            pt = PolicyType(p.get("policy_type", "RETURN").upper())
+        except ValueError:
+            pt = PolicyType.RETURN
+        policies.append(PolicyDetails(
+            policy_type=pt,
+            is_on_checkout_page=bool(p.get("is_on_checkout_page", False)),
+            is_on_product_page=bool(p.get("is_on_product_page", False)),
+            is_in_order_confirmation=bool(p.get("is_in_order_confirmation", False)),
+            requires_active_acceptance=bool(p.get("requires_active_acceptance", False)),
+            return_window_days=p.get("return_window_days"),
+            has_free_return_shipping=bool(p.get("has_free_return_shipping", False)),
+            is_final_sale_disclosure=bool(p.get("is_final_sale_disclosure", False)),
+            cancel_requires_phone=bool(p.get("cancel_requires_phone", False)),
+            cancel_online_available=bool(p.get("cancel_online_available", True)),
+            policy_was_in_place_at_order=bool(p.get("policy_was_in_place_at_order", True)),
+            days_policy_active=int(p.get("days_policy_active", 365)),
+        ))
+    inp = RefundPolicyInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        claim_type=body.get("claim_type", "INR"),
+        policies=policies,
+        order_amount=float(body.get("order_amount", 0.0)),
+        is_digital_goods=bool(body.get("is_digital_goods", False)),
+        is_subscription=bool(body.get("is_subscription", False)),
+        days_since_purchase=int(body.get("days_since_purchase", 0)),
+        buyer_attempted_return=bool(body.get("buyer_attempted_return", False)),
+        policy_url_in_footer_only=bool(body.get("policy_url_in_footer_only", False)),
+        policy_accepted_at_checkout=bool(body.get("policy_accepted_at_checkout", False)),
+    )
+    r = advise_refund_policy(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "compliance": r.compliance.value,
+        "defensibility": r.defensibility.value,
+        "gaps": [{"gap": g.gap, "severity": g.severity, "recommendation": g.recommendation} for g in r.gaps],
+        "win_rate_impact": r.win_rate_impact,
+        "policy_evidence_usable": r.policy_evidence_usable,
+        "key_findings": r.key_findings,
+        "recommendations": r.recommendations,
+        "summary": r.summary,
+        "wave": 137,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
