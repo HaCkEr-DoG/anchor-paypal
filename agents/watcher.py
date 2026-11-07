@@ -10196,5 +10196,172 @@ async def api_advise_refund_policy(request: Request):
     })
 
 
+@app.post("/api/oracle/analyze-merchant-health")
+async def api_analyze_merchant_health(request: Request):
+    from oracle.merchant_health_advisor import (
+        MerchantHealthInput, HistoricalDispute, analyze_merchant_health,
+    )
+    body = await request.json()
+    raw_disputes = body.get("disputes", [])
+    disputes = [
+        HistoricalDispute(
+            dispute_id=d.get("dispute_id", f"PP-D-{i:03d}"),
+            reason_code=d.get("reason_code", "INR"),
+            amount=float(d.get("amount", 100.0)),
+            outcome=d.get("outcome", "PENDING"),
+            days_to_respond=int(d.get("days_to_respond", 3)),
+            had_tracking=bool(d.get("had_tracking", False)),
+            had_invoice=bool(d.get("had_invoice", False)),
+            had_buyer_communication=bool(d.get("had_buyer_communication", False)),
+            carrier=d.get("carrier", ""),
+            sku=d.get("sku", ""),
+            dispute_month=d.get("dispute_month", ""),
+        )
+        for i, d in enumerate(raw_disputes)
+    ]
+    inp = MerchantHealthInput(
+        merchant_id=body.get("merchant_id", "M-001"),
+        disputes=disputes,
+        total_orders_in_period=int(body.get("total_orders_in_period", max(len(disputes) * 10, 1))),
+        baseline_industry_dispute_rate=float(body.get("baseline_industry_dispute_rate", 0.01)),
+        paypal_threshold=float(body.get("paypal_threshold", 0.0075)),
+    )
+    r = analyze_merchant_health(inp)
+    return JSONResponse({
+        "merchant_id": r.merchant_id,
+        "health_score": r.health_score,
+        "health_tier": r.health_tier.value,
+        "current_dispute_rate": r.current_dispute_rate,
+        "dispute_rate_vs_threshold": r.dispute_rate_vs_threshold,
+        "total_disputes": r.total_disputes,
+        "won_count": r.won_count,
+        "lost_count": r.lost_count,
+        "win_rate": r.win_rate,
+        "inr_pct": r.inr_pct,
+        "snad_pct": r.snad_pct,
+        "unauthorized_pct": r.unauthorized_pct,
+        "subscription_pct": r.subscription_pct,
+        "root_causes": [rc.value for rc in r.root_causes],
+        "recommendations": [
+            {
+                "priority": rec.priority.value,
+                "action": rec.action,
+                "expected_impact": rec.expected_impact,
+                "effort": rec.effort,
+                "root_cause_addressed": rec.root_cause_addressed.value,
+            }
+            for rec in r.recommendations
+        ],
+        "projected_dispute_rate_if_actions_taken": r.projected_dispute_rate_if_actions_taken,
+        "projected_health_score_if_actions_taken": r.projected_health_score_if_actions_taken,
+        "paypal_risk_signal": r.paypal_risk_signal,
+        "paypal_opportunity_signal": r.paypal_opportunity_signal,
+        "key_insight": r.key_insight,
+        "summary": r.summary,
+        "wave": 138,
+    })
+
+
+@app.post("/api/oracle/score-transaction-risk")
+async def api_score_transaction_risk(request: Request):
+    from oracle.transaction_risk_scorer import (
+        TransactionRiskInput, score_transaction_risk,
+    )
+    body = await request.json()
+    inp = TransactionRiskInput(
+        transaction_id=body.get("transaction_id", "TXN-001"),
+        merchant_id=body.get("merchant_id", "M-001"),
+        amount=float(body.get("amount", 100.0)),
+        currency=body.get("currency", "USD"),
+        item_category=body.get("item_category", "UNKNOWN"),
+        billing_country=body.get("billing_country", ""),
+        shipping_country=body.get("shipping_country", ""),
+        ip_country=body.get("ip_country", ""),
+        ship_to_billing_match=bool(body.get("ship_to_billing_match", True)),
+        avs_result=body.get("avs_result", "Y"),
+        cvv_result=body.get("cvv_result", "M"),
+        card_bin_country=body.get("card_bin_country", ""),
+        failed_payment_attempts=int(body.get("failed_payment_attempts", 0)),
+        buyer_account_age_days=int(body.get("buyer_account_age_days", 365)),
+        buyer_prior_transactions=int(body.get("buyer_prior_transactions", 0)),
+        buyer_disputes_last_90d=int(body.get("buyer_disputes_last_90d", 0)),
+        buyer_email_domain=body.get("buyer_email_domain", ""),
+        buyer_orders_last_24h=int(body.get("buyer_orders_last_24h", 1)),
+        is_express_shipping=bool(body.get("is_express_shipping", False)),
+        is_digital_delivery=bool(body.get("is_digital_delivery", False)),
+        has_3ds_authentication=bool(body.get("has_3ds_authentication", False)),
+        hour_of_purchase=int(body.get("hour_of_purchase", 12)),
+        is_first_transaction_with_merchant=bool(body.get("is_first_transaction_with_merchant", True)),
+    )
+    r = score_transaction_risk(inp)
+    return JSONResponse({
+        "transaction_id": r.transaction_id,
+        "merchant_id": r.merchant_id,
+        "risk_score": r.risk_score,
+        "risk_tier": r.risk_tier.value,
+        "chargeback_probability": r.chargeback_probability,
+        "recommended_action": r.recommended_action.value,
+        "action_reason": r.action_reason,
+        "top_signals": [
+            {"signal_id": s.signal_id, "signal_name": s.signal_name,
+             "score_contribution": s.score_contribution, "description": s.description}
+            for s in r.top_signals
+        ],
+        "address_risk_score": r.address_risk_score,
+        "card_risk_score": r.card_risk_score,
+        "buyer_risk_score": r.buyer_risk_score,
+        "velocity_risk_score": r.velocity_risk_score,
+        "item_risk_score": r.item_risk_score,
+        "mitigating_factors": r.mitigating_factors,
+        "summary": r.summary,
+        "wave": 139,
+    })
+
+
+@app.post("/api/oracle/predict-dispute-escalation")
+async def api_predict_dispute_escalation(request: Request):
+    from oracle.dispute_escalation_predictor import (
+        DisputeEscalationInput, predict_escalation,
+    )
+    body = await request.json()
+    inp = DisputeEscalationInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        claim_type=body.get("claim_type", "INR"),
+        dispute_amount=float(body.get("dispute_amount", 100.0)),
+        days_open=int(body.get("days_open", 3)),
+        buyer_threatened_chargeback=bool(body.get("buyer_threatened_chargeback", False)),
+        buyer_tone_hostile=bool(body.get("buyer_tone_hostile", False)),
+        buyer_expressed_frustration=bool(body.get("buyer_expressed_frustration", False)),
+        buyer_satisfied_with_progress=bool(body.get("buyer_satisfied_with_progress", False)),
+        merchant_responded=bool(body.get("merchant_responded", True)),
+        days_until_merchant_responded=int(body.get("days_until_merchant_responded", 1)),
+        resolution_offered=bool(body.get("resolution_offered", False)),
+        resolution_type=body.get("resolution_type", "none"),
+        buyer_prior_escalations=int(body.get("buyer_prior_escalations", 0)),
+        buyer_escalated_within_24h=bool(body.get("buyer_escalated_within_24h", False)),
+        base_escalation_probability=float(body.get("base_escalation_probability", 0.15)),
+    )
+    r = predict_escalation(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "escalation_probability": r.escalation_probability,
+        "risk_level": r.risk_level.value,
+        "active_drivers": r.active_drivers,
+        "active_mitigations": r.active_mitigations,
+        "factors": [
+            {"factor_type": f.factor_type, "is_active": f.is_active,
+             "probability_delta": f.probability_delta, "description": f.description}
+            for f in r.factors
+        ],
+        "recommended_action": r.recommended_action,
+        "action_deadline_hours": r.action_deadline_hours,
+        "intervention_points": r.intervention_points,
+        "additional_fee_if_escalated": r.additional_fee_if_escalated,
+        "expected_additional_loss": r.expected_additional_loss,
+        "summary": r.summary,
+        "wave": 140,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
