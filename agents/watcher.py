@@ -9746,5 +9746,132 @@ async def api_optimize_refund(request: Request):
     })
 
 
+# ── Settlement Optimizer endpoint (wave 129) ─────────────────────────────────
+
+@app.post("/api/oracle/optimize-settlement")
+async def api_optimize_settlement(request: Request):
+    from oracle.settlement_optimizer import SettlementInput, LTVTier, optimize_settlement
+    body = await request.json()
+    try:
+        ltv = LTVTier(body.get("ltv_tier", "MEDIUM").upper())
+    except ValueError:
+        ltv = LTVTier.MEDIUM
+    inp = SettlementInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        disputed_amount=float(body.get("disputed_amount", 100.0)),
+        p_win=float(body.get("p_win", 0.5)),
+        fight_cost=float(body.get("fight_cost", 10.0)),
+        chargeback_fee=float(body.get("chargeback_fee", 20.0)),
+        hdr_fee_per_dispute=float(body.get("hdr_fee_per_dispute", 0.0)),
+        ltv_tier=ltv,
+        claim_type=body.get("claim_type", "INR"),
+        sp_eligible=bool(body.get("sp_eligible", False)),
+        allow_partial=bool(body.get("allow_partial", True)),
+        min_offer_pct=float(body.get("min_offer_pct", 0.10)),
+    )
+    r = optimize_settlement(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "strategy": r.strategy.value,
+        "optimal_offer": r.optimal_offer,
+        "offer_pct_of_dispute": r.offer_pct_of_dispute,
+        "ev_fight": r.ev_fight,
+        "ev_settle": r.ev_settle,
+        "ev_accept": r.ev_accept,
+        "savings_vs_losing": r.savings_vs_losing,
+        "is_ev_positive_to_fight": r.is_ev_positive_to_fight,
+        "reasoning": r.reasoning,
+        "summary": r.summary,
+        "wave": 129,
+    })
+
+
+# ── Merchant Win Rate Estimator endpoint (wave 130) ──────────────────────────
+
+@app.post("/api/oracle/estimate-win-rate")
+async def api_estimate_win_rate(request: Request):
+    from oracle.merchant_win_rate_estimator import WinRateInput, estimate_win_rate
+    body = await request.json()
+    inp = WinRateInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        transaction_amount=float(body.get("transaction_amount", 100.0)),
+        evidence_strength=body.get("evidence_strength"),
+        seller_protection_eligible=bool(body.get("seller_protection_eligible", False)),
+        sp_eligibility=body.get("sp_eligibility"),
+        ce30_applicable=bool(body.get("ce30_applicable", False)),
+        has_delivery_confirmation=bool(body.get("has_delivery_confirmation", False)),
+        has_signature_confirmation=bool(body.get("has_signature_confirmation", False)),
+        tracking_shows_delivered=bool(body.get("tracking_shows_delivered", False)),
+        policy_defensibility=body.get("policy_defensibility"),
+        fraud_signal_level=body.get("fraud_signal_level"),
+        buyer_threatened_legal=bool(body.get("buyer_threatened_legal", False)),
+        merchant_prior_wins_on_similar=int(body.get("merchant_prior_wins_on_similar", 0)),
+        buyer_prior_disputes=int(body.get("buyer_prior_disputes", 0)),
+        hdr_tier=body.get("hdr_tier"),
+    )
+    r = estimate_win_rate(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "base_win_rate": r.base_win_rate,
+        "adjusted_win_rate": r.adjusted_win_rate,
+        "confidence": r.confidence.value,
+        "win_likelihood": r.win_likelihood.value,
+        "positive_factors": r.positive_factors,
+        "negative_factors": r.negative_factors,
+        "expected_value": r.expected_value,
+        "wave": 130,
+    })
+
+
+# ── Response Quality Scorer endpoint (wave 131) ──────────────────────────────
+
+@app.post("/api/oracle/score-response-quality")
+async def api_score_response_quality(request: Request):
+    from oracle.response_quality_scorer import ResponseDraftInput, score_response_quality
+    body = await request.json()
+    inp = ResponseDraftInput(
+        dispute_id=body.get("dispute_id", "PP-D-001"),
+        reason_code=body.get("reason_code", "INR"),
+        network=body.get("network", "PAYPAL"),
+        evidence_items_attached=int(body.get("evidence_items_attached", 0)),
+        required_evidence_count=int(body.get("required_evidence_count", 3)),
+        has_tracking_evidence=bool(body.get("has_tracking_evidence", False)),
+        has_auth_evidence=bool(body.get("has_auth_evidence", False)),
+        has_policy_evidence=bool(body.get("has_policy_evidence", False)),
+        has_communication_log=bool(body.get("has_communication_log", False)),
+        dates_consistent=bool(body.get("dates_consistent", True)),
+        amounts_consistent=bool(body.get("amounts_consistent", True)),
+        tracking_numbers_valid=bool(body.get("tracking_numbers_valid", True)),
+        buyer_identity_confirmed=bool(body.get("buyer_identity_confirmed", True)),
+        reason_code_addressed=bool(body.get("reason_code_addressed", True)),
+        has_counter_narrative=bool(body.get("has_counter_narrative", False)),
+        cites_network_rules=bool(body.get("cites_network_rules", False)),
+        has_supporting_precedent=bool(body.get("has_supporting_precedent", False)),
+        has_cover_letter=bool(body.get("has_cover_letter", False)),
+        has_evidence_index=bool(body.get("has_evidence_index", False)),
+        meets_page_limit=bool(body.get("meets_page_limit", True)),
+        follows_network_template=bool(body.get("follows_network_template", False)),
+        tone_professional=bool(body.get("tone_professional", True)),
+        no_threats_or_demands=bool(body.get("no_threats_or_demands", True)),
+        concise_under_1000_words=bool(body.get("concise_under_1000_words", True)),
+    )
+    r = score_response_quality(inp)
+    return JSONResponse({
+        "dispute_id": r.dispute_id,
+        "reason_code": r.reason_code,
+        "total_score": r.total_score,
+        "quality_tier": r.quality_tier.value,
+        "improvements": r.improvements,
+        "strengths": r.strengths,
+        "blocking_issues": r.blocking_issues,
+        "approved_to_submit": r.approved_to_submit,
+        "summary": r.summary,
+        "wave": 131,
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
