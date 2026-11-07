@@ -791,11 +791,9 @@ async def api_dashboard_summary(request: Request):
         return JSONResponse({"connected": False, "source": "PayPal", "error": "not_configured"}, status_code=503)
 
     try:
-        urgent_data, all_data, webhook_data = await asyncio.gather(
-            client.list_disputes(dispute_state="REQUIRED_ACTION", page_size=50),
-            client.list_disputes(page_size=50),
-            client.list_webhooks(),
-        )
+        urgent_data = await client.list_disputes(dispute_state="REQUIRED_ACTION", page_size=50)
+        all_data = await client.list_disputes(page_size=50)
+        webhook_data = await client.list_webhooks()
         urgent_items = urgent_data.get("items", [])
         all_items = all_data.get("items", [])
         urgent_count = urgent_data.get("total_items")
@@ -859,7 +857,12 @@ async def api_dashboard_summary(request: Request):
         return JSONResponse(summary)
     except Exception as exc:
         print(f"[Dashboard] PayPal live summary failed: {type(exc).__name__}: {exc}")
-        return JSONResponse({"connected": False, "source": "PayPal", "error": "upstream_unavailable"}, status_code=503)
+        return JSONResponse({
+            "connected": False,
+            "source": "PayPal",
+            "error": "upstream_unavailable",
+            "error_type": type(exc).__name__,
+        }, status_code=503)
 
 
 @app.get("/api/disputes")
