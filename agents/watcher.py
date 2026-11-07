@@ -6749,5 +6749,165 @@ async def api_buyer_risk(request: Request):
     })
 
 
+# ---------------------------------------------------------------------------
+# Wave 95 — Dispute Cost Estimator  POST /api/oracle/dispute-cost
+# ---------------------------------------------------------------------------
+
+@app.post("/api/oracle/dispute-cost")
+async def api_dispute_cost(request: Request):
+    """
+    Full P&L breakdown of fighting vs settling a dispute.
+
+    Request body:
+      {
+        "dispute_id": str,
+        "amount_usd": float,
+        "claim_type": str,
+        "win_probability": float,          // 0–1
+        "cost_of_goods_usd": float,        // COGS already spent (optional, default 0)
+        "shipping_cost_usd": float,        // shipping already spent (optional, default 0)
+        "hours_to_respond": float,         // hours to build response (optional, default 3)
+        "hourly_rate_usd": float,          // merchant time cost (optional, default 50)
+        "paypal_dispute_fee_usd": float,   // PayPal fee if lost (optional, default 15)
+        "settlement_offer_usd": float      // specific settlement to evaluate (optional)
+      }
+
+    Response:
+      {
+        "dispute_id": str,
+        "amount_usd": float,
+        "win_probability": float,
+        "scenarios": {
+          "fight_and_win": { ... },
+          "fight_and_lose": { ... },
+          "settle": { ... },             // if settlement_offer_usd provided
+          "do_nothing": { ... }
+        },
+        "expected_outcome": {
+          "fight_ev_usd": float,
+          "settle_ev_usd": float,        // present if settlement_offer_usd provided
+          "best_action": str,
+          "net_savings_vs_do_nothing_usd": float
+        },
+        "cost_breakdown": { ... }
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    dispute_id = body.get("dispute_id", "UNKNOWN")
+    amount = float(body.get("amount_usd", 0.0))
+    claim_type = str(body.get("claim_type", "OTHER")).upper()
+    win_prob = float(body.get("win_probability", 0.5))
+    cogs = float(body.get("cost_of_goods_usd", 0.0))
+    shipping = float(body.get("shipping_cost_usd", 0.0))
+    hours = float(body.get("hours_to_respond", 3.0))
+    hourly = float(body.get("hourly_rate_usd", 50.0))
+    pp_fee = float(body.get("paypal_dispute_fee_usd", 15.0))
+    settlement_offer = body.get("settlement_offer_usd")
+
+    # Clamp
+    amount = max(0.0, amount)
+    win_prob = max(0.0, min(1.0, win_prob))
+    cogs = max(0.0, cogs)
+    shipping = max(0.0, shipping)
+    hours = max(0.0, hours)
+    hourly = max(0.0, hourly)
+    pp_fee = max(0.0, pp_fee)
+
+    # Pre-spent costs (sunk, relevant for P&L perspective)
+    sunk_costs = cogs + shipping
+    response_labor = round(hours * hourly, 2)
+
+    # --- Scenario: Fight and Win ---
+    # Merchant keeps the sale amount, pays labor only
+    fight_win_net = round(amount - response_labor, 2)
+    fight_win_pnl = round(fight_win_net - sunk_costs, 2)
+
+    # --- Scenario: Fight and Lose ---
+    # Merchant refunds full amount + PayPal fee + labor
+    fight_lose_net = round(-(amount + pp_fee + response_labor), 2)
+    fight_lose_pnl = round(fight_lose_net - sunk_costs, 2)
+
+    # --- Scenario: Do Nothing (don't respond) ---
+    # Auto-lose: full refund + fee, no labor cost
+    do_nothing_net = round(-(amount + pp_fee), 2)
+    do_nothing_pnl = round(do_nothing_net - sunk_costs, 2)
+
+    # --- EV of fighting ---
+    fight_ev = round(win_prob * fight_win_net + (1 - win_prob) * fight_lose_net, 2)
+
+    # --- Scenario: Settle ---
+    settle_scenario = None
+    settle_ev = None
+    if settlement_offer is not None:
+        s_offer = float(settlement_offer)
+        s_offer = max(0.0, min(s_offer, amount))
+        # Merchant pays partial refund, no PayPal fee, minimal labor (~30 min)
+        settle_labor = round(0.5 * hourly, 2)
+        settle_net = round(-(s_offer + settle_labor), 2)
+        settle_pnl = round(settle_net - sunk_costs, 2)
+        settle_ev = settle_net
+        settle_scenario = {
+            "settlement_offer_usd": round(s_offer, 2),
+            "labor_cost_usd": settle_labor,
+            "net_outcome_usd": settle_net,
+            "total_pnl_usd": settle_pnl,
+            "savings_vs_fight_loss_usd": round(settle_net - fight_lose_net, 2),
+        }
+
+    # Best action
+    candidates = {"fight": fight_ev, "do_nothing": do_nothing_net}
+    if settle_ev is not None:
+        candidates["settle"] = settle_ev
+    best_action = max(candidates, key=lambda k: candidates[k])
+    best_ev = candidates[best_action]
+    savings_vs_nothing = round(best_ev - do_nothing_net, 2)
+
+    scenarios = {
+        "fight_and_win": {
+            "probability": round(win_prob, 4),
+            "net_outcome_usd": fight_win_net,
+            "total_pnl_usd": fight_win_pnl,
+        },
+        "fight_and_lose": {
+            "probability": round(1 - win_prob, 4),
+            "net_outcome_usd": fight_lose_net,
+            "total_pnl_usd": fight_lose_pnl,
+            "paypal_fee_usd": pp_fee,
+        },
+        "do_nothing": {
+            "net_outcome_usd": do_nothing_net,
+            "total_pnl_usd": do_nothing_pnl,
+            "note": "Auto-loss: full refund + PayPal fee, no labor",
+        },
+    }
+    if settle_scenario:
+        scenarios["settle"] = settle_scenario
+
+    return JSONResponse({
+        "dispute_id": dispute_id,
+        "amount_usd": amount,
+        "claim_type": claim_type,
+        "win_probability": win_prob,
+        "scenarios": scenarios,
+        "expected_outcome": {
+            "fight_ev_usd": fight_ev,
+            "settle_ev_usd": settle_ev,
+            "best_action": best_action,
+            "net_savings_vs_do_nothing_usd": savings_vs_nothing,
+        },
+        "cost_breakdown": {
+            "sunk_costs_usd": round(sunk_costs, 2),
+            "cogs_usd": cogs,
+            "shipping_usd": shipping,
+            "response_labor_usd": response_labor,
+            "paypal_fee_if_lost_usd": pp_fee,
+        },
+    })
+
+
 # Track start time for Render health endpoint
 _start_time = time.time()
