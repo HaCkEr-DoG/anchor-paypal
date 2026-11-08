@@ -1,13 +1,13 @@
 databases:
   - name: anchor-db
-    plan: starter
+    plan: free
     region: oregon
 
 services:
   - type: web
     name: anchor-api
     runtime: python
-    plan: starter
+    plan: free
     region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn agents.watcher:app --host 0.0.0.0 --port $PORT
@@ -89,7 +89,7 @@ services:
   - type: worker
     name: anchor-worker
     runtime: python
-    plan: starter
+    plan: free
     region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: python -m scripts.webhook_worker
