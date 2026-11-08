@@ -241,7 +241,7 @@ def check_from_env() -> ProductionSafetyReport:
         shadow_mode=os.environ.get("SHADOW_MODE", "0") == "1",
         api_secret_set=bool(os.environ.get("API_SECRET", "")),
         approval_secret_set=bool(os.environ.get("APPROVAL_TOKEN_SECRET", "")),
-        durable_storage_configured=bool(os.environ.get("ELASTICSEARCH_URL", "")),
+        durable_storage_configured=bool(os.environ.get("DATABASE_URL", "") or os.environ.get("ELASTICSEARCH_URL", "")),
         webhook_outbox_enabled=os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1",
         recovery_validation_enabled=os.environ.get("RECOVERY_VALIDATION_ENABLED", "1") != "0",
         approval_link_max_age_seconds=int(os.environ.get("APPROVAL_LINK_MAX_AGE", "3600")),

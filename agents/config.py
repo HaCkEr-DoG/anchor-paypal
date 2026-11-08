@@ -83,6 +83,15 @@ DEFAULT_CONFIG = GuardianConfig(
     hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", "50")),
 )
 
+# Fail-closed config: all autonomous thresholds set to impossible values so
+# every dispute routes to human review. Used when policy storage is unavailable.
+MANUAL_REVIEW_CONFIG = GuardianConfig(
+    merchant_id="default",
+    auto_accept_below=0.0,           # never auto-accept
+    auto_fight_above=1_000_000_000.0, # never auto-fight (above any real dispute)
+    auto_fight_min_prob=1.01,         # impossible win-probability threshold (> 1.0)
+)
+
 
 async def detect_fee_tier(merchant_id: str) -> bool:
     """
@@ -151,7 +160,8 @@ async def load_config(merchant_id: str) -> GuardianConfig:
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
     if not es_url or not es_key:
-        return DEFAULT_CONFIG
+        print(f"[Config] No ES credentials for merchant {merchant_id} — fail-closed: all disputes route to human review")
+        return MANUAL_REVIEW_CONFIG
 
     import httpx
     try:
@@ -164,11 +174,11 @@ async def load_config(merchant_id: str) -> GuardianConfig:
             if r.status_code == 200:
                 cfg = GuardianConfig.from_dict(r.json().get("_source", {}))
             else:
-                print(f"[Config] ES returned {r.status_code} for merchant {merchant_id} — using defaults")
-                cfg = DEFAULT_CONFIG
+                print(f"[Config] ES returned {r.status_code} for merchant {merchant_id} — fail-closed: all disputes route to human review")
+                cfg = MANUAL_REVIEW_CONFIG
     except Exception as exc:
-        print(f"[Config] ES unreachable for merchant {merchant_id} ({exc}) — using defaults; autonomous thresholds may not reflect merchant settings")
-        cfg = DEFAULT_CONFIG
+        print(f"[Config] ES unreachable for merchant {merchant_id} ({exc}) — fail-closed: all disputes route to human review")
+        cfg = MANUAL_REVIEW_CONFIG
 
     # Auto-detect fee tier unless the merchant explicitly set it
     if not cfg.high_volume_fee_tier:

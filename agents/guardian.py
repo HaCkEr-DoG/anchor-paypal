@@ -615,7 +615,8 @@ class Guardian:
         if not secret:
             return ""
         mid = self.merchant_id or MERCHANT_ID
-        expiry = int(time.time()) + 48 * 3600
+        max_age = int(os.environ.get("APPROVAL_LINK_MAX_AGE", "3600"))
+        expiry = int(time.time()) + max_age
         payload = f"{dispute_id}:{mid}:{action}:{expiry}"
         sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         return f"{expiry}.{sig}"

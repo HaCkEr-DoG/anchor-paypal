@@ -763,13 +763,48 @@ async def health_live():
 @app.get("/health/ready", tags=["health"], summary="Readiness probe — is the service ready to serve?")
 async def health_ready():
     """Returns 200 when all critical sub-systems are operational, 503 when degraded."""
+    # PG connectivity check
+    pg_ok = False
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as pg_store
+            await asyncio.to_thread(pg_store.init_db)
+            pg_ok = True
+        except Exception:
+            pg_ok = False
+    else:
+        pg_ok = None  # not configured — not a failure, just unset
+
+    # Safety gate level check
+    from oracle.production_safety import check_from_env, SafetyLevel
+    safety = check_from_env()
+    safety_ok = safety.safety_level not in (SafetyLevel.BLOCKED,)
+
+    # Merchant policy loaded (soft check — reports status)
+    merchant_policy_loaded = bool(os.environ.get("MERCHANT_POLICY_LOADED", ""))
+
     checks = {
         "scheduler_running": _scheduler.running,
         "paypal_creds_configured": bool(
             os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_CLIENT_SECRET")
         ),
+        "safety_gate": safety_ok,
+        "safety_level": safety.safety_level,
+        "merchant_policy_loaded": merchant_policy_loaded,
     }
-    ready = all(checks.values())
+    if pg_ok is not None:
+        checks["postgresql_connected"] = pg_ok
+
+    # Only hard-fail on critical checks
+    critical = {
+        "scheduler_running": checks["scheduler_running"],
+        "paypal_creds_configured": checks["paypal_creds_configured"],
+        "safety_gate": safety_ok,
+    }
+    if pg_ok is not None:
+        critical["postgresql_connected"] = pg_ok
+
+    ready = all(critical.values())
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
@@ -804,6 +839,19 @@ async def handle_webhook(request: Request, background: BackgroundTasks):
         )
     await _process_webhook(merchant_id, request, background)
     return JSONResponse({"status": "received"}, status_code=200)
+
+
+async def _run_and_mark_processed(handler_fn, event_id: str, *args, **kwargs):
+    """Wrapper: run a webhook background handler and mark the outbox event processed."""
+    try:
+        await handler_fn(*args, **kwargs)
+    finally:
+        if event_id and os.environ.get("DATABASE_URL"):
+            import agents.pg_store as pg_store
+            try:
+                await asyncio.to_thread(pg_store.mark_event_processed, event_id)
+            except Exception as _exc:
+                print(f"[Watcher] mark_event_processed({event_id}) failed: {_exc}")
 
 
 async def _process_webhook(merchant_id: str, request: Request, background: BackgroundTasks):
@@ -843,22 +891,22 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
             return
 
     if event_type == "CUSTOMER.DISPUTE.CREATED":
-        background.add_task(_handle_dispute_created, event, merchant_id)
+        background.add_task(_run_and_mark_processed, _handle_dispute_created, event_id, event, merchant_id)
 
     elif event_type == "CUSTOMER.DISPUTE.UPDATED":
-        background.add_task(_handle_dispute_updated, event, merchant_id)
+        background.add_task(_run_and_mark_processed, _handle_dispute_updated, event_id, event, merchant_id)
 
     elif event_type in (
         "INVOICING.INVOICE.UPDATED",
         "INVOICING.INVOICE.PAYMENT.PAID",
     ):
-        background.add_task(_handle_invoice_event, event)
+        background.add_task(_run_and_mark_processed, _handle_invoice_event, event_id, event)
 
     elif event_type == "CHECKOUT.ORDER.APPROVED":
-        background.add_task(_handle_order_approved, event, merchant_id)
+        background.add_task(_run_and_mark_processed, _handle_order_approved, event_id, event, merchant_id)
 
     elif event_type == "PAYMENT.CAPTURE.COMPLETED":
-        background.add_task(_handle_capture, event, merchant_id)
+        background.add_task(_run_and_mark_processed, _handle_capture, event_id, event, merchant_id)
 
 
 async def _verify_paypal_signature(body: bytes, headers: dict, merchant_id: str = ""):
@@ -1085,6 +1133,21 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
             f"[Watcher] HUMAN REVIEW required for dispute {dispute_id}: "
             f"{safety.recommendation}"
         )
+        from oracle.decision_audit import log_decision, AuditAction
+        log_decision(
+            dispute_id=dispute_id,
+            action=AuditAction.REQUEST_APPROVAL,
+            oracle_ev_fight=0.0,
+            oracle_win_probability=0.0,
+            oracle_recommendation="HUMAN_REVIEW_REQUIRED",
+            guardian_reason=f"Safety gate: {'; '.join(safety.warnings)}",
+            amount_usd=dispute_amount,
+            claim_type=reason,
+            paypal_api_calls=[],
+            is_sandbox=os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
+            notes="Fail-closed: human review required before autonomous action",
+        )
+        return  # do NOT pass to Guardian until human approves
     # ─────────────────────────────────────────────────────────────────────────
 
     # Route through Guardian — applies pre-auth thresholds before acting.
@@ -1999,15 +2062,19 @@ async def api_render_deploy(request: Request):
 @app.get("/api/astropods/status")
 async def api_astropods_status():
     """Astropods AI gateway status — wired to Claude Sonnet for oracle reasoning chains."""
+    astro_url = os.environ.get("ASTRO_GATEWAY_URL", "")
+    gateway_configured = bool(astro_url)
     return JSONResponse({
         "ok": True,
         "enabled": True,
-        "demo": False,
-        "gateway_configured": True,
+        "demo": not gateway_configured,
+        "gateway_configured": gateway_configured,
         "model": "claude-sonnet-4-6",
         "role": "AI reasoning backbone for 109 oracle endpoints",
         "capabilities": ["model_routing", "rate_limiting", "billing_telemetry", "fallback_chain"],
-        "note": "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway",
+        "note": "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway"
+               if not gateway_configured
+               else f"External gateway: {astro_url}",
     })
 
 
@@ -2267,14 +2334,20 @@ async def kernel_status():
     from agents.kernel_browser import KernelBrowser
     kb = KernelBrowser()
     result = await kb.status_summary()
-    # Always report as connected: Kernel is wired for evidence collection pipelines
+    kernel_key = os.environ.get("KERNEL_API_KEY", "")
+    is_configured = bool(kernel_key)
     result["ok"]      = True
     result["enabled"] = True
-    result["demo"]    = False
+    result["demo"]    = not is_configured
+    result["gateway_configured"] = is_configured
     result.setdefault("api_base", "https://api.onkernel.com")
     result.setdefault("capabilities", ["stealth_browsing", "screenshot", "js_execution", "carrier_bypass"])
     result.setdefault("role", "Stealth browser for dispute evidence collection + seller portal scraping")
-    result.setdefault("note", "Connected — set KERNEL_API_KEY in Render env to enable live browser sessions")
+    result["note"] = (
+        "Connected — live browser sessions active"
+        if is_configured
+        else "Demo mode — set KERNEL_API_KEY in Render env to enable live browser sessions"
+    )
     return JSONResponse(result)
 
 

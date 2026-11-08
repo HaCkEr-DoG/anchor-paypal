@@ -370,15 +370,17 @@ def test_status_required_fields():
         "status", "version", "uptime_seconds", "started_at",
         "oracle_endpoints", "rate_limit_per_minute", "max_body_bytes",
         "oracle_timeout_seconds", "lockout_threshold", "lockout_window_seconds",
-        "secondary_key_configured", "total_auth_failures_in_window", "env",
+        "secondary_key_configured", "total_auth_failures_in_window",
     ):
         assert f in body, f"Missing /api/status field: {f}"
+    # env block was removed for security (do not expose credential config to callers)
+    assert "env" not in body, "/api/status must not expose env configuration"
 
 
 def test_status_env_keys_boolean():
     r = _client.get("/api/status")
-    for k, v in r.json()["env"].items():
-        assert isinstance(v, bool), f"env[{k}] must be bool"
+    # env block removed for security — verify it stays absent
+    assert "env" not in r.json()
 
 
 def test_status_oracle_count():
