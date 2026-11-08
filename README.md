@@ -22,7 +22,7 @@ The sample decision flow needs no PayPal credentials. A live AI evidence review 
 
 **Sponsor prizes targeted:**
 - **AG Grid** ($5K) — Community 31.3.2 disputes + recovery tables with live data, column grouping, custom renderers
-- **Render** (credits) — live deployment auto-deployed from GitHub, free tier, `render.yaml` in repo
+- **Render** (credits) — live deployment auto-deployed from GitHub; production blueprint includes a web service, worker, and PostgreSQL database
 - **Best Use of PayPal + AI** — AI summarizes only supplied PayPal/merchant records with source IDs; the deterministic Oracle owns EV math and Guardian owns permitted actions
 - **Agentic commerce** — webhook → evidence review → Oracle → Guardian → state-checked PayPal action; approved orders are resumed through idempotent capture
 
@@ -149,14 +149,14 @@ uvicorn agents.watcher:app --reload
 
 **Live demo:** `https://anchor-paypal.onrender.com`
 
-1. Render → New → Web Service → GitHub → `HaCkEr-DoG/anchor-paypal`
-2. Build command: `pip install -r requirements.txt`
-3. Start command: `uvicorn agents.watcher:app --host 0.0.0.0 --port $PORT`
-4. Plan: **Free** for the hackathon demo
-5. Add env vars from `.env.example`
-6. Register webhook: `https://anchor-paypal.onrender.com/webhooks/paypal`
+1. Apply the repository `render.yaml` Blueprint. It defines a web service, a background worker, and PostgreSQL.
+2. Set the PayPal Sandbox client credentials, webhook ID, merchant ID, and `MERCHANT_ID` in Render.
+3. Confirm `/health/ready` is healthy and the web service reports a recent worker heartbeat.
+4. Send signed Sandbox dispute and approved-order webhooks, then confirm the outbox, retry behavior, and dashboard records.
 
-The web process schedules recovery checks every 15 minutes and the morning brief at 08:00 UTC. Render's Free web services sleep after inactivity, so in-process schedules do not provide guaranteed 24/7 processing while the instance is asleep. For continuous webhook and schedule handling, use an always-on paid web service or move scheduled work to a durable external queue/worker. The dashboard remains suitable for demos on the Free plan, but the service should not be described as continuously autonomous there. [Render documents this Free instance limitation](https://render.com/docs/free).
+The Blueprint uses always-on Starter services and a persistent database. These resources can incur recurring charges; review the current Render pricing before applying the Blueprint. The web process verifies and stores PayPal webhooks. The worker drains durable webhook and approval jobs and runs the recovery, deadline, and morning-brief schedules. Sandbox mode, shadow mode, the autonomous-action kill switch, and recovery opt-in are configured to keep payment actions disabled by default.
+
+For a cost-free dashboard-only demo, keep the current deployment and do not apply the production Blueprint; it cannot provide durable 24/7 webhook processing. [Render documents its Free instance limitations](https://render.com/docs/free).
 
 Merchant endpoints (`/api/stats`, `/api/disputes`, `/api/recoveries`, `/api/paypal/disputes`) and the paid model chat endpoint require the `X-API-Key` header matching `API_SECRET`. Render generates `API_SECRET` from `render.yaml`; keep it private and do not embed it in the public dashboard. For a local setup, set a random `API_SECRET` in `.env` and send it from a trusted admin client.
 

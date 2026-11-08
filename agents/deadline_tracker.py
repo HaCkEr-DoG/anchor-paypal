@@ -114,6 +114,15 @@ async def store_open_dispute(dispute: OpenDispute) -> bool:
     Persist an open dispute to ES (preferred) or in-memory fallback.
     Uses op_type=create against ES to avoid overwriting existing entries.
     """
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import asyncio
+            from agents import pg_store
+            return await asyncio.to_thread(pg_store.save_tracked_dispute, dispute.__dict__)
+        except Exception as exc:
+            print(f"[DeadlineTracker] PG store failed for {dispute.dispute_id}: {exc}")
+            return False
+
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
@@ -148,6 +157,15 @@ async def store_open_dispute(dispute: OpenDispute) -> bool:
 
 async def mark_dispute_resolved(dispute_id: str) -> bool:
     """Remove a dispute from the deadline-tracking index when resolved."""
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import asyncio
+            from agents import pg_store
+            return await asyncio.to_thread(pg_store.delete_tracked_dispute, dispute_id)
+        except Exception as exc:
+            print(f"[DeadlineTracker] PG mark_resolved failed for {dispute_id}: {exc}")
+            return False
+
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
@@ -166,6 +184,17 @@ async def mark_dispute_resolved(dispute_id: str) -> bool:
 
 
 async def update_alert_level(dispute_id: str, level: str, auto_acted: bool = False) -> bool:
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import asyncio
+            from agents import pg_store
+            return await asyncio.to_thread(
+                pg_store.update_tracked_dispute, dispute_id, level, auto_acted
+            )
+        except Exception as exc:
+            print(f"[DeadlineTracker] PG update_alert_level failed for {dispute_id}: {exc}")
+            return False
+
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
@@ -188,6 +217,26 @@ async def update_alert_level(dispute_id: str, level: str, auto_acted: bool = Fal
 
 async def get_open_disputes(merchant_id: str = "") -> list[OpenDispute]:
     """Fetch all open (non-auto-acted) disputes from ES or in-memory fallback."""
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import asyncio
+            from agents import pg_store
+            rows = await asyncio.to_thread(pg_store.get_tracked_disputes, merchant_id)
+            return [
+                OpenDispute(
+                    dispute_id=row["dispute_id"], merchant_id=row["merchant_id"],
+                    amount=row["amount"], reason_code=row["reason_code"],
+                    opened_at=row["opened_at"].isoformat(),
+                    response_deadline=row["response_deadline"].isoformat(),
+                    last_alert_level=row.get("last_alert_level", ""),
+                    auto_acted=row.get("auto_acted", False),
+                    win_probability=row.get("win_probability", 0.0),
+                ) for row in rows
+            ]
+        except Exception as exc:
+            print(f"[DeadlineTracker] PG get_open_disputes failed: {exc}")
+            return []
+
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
     if not es_url or not es_key:
@@ -231,6 +280,7 @@ async def check_deadlines(
     merchant_id: str,
     notify_fn,
     auto_accept_fn,
+    allow_auto_action: bool = False,
 ) -> dict:
     """
     Main deadline sweep — called by APScheduler every 30 minutes.
@@ -270,25 +320,29 @@ async def check_deadlines(
                 f"({overdue_h:.1f}h overdue)"
             )
             if dispute.last_alert_level != "past_deadline":
-                # First time we've seen this past-deadline — notify and attempt late accept
                 recovery_msg = (
                     f"🚨 PAST DEADLINE: `{dispute.dispute_id}` is {overdue_h:.1f}h overdue.\n"
-                    f"Attempting late acceptance (PayPal grace window).\n"
-                    f"Amount: ${dispute.amount:.2f} | Reason: {dispute.reason_code}"
+                    + ("Attempting late acceptance (PayPal grace window).\n" if allow_auto_action else
+                       "Manual response required; autonomous action is disabled.\n")
+                    + f"Amount: ${dispute.amount:.2f} | Reason: {dispute.reason_code}"
                 )
                 await notify_fn(recovery_msg)
-                try:
-                    await auto_accept_fn(
-                        dispute.dispute_id,
-                        dispute.amount,
-                        reason=f"deadline_recovery:{overdue_h:.1f}h_overdue",
-                    )
-                except Exception as exc:
-                    print(f"[DeadlineTracker] Recovery accept failed for {dispute.dispute_id}: {exc}")
-                await update_alert_level(dispute.dispute_id, "past_deadline", auto_acted=True)
+                if allow_auto_action:
+                    try:
+                        await auto_accept_fn(
+                            dispute.dispute_id,
+                            dispute.amount,
+                            reason=f"deadline_recovery:{overdue_h:.1f}h_overdue",
+                        )
+                    except Exception as exc:
+                        print(f"[DeadlineTracker] Recovery accept failed for {dispute.dispute_id}: {exc}")
+                    else:
+                        await update_alert_level(dispute.dispute_id, "past_deadline", auto_acted=True)
+                else:
+                    await update_alert_level(dispute.dispute_id, "past_deadline")
             continue
 
-        if hours_left <= AUTO_ACTION_HOURS and not dispute.auto_acted:
+        if hours_left <= AUTO_ACTION_HOURS and not dispute.auto_acted and allow_auto_action:
             # Auto-action: accept rather than auto-lose
             print(
                 f"[DeadlineTracker] Auto-accepting {dispute.dispute_id} "
@@ -309,6 +363,16 @@ async def check_deadlines(
                 auto_acted += 1
             except Exception as exc:
                 print(f"[DeadlineTracker] Auto-accept failed for {dispute.dispute_id}: {exc}")
+            continue
+
+        if hours_left <= AUTO_ACTION_HOURS and not dispute.auto_acted:
+            if dispute.last_alert_level != "2_hours":
+                await notify_fn(
+                    f"⛔ Manual action required: `{dispute.dispute_id}` has {hours_left:.1f}h left. "
+                    f"Autonomous actions are disabled. Amount: ${dispute.amount:.2f}."
+                )
+                await update_alert_level(dispute.dispute_id, "2_hours")
+                alerts_sent += 1
             continue
 
         # Check which alert tier we should send
@@ -438,8 +502,8 @@ async def startup_sync(merchant_id: str) -> int:
     """
     es_url = os.environ.get("ELASTICSEARCH_URL", "")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY", "")
-    # Only needed for in-memory mode; ES already has persistent state
-    if es_url and es_key:
+    # Only needed for in-memory mode; PostgreSQL/ES already have persistent state.
+    if os.environ.get("DATABASE_URL") or (es_url and es_key):
         return 0
 
     try:

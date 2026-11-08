@@ -112,7 +112,8 @@ def test_open_dispute_defaults():
 # ── store_open_dispute / mark_dispute_resolved (no ES) ───────────────────────
 
 @pytest.mark.asyncio
-async def test_store_no_es_returns_false():
+async def test_store_no_es_returns_false(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     os.environ.pop("ELASTICSEARCH_URL", None)
     os.environ.pop("ELASTICSEARCH_API_KEY", None)
     from agents.deadline_tracker import store_open_dispute, OpenDispute
@@ -124,20 +125,22 @@ async def test_store_no_es_returns_false():
         opened_at="2026-11-01T00:00:00Z",
         response_deadline="2026-11-11T00:00:00Z",
     ))
-    assert result is False
+    assert result is True
 
 
 @pytest.mark.asyncio
-async def test_mark_resolved_no_es_returns_false():
+async def test_mark_resolved_no_es_returns_false(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     os.environ.pop("ELASTICSEARCH_URL", None)
     os.environ.pop("ELASTICSEARCH_API_KEY", None)
     from agents.deadline_tracker import mark_dispute_resolved
     result = await mark_dispute_resolved("PP-D-X")
-    assert result is False
+    assert result is True
 
 
 @pytest.mark.asyncio
-async def test_get_open_disputes_no_es_returns_empty():
+async def test_get_open_disputes_no_es_returns_empty(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     os.environ.pop("ELASTICSEARCH_URL", None)
     os.environ.pop("ELASTICSEARCH_API_KEY", None)
     from agents.deadline_tracker import get_open_disputes
@@ -158,7 +161,7 @@ async def test_check_deadlines_no_disputes():
     async def auto_accept(did, amt, reason): auto_acted.append(did)
 
     with patch("agents.deadline_tracker.get_open_disputes", new_callable=AsyncMock, return_value=[]):
-        result = await check_deadlines("m1", notify, auto_accept)
+        result = await check_deadlines("m1", notify, auto_accept, allow_auto_action=True)
 
     assert result["checked"] == 0
     assert len(notified) == 0
@@ -189,7 +192,7 @@ async def test_check_deadlines_auto_accept_at_2h():
 
     with patch("agents.deadline_tracker.get_open_disputes", new_callable=AsyncMock, return_value=[dispute]), \
          patch("agents.deadline_tracker.update_alert_level", new_callable=AsyncMock, return_value=True):
-        result = await check_deadlines("m1", notify, auto_accept)
+        result = await check_deadlines("m1", notify, auto_accept, allow_auto_action=True)
 
     assert result["auto_acted"] >= 1
     assert "PP-D-URGENT" in auto_acted

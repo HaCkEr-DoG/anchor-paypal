@@ -19,8 +19,10 @@ unexpected PayPal states fail closed and require merchant review.
 
 import asyncio
 import os
+import socket
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -53,6 +55,7 @@ class AbandonedOrder:
     recovered: bool = False
     recovery_status: str = "pending_recovery"
     capture_id: str = ""
+    paypal_payee_id: str = ""
 
 
 class RecoveryAgent:
@@ -81,14 +84,25 @@ class RecoveryAgent:
         buyer_name_parts = payer.get("name", {})
         buyer_name = f"{buyer_name_parts.get('given_name', '')} {buyer_name_parts.get('surname', '')}".strip()
 
-        # Sum across all purchase units
+        # Persist a complete, single-currency purchase snapshot. Incomplete
+        # order data is never eligible for later automatic capture.
         purchase_units = resource.get("purchase_units", [])
-        amount = sum(
-            float(pu.get("amount", {}).get("value", 0))
-            for pu in purchase_units
-        )
-        currency = (purchase_units[0].get("amount", {}).get("currency_code", "USD")
-                    if purchase_units else "USD")
+        if not purchase_units:
+            print(f"[Recovery] Order {order_id} has no purchase units — not storing")
+            return
+        try:
+            amounts = [Decimal(str(pu["amount"]["value"])) for pu in purchase_units]
+            currencies = [str(pu["amount"]["currency_code"]).strip().upper() for pu in purchase_units]
+        except (KeyError, TypeError, InvalidOperation, ValueError):
+            print(f"[Recovery] Order {order_id} has incomplete amount/currency — not storing")
+            return
+        if (not all(value.is_finite() and value > 0 for value in amounts)
+                or not all(currencies) or len(set(currencies)) != 1):
+            print(f"[Recovery] Order {order_id} has missing or mixed currencies — not storing")
+            return
+        amount = float(sum(amounts, Decimal("0")))
+        currency = currencies[0]
+        paypal_payee_id = str(purchase_units[0].get("payee", {}).get("merchant_id", "")).strip()
 
         items = []
         for pu in purchase_units:
@@ -115,6 +129,7 @@ class RecoveryAgent:
             buyer_name=buyer_name,
             items=items,
             approved_at=event.get("create_time", datetime.now(timezone.utc).isoformat()),
+            paypal_payee_id=paypal_payee_id,
         )
         await self._save_abandoned_order(order)
         print(f"[Recovery] Tracked approved order {order_id}: ${amount:.2f}")
@@ -133,6 +148,11 @@ class RecoveryAgent:
                 f"[Recovery] RECOVERY_MERCHANT_OPT_IN not set — scan skipped for {merchant_id}"
             )
             return {"scanned": 0, "recovered": 0, "pending": 0, "skipped": 0, "opted_in": False}
+        if os.environ.get("SHADOW_MODE", "0").strip().lower() in {"1", "true", "yes"}:
+            print(f"[Recovery] SHADOW_MODE is enabled — capture scan skipped for {merchant_id}")
+            return {"scanned": 0, "recovered": 0, "pending": 0, "skipped": 0, "shadow_mode": True}
+        if not os.environ.get("DATABASE_URL"):
+            raise RuntimeError("DATABASE_URL is required for recovery; refusing to scan or capture")
 
         from datetime import timedelta
 
@@ -194,30 +214,59 @@ class RecoveryAgent:
                 skipped += 1
                 continue
 
-            if not await self._claim_recovery_order(order.order_id):
+            # Require the live PayPal order to belong to the configured seller.
+            expected_payee = os.environ.get("PAYPAL_MERCHANT_ID", "").strip()
+            live_units = (paypal_order or {}).get("purchase_units", [])
+            live_payees = {
+                str(unit.get("payee", {}).get("merchant_id", "")).strip()
+                for unit in live_units
+            }
+            live_payees.discard("")
+            if (
+                not expected_payee
+                or not order.paypal_payee_id
+                or live_payees != {expected_payee}
+                or order.paypal_payee_id != expected_payee
+            ):
+                await self._mark_recovery_state(
+                    order.order_id,
+                    "needs_review",
+                    "PayPal payee identity is missing or does not match the configured merchant",
+                )
                 skipped += 1
                 continue
 
             # Snapshot validation: compare current PayPal amount+currency against
             # what was stored when the order was first approved. Mismatches indicate
             # a tampered or wrong-merchant order — never capture.
-            live_units = (paypal_order or {}).get("purchase_units", [])
-            if live_units:
-                live_amount = str(live_units[0].get("amount", {}).get("value", "")).strip()
-                live_currency = str(live_units[0].get("amount", {}).get("currency_code", "")).strip().upper()
-                stored_currency = str(order.currency or "").strip().upper()
-                try:
-                    amount_matches = abs(float(live_amount) - float(order.amount)) < 0.01
-                except (ValueError, TypeError):
-                    amount_matches = False
-                if not amount_matches or (live_currency and stored_currency and live_currency != stored_currency):
-                    await self._mark_recovery_state(
-                        order.order_id,
-                        "needs_review",
-                        f"PayPal amount/currency {live_amount} {live_currency} != stored {order.amount} {stored_currency} — skipping",
-                    )
-                    skipped += 1
-                    continue
+            # Compare all live purchase units with the immutable approval snapshot.
+            # Missing fields, missing units, or mixed currencies fail closed.
+            try:
+                if not live_units:
+                    raise ValueError("no purchase units")
+                live_amounts = [Decimal(str(unit["amount"]["value"])) for unit in live_units]
+                live_currencies = [str(unit["amount"]["currency_code"]).strip().upper() for unit in live_units]
+                if (not all(value.is_finite() and value > 0 for value in live_amounts)
+                        or not all(live_currencies) or len(set(live_currencies)) != 1):
+                    raise ValueError("missing or mixed currency")
+                amount_matches = abs(
+                    sum(live_amounts, Decimal("0")) - Decimal(str(order.amount))
+                ) < Decimal("0.01")
+                currency_matches = live_currencies[0] == str(order.currency).strip().upper()
+                if not amount_matches or not currency_matches:
+                    raise ValueError("amount or currency differs from the approval snapshot")
+            except (KeyError, TypeError, InvalidOperation, ValueError) as exc:
+                await self._mark_recovery_state(
+                    order.order_id,
+                    "needs_review",
+                    f"PayPal purchase snapshot cannot be validated ({exc}) — capture blocked",
+                )
+                skipped += 1
+                continue
+
+            if not await self._claim_recovery_order(order.order_id):
+                skipped += 1
+                continue
 
             capture = await self._capture_approved_order(order.order_id, token)
             if not capture:

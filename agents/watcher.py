@@ -109,16 +109,19 @@ async def lifespan(app: FastAPI):
         _brief_tz = _cfg.morning_brief_timezone
     except Exception:
         pass
-    _scheduler.add_job(_run_recovery_check, "cron", minute="*/15", id="recovery")
-    _scheduler.add_job(_run_deadline_check, "cron", minute="*/30", id="deadlines")
-    _scheduler.add_job(
-        _send_morning_brief, "cron",
-        hour=_brief_hour, minute=0,
-        id="brief",
-        timezone=ZoneInfo(_brief_tz),
-    )
-    _scheduler.start()
-    print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
+    if os.environ.get("RUN_SCHEDULER", "1") == "1":
+        _scheduler.add_job(_run_recovery_check, "cron", minute="*/15", id="recovery")
+        _scheduler.add_job(_run_deadline_check, "cron", minute="*/30", id="deadlines")
+        _scheduler.add_job(
+            _send_morning_brief, "cron",
+            hour=_brief_hour, minute=0,
+            id="brief",
+            timezone=ZoneInfo(_brief_tz),
+        )
+        _scheduler.start()
+        print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
+    else:
+        print("[Watcher] Scheduler disabled in web process; dedicated worker owns scheduled jobs")
 
     # Auto-register PayPal webhook if PAYPAL_WEBHOOK_ID is not already set
     if not os.environ.get("PAYPAL_WEBHOOK_ID"):
@@ -135,7 +138,8 @@ async def lifespan(app: FastAPI):
         print(f"[Watcher] Deadline startup sync failed (non-fatal): {_exc}")
 
     yield
-    _scheduler.shutdown()
+    if _scheduler.running:
+        _scheduler.shutdown()
 
 
 async def _auto_register_webhook() -> None:
@@ -466,20 +470,25 @@ _DASHBOARD_HTML = (
     pathlib.Path(__file__).parent.parent / "static" / "dashboard.html"
 ).read_text()
 
-# Approval token secret — loaded/persisted from Elasticsearch in lifespan so it
-# survives Render restarts. APPROVAL_TOKEN_SECRET env var always wins.
+# Approval token secret — persisted in PostgreSQL for consistency across web/worker processes.
 APPROVAL_TOKEN_SECRET: str = ""  # Populated during lifespan startup
 
 
 async def _load_or_create_approval_secret() -> str:
-    """Load from ES so approval links survive restarts; fall back to ephemeral if ES absent."""
+    """Load a shared DB secret so web and worker processes sign identical tokens."""
     env_secret = os.environ.get("APPROVAL_TOKEN_SECRET")
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        candidate = env_secret or secrets.token_hex(32)
+        return await asyncio.to_thread(
+            pg_store.get_or_create_secret, "approval_token_secret", candidate
+        )
     if env_secret:
         return env_secret
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
     if not es_url or not es_key:
-        print("[Watcher] No ES — approval secret is ephemeral (links expire on restart)")
+        print("[Watcher] No durable secret store — approval links will not survive process restart")
         return secrets.token_hex(32)
     import httpx
     try:
@@ -768,18 +777,18 @@ async def health_ready():
     if os.environ.get("DATABASE_URL"):
         try:
             import agents.pg_store as pg_store
-            pg_ok = await asyncio.to_thread(pg_store.init_db)
+            pg_ok = await asyncio.to_thread(pg_store.health_check)
         except Exception:
             pg_ok = False
 
-    # Safety gate level check
+    # Safety gate must use a real merchant-scoped policy record, not a truthy env var.
     from oracle.production_safety import check_from_env, SafetyLevel
-    safety = check_from_env()
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    from agents.config import policy_is_loaded
+    merchant_policy_loaded = await policy_is_loaded(merchant_id)
+    safety = check_from_env(merchant_policy_loaded=merchant_policy_loaded)
     # Only BLOCKED is a hard failure here; HUMAN_REVIEW is a degraded state
     safety_hard_blocked = safety.safety_level == SafetyLevel.BLOCKED
-
-    # Merchant policy loaded (soft check — reports status)
-    merchant_policy_loaded = bool(os.environ.get("MERCHANT_POLICY_LOADED", ""))
 
     # HUMAN_REVIEW without merchant policy = degraded (not hard-blocked but not healthy)
     safety_degraded = (
@@ -788,6 +797,7 @@ async def health_ready():
 
     checks = {
         "scheduler_running": _scheduler.running,
+        "scheduler_required": os.environ.get("RUN_SCHEDULER", "1") == "1",
         "paypal_creds_configured": bool(
             os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_CLIENT_SECRET")
         ),
@@ -805,8 +815,24 @@ async def health_ready():
         "paypal_creds_configured": checks["paypal_creds_configured"],
         "safety_gate": not safety_hard_blocked,
     }
+    if not checks["scheduler_required"]:
+        critical.pop("scheduler_running", None)
     if pg_ok is not None:
         critical["postgresql_connected"] = bool(pg_ok)
+    elif os.environ.get("REQUIRE_DURABLE_WEBHOOKS", "0") == "1" or os.environ.get("PAYPAL_ENV", "sandbox") == "live":
+        critical["postgresql_connected"] = False
+
+    if os.environ.get("RUN_SCHEDULER", "1") != "1" and os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1":
+        worker_age = None
+        if os.environ.get("DATABASE_URL"):
+            try:
+                import agents.pg_store as pg_store
+                worker_age = await asyncio.to_thread(pg_store.get_worker_heartbeat_age, "anchor-worker")
+            except Exception:
+                worker_age = None
+        checks["worker_heartbeat_age_seconds"] = worker_age
+        checks["worker_running"] = worker_age is not None and worker_age < 90
+        critical["worker_running"] = checks["worker_running"]
 
     # Also degrade when safety gate reports HUMAN_REVIEW with no merchant policy
     if safety_degraded:
@@ -865,6 +891,30 @@ async def _run_and_mark_processed(handler_fn, event_id: str, *args, **kwargs):
             print(f"[Watcher] mark_event_processed({event_id}) failed: {_exc}")
 
 
+class UnsupportedWebhookEvent(Exception):
+    pass
+
+
+async def process_persisted_webhook_event(event: dict, merchant_id: str) -> None:
+    """Dispatch one durable outbox row. Worker owns ack/retry state changes."""
+    event_id = event.get("id", "")
+    event_type = event.get("event_type", "")
+    if not event_id or not event_type:
+        raise ValueError("persisted webhook is missing id or event_type")
+    if event_type == "CUSTOMER.DISPUTE.CREATED":
+        await _handle_dispute_created(event, merchant_id)
+    elif event_type == "CUSTOMER.DISPUTE.UPDATED":
+        await _handle_dispute_updated(event, merchant_id)
+    elif event_type in {"INVOICING.INVOICE.UPDATED", "INVOICING.INVOICE.PAYMENT.PAID"}:
+        await _handle_invoice_event(event)
+    elif event_type == "CHECKOUT.ORDER.APPROVED":
+        await _handle_order_approved(event, merchant_id)
+    elif event_type == "PAYMENT.CAPTURE.COMPLETED":
+        await _handle_capture(event, merchant_id)
+    else:
+        raise UnsupportedWebhookEvent(event_type)
+
+
 async def _process_webhook(merchant_id: str, request: Request, background: BackgroundTasks):
     """Core webhook processing shared by both endpoint variants."""
     body = await request.body()
@@ -875,27 +925,39 @@ async def _process_webhook(merchant_id: str, request: Request, background: Backg
     event = json.loads(body)
     event_id = event.get("id", "")
     event_type = event.get("event_type", "")
+    if not event_id or not event_type:
+        raise HTTPException(400, "PayPal event must include id and event_type")
+
+    durable_required = (
+        os.environ.get("REQUIRE_DURABLE_WEBHOOKS", "0") == "1"
+        or os.environ.get("PAYPAL_ENV", "sandbox").lower() == "live"
+    )
+    database_url = os.environ.get("DATABASE_URL", "")
+    use_outbox = os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1"
+    if durable_required and not database_url:
+        raise HTTPException(503, "Durable webhook storage is required but DATABASE_URL is not configured")
 
     # ── Webhook outbox: persist + dedup ─────────────────────────────────────
     # When DATABASE_URL is set: single atomic INSERT ON CONFLICT DO NOTHING.
     # rowcount=0 means duplicate — no second round-trip needed.
     # Without DATABASE_URL: fall back to the existing ES → JSONL/memory chain.
-    if os.environ.get("DATABASE_URL"):
+    if database_url and use_outbox:
         import agents.pg_store as pg_store
         try:
             is_new = await asyncio.to_thread(
-                pg_store.save_webhook_event_atomic, event_id, event_type, event
+                pg_store.save_webhook_event_atomic, event_id, event_type, event, merchant_id
             )
             if not is_new:
                 print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored (pg)")
                 return
         except Exception as _pg_exc:
-            print(f"[Watcher] PG outbox failed ({_pg_exc}) — falling back to ES/JSONL path")
-            _save_webhook_outbox(event_id, event_type, event)
-            if event_id and await _is_duplicate(event_id):
-                print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored (fallback)")
-                return
+            print(f"[Watcher] PG outbox failed ({type(_pg_exc).__name__}) — refusing acknowledgement")
+            raise HTTPException(503, "Webhook persistence unavailable; retry delivery") from _pg_exc
+        # The dedicated worker claims and processes this durable row.
+        return
     else:
+        if durable_required:
+            raise HTTPException(503, "Durable webhook outbox is required but not enabled")
         _save_webhook_outbox(event_id, event_type, event)
         if event_id and await _is_duplicate(event_id):
             print(f"[Watcher] Duplicate event {event_id} ({event_type}) — ignored")
@@ -1105,7 +1167,9 @@ async def _handle_dispute_created(event: dict, merchant_id: str = ""):
     # Fail closed: if merchant policy isn't loaded, shadow mode is on, or a
     # hard safety check fails, do NOT take autonomous action on live disputes.
     from oracle.production_safety import check_from_env, SafetyLevel
-    safety = check_from_env()
+    from agents.config import policy_is_loaded
+    policy_loaded = await policy_is_loaded(merchant_id or os.environ.get("MERCHANT_ID", "default"))
+    safety = check_from_env(merchant_policy_loaded=policy_loaded)
 
     is_shadow = safety.safety_level == SafetyLevel.SHADOW
     is_blocked = safety.safety_level == SafetyLevel.BLOCKED
@@ -1273,20 +1337,21 @@ async def _handle_order_approved(event: dict, merchant_id: str = ""):
             .get("payee", {})
             .get("merchant_id", "")
         )
-        # If PayPal provides a payee merchant_id and it doesn't match ours, skip.
-        our_merchant_paypal_id = os.environ.get("PAYPAL_MERCHANT_ID", "")
-        if order_merchant and our_merchant_paypal_id and order_merchant != our_merchant_paypal_id:
+        # Ownership must be provable. Missing either identity is not a pass.
+        our_merchant_paypal_id = os.environ.get("PAYPAL_MERCHANT_ID", "").strip()
+        if not our_merchant_paypal_id or not order_merchant or order_merchant != our_merchant_paypal_id:
             print(
                 f"[Watcher] Recovery validation FAILED for order {order_id}: "
-                f"payee merchant_id {order_merchant!r} != configured {our_merchant_paypal_id!r} — skipping"
+                f"payee merchant_id {order_merchant!r} does not match configured merchant — skipping"
             )
             return
         # Reject orders with no amount or currency — cannot safely capture without these
-        amount_info = (
-            resource.get("purchase_units", [{}])[0]
-            .get("amount", {})
-        )
-        if not amount_info.get("value") or not amount_info.get("currency_code"):
+        purchase_units = resource.get("purchase_units", [])
+        if not purchase_units or any(
+            not unit.get("amount", {}).get("value")
+            or not unit.get("amount", {}).get("currency_code")
+            for unit in purchase_units
+        ):
             print(
                 f"[Watcher] Recovery validation FAILED for order {order_id}: "
                 f"missing amount or currency_code — skipping (cannot validate before capture)"
@@ -1422,7 +1487,8 @@ async def approve_dispute(
       Authorization: Bearer <token>   OR   ?token=<token>
 
     The token is generated by Guardian when it sends the Slack alert and
-    is bound to: dispute_id + merchant_id + action="fight". It expires in 48h.
+    is bound to: dispute_id + merchant_id + action="fight". It expires according
+    to APPROVAL_LINK_MAX_AGE (one hour by default).
     This prevents:
       - Approving the wrong dispute (token is dispute-specific)
       - Replay attacks (token expires)
@@ -1439,31 +1505,39 @@ async def approve_dispute(
 
     if not token or not _verify_approval_token(token, dispute_id, merchant_id, "fight"):
         raise HTTPException(403, "Invalid or expired approval token")
+    if os.environ.get("SHADOW_MODE", "0").strip().lower() in {"1", "true", "yes"}:
+        raise HTTPException(409, "Approval actions are paused while shadow mode is enabled")
 
-    # One-time use: atomically consume the token before scheduling work.
-    # If DATABASE_URL is set, we must succeed — fail closed on any DB error
-    # to prevent replay attacks when the database is temporarily unavailable.
-    if os.environ.get("DATABASE_URL"):
-        import hashlib as _hashlib
-        token_sig = _hashlib.sha256(token.encode()).hexdigest()
-        try:
-            is_first = await asyncio.to_thread(
-                pg_store.consume_approval_token, token_sig, dispute_id, merchant_id, "fight"
-            )
-            if not is_first:
-                raise HTTPException(403, "Approval token already used")
-        except HTTPException:
-            raise
-        except Exception as _exc:
-            print(f"[Watcher] consume_approval_token DB error ({_exc}) — refusing (fail closed)")
-            raise HTTPException(503, "Token verification unavailable — retry in a moment")
+    database_url = os.environ.get("DATABASE_URL", "")
+    durable_required = (
+        os.environ.get("REQUIRE_DURABLE_WEBHOOKS", "0") == "1"
+        or os.environ.get("PAYPAL_ENV", "sandbox").lower() == "live"
+    )
+    if not database_url:
+        if durable_required or os.environ.get("ALLOW_EPHEMERAL_APPROVALS", "0") != "1":
+            raise HTTPException(503, "Durable approval processing is unavailable")
+        # Explicit local-development escape hatch only.
+        background.add_task(_execute_approved_fight, dispute_id)
+        return JSONResponse({"status": "approved_dev_only", "dispute_id": dispute_id}, status_code=202)
 
-    # Schedule work only after token is successfully consumed
-    background.add_task(_execute_approved_fight, dispute_id)
-    return JSONResponse({"status": "approved", "dispute_id": dispute_id})
+    import hashlib as _hashlib
+    token_sig = _hashlib.sha256(token.encode()).hexdigest()
+    try:
+        import agents.pg_store as pg_store
+        job_id = await asyncio.to_thread(
+            pg_store.enqueue_approval_job, token_sig, dispute_id, merchant_id, "fight"
+        )
+    except Exception as _exc:
+        print(f"[Watcher] Could not durably enqueue approval ({type(_exc).__name__})")
+        raise HTTPException(503, "Approval processing is unavailable — retry in a moment")
+    if not job_id:
+        raise HTTPException(403, "Approval token already used")
+    return JSONResponse({"status": "queued", "job_id": job_id, "dispute_id": dispute_id}, status_code=202)
 
 
 async def _execute_approved_fight(dispute_id: str):
+    if os.environ.get("SHADOW_MODE", "0").strip().lower() in {"1", "true", "yes"}:
+        raise RuntimeError("Approval execution is paused while shadow mode is enabled")
     from agents.classifier import DisputeClassifier
     from agents.evidence import EvidenceAssembler, EvidencePackage
     from agents.briefing import ActionRecord, log_action
@@ -1547,10 +1621,19 @@ async def _run_recovery_check():
 
 
 async def _run_deadline_check():
-    """APScheduler job: sweep open disputes every 30 min, auto-accept before deadline."""
+    """Sweep deadline risk; autonomous accepts are gated by the production safety report."""
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     try:
         from agents.deadline_tracker import check_deadlines
+        from agents.config import policy_is_loaded
+        from oracle.production_safety import check_from_env
+
+        policy_loaded = await policy_is_loaded(merchant_id)
+        safety = check_from_env(merchant_policy_loaded=policy_loaded)
+        may_auto_accept = (
+            safety.allow_autonomous_action
+            and os.environ.get("AUTONOMOUS_ACTIONS_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+        )
 
         async def _notify(msg: str):
             guardian = Guardian()
@@ -1560,7 +1643,9 @@ async def _run_deadline_check():
             guardian = Guardian(merchant_id=merchant_id, approval_secret=APPROVAL_TOKEN_SECRET)
             await guardian._accept_dispute(dispute_id, amount, reason=reason)
 
-        result = await check_deadlines(merchant_id, _notify, _auto_accept)
+        result = await check_deadlines(
+            merchant_id, _notify, _auto_accept, allow_auto_action=may_auto_accept
+        )
         print(f"[Watcher] Deadline check complete: {result}")
     except Exception as exc:
         print(f"[Watcher] Deadline check failed (non-fatal): {exc}")
@@ -1597,6 +1682,26 @@ async def api_stats(request: Request):
     """Aggregate stats for the dashboard header cards. Requires X-API-Key."""
     _require_api_key(request)
     merchant_id = os.environ.get("MERCHANT_ID", "default")
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        audit = await asyncio.to_thread(pg_store.get_audit_stats)
+        recovery = await asyncio.to_thread(pg_store.get_recovery_stats, merchant_id)
+        counts = audit.get("action_counts", {})
+        amounts = audit.get("action_amounts", {})
+        fought = counts.get("AUTO_FIGHT", 0)
+        accepted = counts.get("AUTO_ACCEPT", 0)
+        pending = counts.get("REQUEST_APPROVAL", 0)
+        return JSONResponse({
+            "disputes_total": fought + accepted + pending,
+            "disputes_fought": fought,
+            "disputes_accepted": accepted,
+            "disputes_pending": pending,
+            "revenue_protected": round(amounts.get("AUTO_FIGHT", 0.0), 2),
+            "orders_recovered": recovery["recovered_orders"],
+            "revenue_recovered": round(recovery["recovered_revenue"], 2),
+            "source": "postgresql",
+            "demo": False,
+        })
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
 
@@ -1707,9 +1812,14 @@ async def api_dashboard_summary(request: Request):
             },
         }
 
+        if os.environ.get("DATABASE_URL"):
+            import agents.pg_store as pg_store
+            recovery_stats = await asyncio.to_thread(pg_store.get_recovery_stats, os.environ.get("MERCHANT_ID", "default"))
+            summary["recoveries"] = {"available": True, **recovery_stats}
+
         es_url = os.environ.get("ELASTICSEARCH_URL")
         es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if es_url and es_key:
+        if not os.environ.get("DATABASE_URL") and es_url and es_key:
             import httpx
             merchant_id = os.environ.get("MERCHANT_ID", "default")
             recovery_query = {
@@ -1759,6 +1869,19 @@ async def api_disputes(request: Request):
     """Recent dispute actions for the AG Grid disputes table. Requires X-API-Key."""
     _require_api_key(request)
     merchant_id = os.environ.get("MERCHANT_ID", "default")
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        entries = await asyncio.to_thread(pg_store.get_audit_entries, 200)
+        rows = [{
+            "dispute_id": entry.get("dispute_id", ""),
+            "amount": entry.get("amount_usd", 0),
+            "action_type": str(entry.get("action", "")).lower(),
+            "reasoning": entry.get("guardian_reason", ""),
+            "outcome": entry.get("outcome", ""),
+            "timestamp": entry.get("timestamp_utc").isoformat() if hasattr(entry.get("timestamp_utc"), "isoformat") else entry.get("timestamp_utc", ""),
+            "is_sandbox": entry.get("is_sandbox", True),
+        } for entry in entries]
+        return JSONResponse({"rows": rows, "demo": False, "source": "postgresql"})
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
 
@@ -1975,6 +2098,11 @@ async def api_recoveries(request: Request):
     """Abandoned orders for the AG Grid recoveries table. Requires X-API-Key."""
     _require_api_key(request)
     merchant_id = os.environ.get("MERCHANT_ID", "default")
+    if os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        from fastapi.encoders import jsonable_encoder
+        orders = await asyncio.to_thread(pg_store.get_abandoned_orders, merchant_id, 200)
+        return JSONResponse(jsonable_encoder({"rows": orders, "demo": False, "source": "postgresql"}))
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
 
@@ -2149,7 +2277,18 @@ async def aggrid_status():
     columnDefs + rowData. Always returns a renderable payload.
     """
     from agents.aggrid import AGGridExporter
-    return JSONResponse(AGGridExporter().status_summary())
+    disputes: list[dict] = []
+    recoveries: list[dict] = []
+    try:
+        from agents.briefing import load_recent_actions, load_recent_recoveries
+        records = await load_recent_actions(limit=50)
+        disputes = [r.__dict__ if hasattr(r, "__dict__") else r for r in records]
+        recoveries = await load_recent_recoveries(limit=50)
+    except Exception:
+        pass
+    payload = AGGridExporter().status_summary(disputes=disputes, recoveries=recoveries)
+    payload["demo"] = False
+    return JSONResponse(payload)
 
 
 @app.get("/api/aggrid/data")
@@ -2163,7 +2302,7 @@ async def aggrid_data(grid: str = "disputes"):
 
     Uses live Elasticsearch data when available; falls back to demo rows.
     """
-    from agents.aggrid import AGGridExporter, _demo_disputes, _demo_recoveries
+    from agents.aggrid import AGGridExporter
     exporter = AGGridExporter()
     rows: list[dict] = []
 
@@ -2173,9 +2312,9 @@ async def aggrid_data(grid: str = "disputes"):
             rows = await load_recent_recoveries(limit=50)
         except Exception:
             pass
-        if not rows:
-            rows = _demo_recoveries()
-        return JSONResponse(exporter.export_recoveries(rows))
+        payload = exporter.export_recoveries(rows)
+        payload["demo"] = False
+        return JSONResponse(payload)
     else:
         try:
             from agents.briefing import load_recent_actions
@@ -2183,9 +2322,9 @@ async def aggrid_data(grid: str = "disputes"):
             rows = [r.__dict__ if hasattr(r, "__dict__") else r for r in records]
         except Exception:
             pass
-        if not rows:
-            rows = _demo_disputes()
-        return JSONResponse(exporter.export_disputes(rows))
+        payload = exporter.export_disputes(rows)
+        payload["demo"] = False
+        return JSONResponse(payload)
 
 
 # ── PayPal API endpoints ──────────────────────────────────────────────────────
@@ -2345,7 +2484,7 @@ async def bryntum_data():
 
     Falls back to demo disputes when Elasticsearch is not configured.
     """
-    from agents.bryntum import BryntumDataExporter, _demo_disputes
+    from agents.bryntum import BryntumDataExporter
     exporter = BryntumDataExporter()
     # Try live data from Elasticsearch briefing store
     disputes: list[dict] = []
@@ -2355,9 +2494,9 @@ async def bryntum_data():
         disputes = [r.__dict__ if hasattr(r, "__dict__") else r for r in records]
     except Exception:
         pass
-    if not disputes:
-        disputes = _demo_disputes()
-    return JSONResponse(exporter.export(disputes))
+    payload = exporter.export(disputes)
+    payload["demo"] = False
+    return JSONResponse(payload)
 
 
 # ── Kernel Browser endpoints ──────────────────────────────────────────────────
@@ -2965,6 +3104,39 @@ async def api_audit_stats():
     return JSONResponse(stats)
 
 
+@app.get("/api/admin/queues/dead-letters")
+async def api_dead_letters(request: Request, queue: str = "webhooks", limit: int = 100):
+    """List dead-letter metadata without exposing stored webhook payloads."""
+    _require_api_key(request)
+    if queue not in {"webhooks", "approvals"}:
+        raise HTTPException(400, "queue must be webhooks or approvals")
+    if not os.environ.get("DATABASE_URL"):
+        raise HTTPException(503, "Durable queue storage is unavailable")
+    import agents.pg_store as pg_store
+    from fastapi.encoders import jsonable_encoder
+    items = await asyncio.to_thread(pg_store.list_dead_letters, queue, min(max(limit, 1), 200))
+    return JSONResponse(jsonable_encoder({"queue": queue, "items": items, "count": len(items)}))
+
+
+@app.post("/api/admin/queues/{queue}/dead-letters/{item_id}/retry")
+async def api_retry_dead_letter(queue: str, item_id: str, request: Request):
+    """Requeue one dead-lettered webhook or approval job for operator replay."""
+    _require_api_key(request)
+    if queue not in {"webhooks", "approvals"}:
+        raise HTTPException(400, "queue must be webhooks or approvals")
+    if not os.environ.get("DATABASE_URL"):
+        raise HTTPException(503, "Durable queue storage is unavailable")
+    import agents.pg_store as pg_store
+    try:
+        changed = await asyncio.to_thread(pg_store.requeue_dead_letter, queue, item_id)
+    except Exception as exc:
+        print(f"[Watcher] Dead-letter retry failed ({type(exc).__name__})")
+        raise HTTPException(503, "Could not requeue item")
+    if not changed:
+        raise HTTPException(404, "Dead-letter item not found")
+    return JSONResponse({"queue": queue, "item_id": item_id, "status": "pending"}, status_code=202)
+
+
 @app.post("/api/admin/register-webhook")
 async def api_register_webhook(request: Request):
     """
@@ -3171,7 +3343,9 @@ async def api_safety_check():
     """
     from oracle.production_safety import check_from_env
     from dataclasses import asdict
-    r = check_from_env()
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    from agents.config import policy_is_loaded
+    r = check_from_env(merchant_policy_loaded=await policy_is_loaded(merchant_id))
     return JSONResponse({
         "safety_level": r.safety_level.value,
         "allow_autonomous_action": r.allow_autonomous_action,
@@ -5123,52 +5297,37 @@ _ZAPIER_PAYPAL_CONNECTION = "02131820-5d74-8ee2-8691-51f25602bd4c"  # anchor (sa
 
 @app.get("/api/google-drive/status", tags=["integrations"], summary="Google Drive evidence folder status")
 async def google_drive_status():
-    """Returns the real Drive folder structure created for dispute evidence storage."""
+    """Report Drive as unavailable until a merchant-authorized connection is configured."""
     return JSONResponse({
         "ok": True,
-        "enabled": True,
-        "demo": False,
-        "root_folder_id": _DRIVE_EVIDENCE_ROOT,
-        "root_folder_url": f"https://drive.google.com/drive/folders/{_DRIVE_EVIDENCE_ROOT}",
-        "evidence_guide_url": f"https://docs.google.com/document/d/{_DRIVE_EVIDENCE_GUIDE}/edit",
-        "folders": {
-            "INR":      {"id": _DRIVE_FOLDER_INR,      "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_INR}"},
-            "SNAD":     {"id": _DRIVE_FOLDER_SNAD,     "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_SNAD}"},
-            "UNAUTH":   {"id": _DRIVE_FOLDER_UNAUTH,   "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_UNAUTH}"},
-            "RESOLVED": {"id": _DRIVE_FOLDER_RESOLVED, "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_RESOLVED}"},
-        },
-        "naming_convention": "PP-D-{dispute_id}_{type}_{date}_{description}",
+        "enabled": False, "connected": False, "demo": True, "folders": [],
+        "note": "Google Drive OAuth is not configured for this merchant.",
     })
 
 
 @app.get("/api/gmail/status", tags=["integrations"], summary="Gmail prevention integration status")
 async def gmail_status():
-    """Returns real Gmail label IDs created for the Anchor dispute pipeline."""
+    """Report Gmail as unavailable until a merchant-authorized connection is configured."""
     return JSONResponse({
         "ok": True,
-        "enabled": True,
-        "demo": False,
-        "labels": {
-            "disputes":   {"id": _GMAIL_LABEL_DISPUTES,   "name": "Anchor/Disputes",   "color": "#fb4c2f"},
-            "prevention": {"id": _GMAIL_LABEL_PREVENTION, "name": "Anchor/Prevention", "color": "#ffad47"},
-            "resolved":   {"id": _GMAIL_LABEL_RESOLVED,   "name": "Anchor/Resolved",   "color": "#16a765"},
-        },
+        "enabled": False, "connected": False, "demo": True, "labels": [],
         "prevention_draft_endpoint": "/api/integrations/gmail/prevention-draft",
-        "description": "Pre-dispute pattern detection; draft prevention alerts sent to merchant Gmail.",
+        "note": "Gmail OAuth is not configured for this merchant.",
     })
 
 
 @app.get("/api/zapier/status", tags=["integrations"], summary="Zapier PayPal integration status")
 async def zapier_status():
-    """Returns Zapier PayPal integration status with real enabled action count."""
+    """Report only subscriptions registered in this process; they are not durable."""
     active_hooks = len(_zapier_hooks)
     return JSONResponse({
         "ok": True,
-        "enabled": _ZAPIER_PAYPAL_ENABLED,
-        "demo": not _ZAPIER_PAYPAL_ENABLED,
-        "paypal_actions_enabled": _ZAPIER_PAYPAL_ACTIONS,
+        "enabled": active_hooks > 0,
+        "demo": active_hooks == 0,
+        "paypal_actions_enabled": 0,
         "active_webhook_subscriptions": active_hooks,
-        "connected": bool(_ZAPIER_PAYPAL_CONNECTION),
+        "connected": active_hooks > 0,
+        "persistence": "process_memory",
     })
 
 

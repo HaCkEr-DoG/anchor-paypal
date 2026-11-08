@@ -352,7 +352,7 @@ async def test_check_deadlines_past_deadline_triggers_recovery():
 
     with patch("agents.deadline_tracker.get_open_disputes", new_callable=AsyncMock, return_value=[dispute]), \
          patch("agents.deadline_tracker.update_alert_level", new_callable=AsyncMock, return_value=True):
-        result = await check_deadlines("m1", notify, auto_accept)
+        result = await check_deadlines("m1", notify, auto_accept, allow_auto_action=True)
 
     # Should attempt recovery accept and notify merchant
     assert result["past_deadline"] == 1

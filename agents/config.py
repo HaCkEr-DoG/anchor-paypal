@@ -153,15 +153,30 @@ async def detect_fee_tier(merchant_id: str) -> bool:
 
 async def load_config(merchant_id: str) -> GuardianConfig:
     """
-    Load config from Elasticsearch. Falls back to env-var defaults.
-    This is what makes Anchor remember the merchant's preferences
-    across restarts and across the onboarding conversation.
+    Load merchant policy from PostgreSQL. Elasticsearch is a legacy fallback
+    only when PostgreSQL is not configured; a failed configured database never
+    falls back to a potentially stale policy.
     """
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import asyncio
+            import agents.pg_store as pg_store
+            data = await asyncio.to_thread(pg_store.get_policy, merchant_id)
+            if data:
+                cfg = GuardianConfig.from_dict(dict(data))
+                if _valid_merchant_config(cfg, merchant_id):
+                    if not cfg.high_volume_fee_tier:
+                        cfg.high_volume_fee_tier = await detect_fee_tier(merchant_id)
+                    return cfg
+        except Exception as exc:
+            print(f"[Config] PostgreSQL policy unavailable for {merchant_id} ({exc}); fail-closed")
+        return _manual_review_for(merchant_id)
+
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
     if not es_url or not es_key:
         print(f"[Config] No ES credentials for merchant {merchant_id} — fail-closed: all disputes route to human review")
-        return MANUAL_REVIEW_CONFIG
+        return _manual_review_for(merchant_id)
 
     import httpx
     try:
@@ -175,10 +190,10 @@ async def load_config(merchant_id: str) -> GuardianConfig:
                 cfg = GuardianConfig.from_dict(r.json().get("_source", {}))
             else:
                 print(f"[Config] ES returned {r.status_code} for merchant {merchant_id} — fail-closed: all disputes route to human review")
-                cfg = MANUAL_REVIEW_CONFIG
+                cfg = _manual_review_for(merchant_id)
     except Exception as exc:
         print(f"[Config] ES unreachable for merchant {merchant_id} ({exc}) — fail-closed: all disputes route to human review")
-        cfg = MANUAL_REVIEW_CONFIG
+        cfg = _manual_review_for(merchant_id)
 
     # Auto-detect fee tier unless the merchant explicitly set it
     if not cfg.high_volume_fee_tier:
@@ -186,8 +201,69 @@ async def load_config(merchant_id: str) -> GuardianConfig:
     return cfg
 
 
+def _manual_review_for(merchant_id: str) -> GuardianConfig:
+    return GuardianConfig(
+        merchant_id=merchant_id,
+        auto_accept_below=0.0,
+        auto_fight_above=1_000_000_000.0,
+        auto_fight_min_prob=1.01,
+    )
+
+
+def _valid_merchant_config(config: GuardianConfig, merchant_id: str) -> bool:
+    """Reject malformed or cross-merchant policy records before using them."""
+    try:
+        return (
+            config.merchant_id == merchant_id
+            and config.auto_accept_below >= 0
+            and config.auto_fight_above > config.auto_accept_below
+            and 0 <= config.auto_fight_min_prob <= 1
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+async def policy_is_loaded(merchant_id: str) -> bool:
+    """Return true only when a valid, merchant-scoped policy exists in storage."""
+    try:
+        if os.environ.get("DATABASE_URL"):
+            import asyncio
+            import agents.pg_store as pg_store
+            data = await asyncio.to_thread(pg_store.get_policy, merchant_id)
+            if not data:
+                return False
+            cfg = GuardianConfig.from_dict(dict(data))
+            return _valid_merchant_config(cfg, merchant_id)
+        es_url = os.environ.get("ELASTICSEARCH_URL")
+        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
+        if not es_url or not es_key:
+            return False
+        import httpx
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(
+                f"{es_url}/anchor-config/_doc/{merchant_id}",
+                headers={"Authorization": f"ApiKey {es_key}"},
+            )
+        if response.status_code != 200:
+            return False
+        cfg = GuardianConfig.from_dict(response.json().get("_source", {}))
+        return _valid_merchant_config(cfg, merchant_id)
+    except Exception:
+        return False
+
+
 async def save_config(config: GuardianConfig) -> bool:
-    """Persist merchant config to Elasticsearch."""
+    """Persist merchant policy to PostgreSQL, or legacy Elasticsearch."""
+    if not _valid_merchant_config(config, config.merchant_id):
+        return False
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import asyncio
+            import agents.pg_store as pg_store
+            return await asyncio.to_thread(pg_store.save_policy, config.merchant_id, config.to_dict())
+        except Exception as exc:
+            print(f"[Config] PostgreSQL policy save failed for {config.merchant_id}: {exc}")
+            return False
     es_url = os.environ.get("ELASTICSEARCH_URL")
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
     if not es_url or not es_key:

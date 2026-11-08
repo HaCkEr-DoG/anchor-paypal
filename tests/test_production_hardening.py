@@ -140,6 +140,27 @@ def test_kernel_status_connected_when_key_set(_client, monkeypatch):
     assert body["gateway_configured"] is True
 
 
+def test_aggrid_data_does_not_fill_empty_results_with_demo_rows(_client, monkeypatch):
+    monkeypatch.delenv("ELASTICSEARCH_URL", raising=False)
+    monkeypatch.delenv("ELASTICSEARCH_API_KEY", raising=False)
+    response = _client.get("/api/aggrid/data?grid=disputes")
+    assert response.status_code == 200
+    assert response.json()["rowData"] == []
+    assert response.json()["demo"] is False
+
+
+def test_external_integrations_do_not_claim_hardcoded_connections(_client):
+    drive = _client.get("/api/google-drive/status").json()
+    gmail = _client.get("/api/gmail/status").json()
+    zapier = _client.get("/api/zapier/status").json()
+    assert drive["connected"] is False
+    assert "root_folder_id" not in drive
+    assert gmail["connected"] is False
+    assert gmail["labels"] == []
+    assert zapier["connected"] is False
+    assert zapier["paypal_actions_enabled"] == 0
+
+
 # ---------------------------------------------------------------------------
 # 10. Approval token expiry uses APPROVAL_LINK_MAX_AGE
 # ---------------------------------------------------------------------------

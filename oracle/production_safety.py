@@ -233,14 +233,23 @@ def check_production_safety(inp: ProductionSafetyInput) -> ProductionSafetyRepor
     )
 
 
-def check_from_env() -> ProductionSafetyReport:
+def check_from_env(merchant_policy_loaded: Optional[bool] = None) -> ProductionSafetyReport:
     """Convenience: build input from current environment variables."""
+    if merchant_policy_loaded is None:
+        merchant_policy_loaded = os.environ.get("MERCHANT_POLICY_LOADED", "").strip().lower() in {"1", "true", "yes"}
+    approval_secret_set = bool(os.environ.get("APPROVAL_TOKEN_SECRET", ""))
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as pg_store
+            approval_secret_set = bool(pg_store.get_config_value("approval_token_secret")) or approval_secret_set
+        except Exception:
+            approval_secret_set = False
     return check_production_safety(ProductionSafetyInput(
-        merchant_policy_loaded=bool(os.environ.get("MERCHANT_POLICY_LOADED", "")),
+        merchant_policy_loaded=merchant_policy_loaded,
         paypal_env=os.environ.get("PAYPAL_ENV", "sandbox"),
-        shadow_mode=os.environ.get("SHADOW_MODE", "0") == "1",
+        shadow_mode=os.environ.get("SHADOW_MODE", "0").strip().lower() in {"1", "true", "yes"},
         api_secret_set=bool(os.environ.get("API_SECRET", "")),
-        approval_secret_set=bool(os.environ.get("APPROVAL_TOKEN_SECRET", "")),
+        approval_secret_set=approval_secret_set,
         durable_storage_configured=bool(os.environ.get("DATABASE_URL", "") or os.environ.get("ELASTICSEARCH_URL", "")),
         webhook_outbox_enabled=os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1",
         recovery_validation_enabled=os.environ.get("RECOVERY_VALIDATION_ENABLED", "1") != "0",

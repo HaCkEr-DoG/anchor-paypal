@@ -141,12 +141,13 @@ class AGGridExporter:
         disputes: Optional[list[dict]] = None,
         recoveries: Optional[list[dict]] = None,
     ) -> dict:
-        demo_disputes   = disputes   or _demo_disputes()
-        demo_recoveries = recoveries or _demo_recoveries()
+        demo_disputes   = _demo_disputes() if disputes is None else disputes
+        demo_recoveries = _demo_recoveries() if recoveries is None else recoveries
         d_payload = self.export_disputes(demo_disputes)
         r_payload = self.export_recoveries(demo_recoveries)
         return {
             "enabled": True,
+            "demo": disputes is None and recoveries is None,
             "version": VERSION,
             "cdn_url": CDN_URL,
             "npm_pkg": "ag-grid-community",

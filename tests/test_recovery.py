@@ -137,7 +137,7 @@ async def test_already_recovered_order_skipped():
 
     already_done = _make_order(recovered=True)
 
-    with patch.dict(os.environ, {"RECOVERY_MERCHANT_OPT_IN": "1"}):
+    with patch.dict(os.environ, {"RECOVERY_MERCHANT_OPT_IN": "1", "DATABASE_URL": "postgresql://test/test"}):
         with patch.object(agent, "_get_stale_orders", new_callable=AsyncMock,
                           return_value=[already_done]):
             with patch.object(agent, "_get_token", new_callable=AsyncMock, return_value="tok"):
@@ -155,7 +155,7 @@ async def test_max_attempts_exceeded_skipped():
     agent = RecoveryAgent(config=RecoveryConfig(max_attempts=2))
     exhausted = _make_order(recovery_attempts=2, recovered=False)
 
-    with patch.dict(os.environ, {"RECOVERY_MERCHANT_OPT_IN": "1"}):
+    with patch.dict(os.environ, {"RECOVERY_MERCHANT_OPT_IN": "1", "DATABASE_URL": "postgresql://test/test"}):
         with patch.object(agent, "_get_stale_orders", new_callable=AsyncMock,
                           return_value=[exhausted]):
             with patch.object(agent, "_get_token", new_callable=AsyncMock, return_value="tok"):
@@ -173,3 +173,16 @@ async def test_no_merchant_email_skips_invoice():
     order = _make_order()
     url = await agent._create_recovery_invoice(order, "token")
     assert url is None
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_prevents_recovery_capture_even_with_opt_in(monkeypatch):
+    agent = RecoveryAgent()
+    monkeypatch.setenv("RECOVERY_MERCHANT_OPT_IN", "1")
+    monkeypatch.setenv("SHADOW_MODE", "1")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    result = await agent.scan_and_recover("merch1")
+
+    assert result["shadow_mode"] is True
+    assert result["recovered"] == 0
