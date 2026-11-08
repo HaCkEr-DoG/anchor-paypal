@@ -99,6 +99,21 @@ async def lifespan(app: FastAPI):
         else:
             print("[Watcher] WARNING: PostgreSQL init failed — falling back to ES/JSONL storage")
 
+    # Auto-seed default merchant policy on first boot if none exists
+    if os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as pg_store
+            from agents.config import GuardianConfig
+            import dataclasses as _dc
+            _mid = os.environ.get("MERCHANT_ID", "default")
+            _existing = await asyncio.to_thread(pg_store.get_policy, _mid)
+            if not _existing:
+                _default_cfg = GuardianConfig(merchant_id=_mid)
+                await asyncio.to_thread(pg_store.save_policy, _mid, _dc.asdict(_default_cfg))
+                print(f"[Watcher] Seeded default merchant policy for {_mid}")
+        except Exception as _seed_exc:
+            print(f"[Watcher] Policy auto-seed failed (non-fatal): {_seed_exc}")
+
     APPROVAL_TOKEN_SECRET = await _load_or_create_approval_secret()
     _merchant_id = os.environ.get("MERCHANT_ID", "default")
     _brief_hour = 8
