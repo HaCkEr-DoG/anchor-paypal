@@ -5029,9 +5029,10 @@ _GMAIL_LABEL_DISPUTES  = "Label_2"   # Anchor/Disputes  — red
 _GMAIL_LABEL_PREVENTION = "Label_3"  # Anchor/Prevention — orange
 _GMAIL_LABEL_RESOLVED  = "Label_4"   # Anchor/Resolved   — green
 
-# ── Zapier PayPal actions (enabled 2026-11-08 via Zapier MCP) ───────────────
-_ZAPIER_PAYPAL_ENABLED = True
-_ZAPIER_PAYPAL_ACTIONS = 20  # billing_subscription_webhooks, payment_capture_webhooks, etc.
+# ── Zapier PayPal actions (connected 2026-11-08 via Zapier MCP) ─────────────
+_ZAPIER_PAYPAL_ENABLED    = True
+_ZAPIER_PAYPAL_ACTIONS    = 20   # billing_subscription_webhooks, payment_capture_webhooks, etc.
+_ZAPIER_PAYPAL_CONNECTION = "02131820-5d74-8ee2-8691-51f25602bd4c"  # anchor (sandbox)
 
 
 @app.get("/api/google-drive/status", tags=["integrations"], summary="Google Drive evidence folder status")
@@ -5091,6 +5092,9 @@ async def zapier_status():
         "ingest_endpoint": "/api/zapier/ingest",
         "subscribe_endpoint": "/api/zapier/subscribe",
         "auth_required": True,
+        "connected": bool(_ZAPIER_PAYPAL_CONNECTION),
+        "connection_id": _ZAPIER_PAYPAL_CONNECTION,
+        "connection_title": "anchor (sandbox)",
         "auth_url": "https://mcp.zapier.com/api/v1/connect-auth/PayPalCLIAPI?accountId=28582310",
     })
 
