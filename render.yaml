@@ -71,5 +71,11 @@ services:
         value: "1"
       - key: RECOVERY_VALIDATION_ENABLED
         value: "1"
+      - key: AUTONOMOUS_ACTIONS_ENABLED
+        value: "0"
+      - key: APPROVAL_LINK_MAX_AGE
+        value: "3600"
+      - key: RECOVERY_MERCHANT_OPT_IN
+        value: "0"
       - key: PYTHON_VERSION
         value: "3.12.0"

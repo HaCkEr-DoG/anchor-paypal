@@ -69,7 +69,7 @@ class RecoveryAgent:
     async def store_approved_order(self, event: dict, merchant_id: str) -> None:
         """
         Called from watcher.py on CHECKOUT.ORDER.APPROVED.
-        Indexes the order into Elasticsearch so the recovery cron can find it.
+        Saves the order to PostgreSQL so the recovery cron can find it.
         """
         resource = event.get("resource", {})
         order_id = resource.get("id")
@@ -113,7 +113,7 @@ class RecoveryAgent:
             items=items,
             approved_at=event.get("create_time", datetime.now(timezone.utc).isoformat()),
         )
-        await self._index_abandoned_order(order)
+        await self._save_abandoned_order(order)
         print(f"[Recovery] Tracked approved order {order_id}: ${amount:.2f}")
 
     # ── Cron entry point ────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ class RecoveryAgent:
             - timedelta(minutes=self.config.delay_minutes)
         ).isoformat()
 
-        stale_orders = await self._query_stale_orders(merchant_id, cutoff)
+        stale_orders = await self._get_stale_orders(merchant_id, cutoff)
         print(f"[Recovery] Found {len(stale_orders)} stale approved orders for recovery")
 
         recovered = 0
@@ -282,32 +282,12 @@ class RecoveryAgent:
             return None
 
     async def _claim_recovery_order(self, order_id: str) -> bool:
-        """Atomically lease an order so overlapping scheduler scans do not race."""
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if not es_url or not es_key:
+        """Atomically claim an order using SELECT FOR UPDATE SKIP LOCKED in PostgreSQL."""
+        if not os.environ.get("DATABASE_URL"):
             return False
-        now_ms = int(time.time() * 1000)
-        update = {
-            "script": {
-                "source": (
-                    "def state = ctx._source.recovery_status; "
-                    "if (state == 'captured' || state == 'needs_review' || state == 'completed_externally') { ctx.op = 'noop'; } "
-                    "else if (state == 'processing' && ctx._source.recovery_started_at_ms != null && params.now_ms - ctx._source.recovery_started_at_ms < params.lease_ms) { ctx.op = 'noop'; } "
-                    "else { ctx._source.recovery_status = 'processing'; ctx._source.recovery_started_at_ms = params.now_ms; }"
-                ),
-                "params": {"now_ms": now_ms, "lease_ms": 10 * 60 * 1000},
-            }
-        }
+        import agents.pg_store as pg_store
         try:
-            async with httpx.AsyncClient() as c:
-                response = await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
-                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
-                    json=update,
-                    timeout=3.0,
-                )
-            return response.status_code == 200 and response.json().get("result") == "updated"
+            return await asyncio.to_thread(pg_store.claim_abandoned_order, order_id)
         except Exception as exc:
             print(f"[Recovery] Could not claim order {order_id}: {exc}")
             return False
@@ -412,13 +392,13 @@ class RecoveryAgent:
 
     # ── Notification ────────────────────────────────────────────────────────
 
-    # ── Elasticsearch ───────────────────────────────────────────────────────
+    # ── PostgreSQL storage ──────────────────────────────────────────────────
 
-    async def _index_abandoned_order(self, order: AbandonedOrder) -> None:
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if not es_url or not es_key:
+    async def _save_abandoned_order(self, order: AbandonedOrder) -> None:
+        if not os.environ.get("DATABASE_URL"):
+            print(f"[Recovery] DATABASE_URL not set — cannot persist order {order.order_id}")
             return
+        import agents.pg_store as pg_store
         doc = {
             "order_id": order.order_id,
             "merchant_id": order.merchant_id,
@@ -428,81 +408,36 @@ class RecoveryAgent:
             "buyer_name": order.buyer_name,
             "items": order.items,
             "approved_at": order.approved_at,
-            "recovery_attempts": 0,
-            "recovered": False,
-            "status": "pending_recovery",
-            "recovery_status": "pending_recovery",
         }
         try:
-            async with httpx.AsyncClient() as c:
-                response = await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_create/{order.order_id}",
-                    headers={
-                        "Authorization": f"ApiKey {es_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=doc,
-                    timeout=3.0,
-                )
-                # PayPal may redeliver CHECKOUT.ORDER.APPROVED. Preserve any
-                # recovery state already recorded for the same order.
-                if response.status_code not in (200, 201, 409):
-                    print(f"[Recovery] ES index failed for {order.order_id}: {response.status_code} {response.text}")
+            await asyncio.to_thread(pg_store.save_abandoned_order, doc)
         except Exception as e:
-            print(f"[Recovery] ES index failed: {e}")
+            print(f"[Recovery] PG save failed for {order.order_id}: {e}")
 
-    async def _query_stale_orders(
+    async def _get_stale_orders(
         self, merchant_id: str, cutoff_iso: str
     ) -> list[AbandonedOrder]:
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if not es_url or not es_key:
+        if not os.environ.get("DATABASE_URL"):
             return []
-
-        query = {
-            "query": {
-                "bool": {
-                    "must": [
-                        {"term": {"merchant_id": merchant_id}},
-                        {"term": {"recovered": False}},
-                        {"range": {"approved_at": {"lte": cutoff_iso}}},
-                    ],
-                    "should": [
-                        {"range": {"recovery_attempts": {"lt": self.config.max_attempts}}},
-                        {"term": {"recovery_status": "capture_pending"}},
-                    ],
-                    "minimum_should_match": 1,
-                    "must_not": [
-                        {"terms": {"recovery_status": ["captured", "needs_review", "not_eligible", "completed_externally"]}}
-                    ]
-                }
-            },
-            "size": 50,
-        }
+        import agents.pg_store as pg_store
         try:
-            async with httpx.AsyncClient() as c:
-                r = await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_search",
-                    headers={
-                        "Authorization": f"ApiKey {es_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=query,
-                    timeout=5.0,
-                )
-            hits = r.json().get("hits", {}).get("hits", [])
+            rows = await asyncio.to_thread(
+                pg_store.get_stale_abandoned_orders,
+                merchant_id,
+                cutoff_iso,
+                self.config.max_attempts,
+            )
             orders = []
-            for hit in hits:
-                src = hit["_source"]
+            for src in rows:
                 orders.append(AbandonedOrder(
                     order_id=src["order_id"],
                     merchant_id=src["merchant_id"],
-                    amount=src["amount"],
+                    amount=float(src["amount"]),
                     currency=src.get("currency", "USD"),
                     buyer_email=src.get("buyer_email", ""),
                     buyer_name=src.get("buyer_name", ""),
                     items=src.get("items", []),
-                    approved_at=src.get("approved_at", ""),
+                    approved_at=str(src.get("approved_at", "")),
                     recovery_attempts=src.get("recovery_attempts", 0),
                     recovered=src.get("recovered", False),
                     recovery_status=src.get("recovery_status", "pending_recovery"),
@@ -510,7 +445,7 @@ class RecoveryAgent:
                 ))
             return orders
         except Exception as e:
-            print(f"[Recovery] ES query failed: {e}")
+            print(f"[Recovery] PG query failed: {e}")
             return []
 
     async def _record_capture_result(
@@ -520,28 +455,17 @@ class RecoveryAgent:
         state: str,
         capture: Optional[dict],
     ) -> None:
-        """Persist capture state so scans and webhooks cannot misreport recovery."""
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if es_url and es_key:
-            update = {
-                "script": {
-                    "source": "ctx._source.recovery_status = params.state; ctx._source.last_recovery_at = params.ts; ctx._source.recovery_attempts = (ctx._source.recovery_attempts ?: 0) + 1; if (params.state == 'captured') { ctx._source.recovered = true; } if (params.capture_id != null) { ctx._source.capture_id = params.capture_id; }",
-                    "params": {
-                        "state": state,
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "capture_id": (capture or {}).get("capture_id"),
-                    },
-                }
-            }
+        """Persist capture state to PostgreSQL."""
+        if os.environ.get("DATABASE_URL"):
+            import agents.pg_store as pg_store
+            capture_id = (capture or {}).get("capture_id", "") or ""
             try:
-                async with httpx.AsyncClient() as c:
-                    await c.post(
-                        f"{es_url}/anchor-abandoned-orders/_update/{order.order_id}",
-                        headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
-                        json=update,
-                        timeout=3.0,
-                    )
+                await asyncio.to_thread(
+                    pg_store.update_abandoned_order_state,
+                    order.order_id, state,
+                    f"capture_id={capture_id or 'pending'}" if capture else "",
+                    capture_id,
+                )
             except Exception as exc:
                 print(f"[Recovery] Could not persist capture state for {order.order_id}: {exc}")
 
@@ -562,58 +486,33 @@ class RecoveryAgent:
         await log_action(merchant_id, action)
 
     async def _mark_recovery_state(self, order_id: str, state: str, reason: str) -> None:
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if not es_url or not es_key:
+        if not os.environ.get("DATABASE_URL"):
             return
+        import agents.pg_store as pg_store
         try:
-            async with httpx.AsyncClient() as c:
-                await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
-                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
-                    json={"doc": {"recovery_status": state, "recovery_note": reason}},
-                    timeout=3.0,
-                )
+            await asyncio.to_thread(
+                pg_store.update_abandoned_order_state, order_id, state, reason, ""
+            )
         except Exception as exc:
             print(f"[Recovery] Could not update state for {order_id}: {exc}")
 
     async def mark_order_captured(self, order_id: str) -> None:
         """Update an approved-order record from the PayPal capture webhook."""
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if not es_url or not es_key or not order_id:
+        if not order_id or not os.environ.get("DATABASE_URL"):
             return
+        import agents.pg_store as pg_store
         try:
-            async with httpx.AsyncClient() as c:
-                await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
-                    headers={"Authorization": f"ApiKey {es_key}", "Content-Type": "application/json"},
-                    json={
-                        "script": {
-                            "source": "if (ctx._source.recovery_status == 'pending_recovery') { ctx._source.recovery_status = 'completed_externally'; ctx._source.recovered = false; } else { ctx._source.recovery_status = 'captured'; ctx._source.recovered = true; }",
-                        }
-                    },
-                    timeout=3.0,
-                )
+            await asyncio.to_thread(pg_store.mark_order_captured_externally, order_id)
         except Exception as exc:
             print(f"[Recovery] Could not mark captured order {order_id}: {exc}")
 
     async def _mark_no_longer_needed(self, order_id: str) -> None:
-        es_url = os.environ.get("ELASTICSEARCH_URL")
-        es_key = os.environ.get("ELASTICSEARCH_API_KEY")
-        if not es_url or not es_key:
+        if not os.environ.get("DATABASE_URL"):
             return
-        update = {"doc": {"recovered": False, "recovery_status": "completed_externally"}}
+        import agents.pg_store as pg_store
         try:
-            async with httpx.AsyncClient() as c:
-                await c.post(
-                    f"{es_url}/anchor-abandoned-orders/_update/{order_id}",
-                    headers={
-                        "Authorization": f"ApiKey {es_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=update,
-                    timeout=3.0,
-                )
+            await asyncio.to_thread(
+                pg_store.update_abandoned_order_state, order_id, "completed_externally", "", ""
+            )
         except Exception:
             pass

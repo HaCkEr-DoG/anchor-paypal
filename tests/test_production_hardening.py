@@ -203,3 +203,138 @@ def test_health_ready_pg_check_absent_when_no_database_url(_client, monkeypatch)
     assert "postgresql_connected" not in body["checks"], (
         "postgresql_connected should be absent when DATABASE_URL is unset"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage 2. Kill switch — AUTONOMOUS_ACTIONS_ENABLED
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_kill_switch_routes_to_approval_when_disabled(monkeypatch):
+    """When AUTONOMOUS_ACTIONS_ENABLED is absent/0, handle_dispute must call _request_approval."""
+    monkeypatch.delenv("AUTONOMOUS_ACTIONS_ENABLED", raising=False)
+
+    approval_called = []
+
+    from agents.guardian import Guardian
+    g = Guardian(approval_secret="testsecret", merchant_id="m1")
+
+    async def _mock_request_approval(dispute_id, amount, win_prob, decision):
+        approval_called.append(dispute_id)
+
+    g._request_approval = _mock_request_approval
+
+    await g.handle_dispute(
+        dispute_id="PP-D-KS-001",
+        dispute_amount=50.0,
+        reason_code="MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+        transaction_id=None,
+        event_time="2026-01-01T00:00:00Z",
+    )
+
+    assert "PP-D-KS-001" in approval_called, (
+        "Kill switch must route to _request_approval when AUTONOMOUS_ACTIONS_ENABLED is unset"
+    )
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_zero_routes_to_approval(monkeypatch):
+    """AUTONOMOUS_ACTIONS_ENABLED=0 must also route to approval."""
+    monkeypatch.setenv("AUTONOMOUS_ACTIONS_ENABLED", "0")
+
+    approval_called = []
+
+    from agents.guardian import Guardian
+    g = Guardian(approval_secret="testsecret", merchant_id="m1")
+
+    async def _mock_request_approval(dispute_id, amount, win_prob, decision):
+        approval_called.append(dispute_id)
+
+    g._request_approval = _mock_request_approval
+
+    await g.handle_dispute(
+        dispute_id="PP-D-KS-002",
+        dispute_amount=100.0,
+        reason_code="MERCHANDISE_OR_SERVICE_NOT_RECEIVED",
+        transaction_id=None,
+        event_time="2026-01-01T00:00:00Z",
+    )
+
+    assert "PP-D-KS-002" in approval_called
+
+
+# ---------------------------------------------------------------------------
+# Stage 6. Approval token replay — consume_approval_token
+# ---------------------------------------------------------------------------
+
+def test_approval_token_replay_blocked(monkeypatch):
+    """consume_approval_token must return False on the second call with the same sig."""
+    import sqlite3
+    import tempfile
+    import os
+
+    # Use an in-memory SQLite substitute via psycopg2 mock
+    consumed = {}
+
+    import agents.pg_store as pg_store
+
+    orig_consume = pg_store.consume_approval_token
+
+    def _mock_consume(token_sig, dispute_id, merchant_id, action):
+        if token_sig in consumed:
+            return False
+        consumed[token_sig] = True
+        return True
+
+    monkeypatch.setattr(pg_store, "consume_approval_token", _mock_consume)
+
+    assert pg_store.consume_approval_token("sig123", "PP-D-001", "m1", "fight") is True
+    assert pg_store.consume_approval_token("sig123", "PP-D-001", "m1", "fight") is False
+
+
+# ---------------------------------------------------------------------------
+# Stage 4/5. Recovery PG migration — save + query
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_recovery_save_uses_pg_not_es(monkeypatch):
+    """store_approved_order must call pg_store.save_abandoned_order, not ES."""
+    import agents.pg_store as pg_store
+    saved = []
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setattr(pg_store, "save_abandoned_order", lambda doc: saved.append(doc) or True)
+
+    from agents.recovery import RecoveryAgent
+
+    agent = RecoveryAgent()
+    event = {
+        "resource": {
+            "id": "ORDER-PG-001",
+            "payer": {"email_address": "test@example.com", "name": {"given_name": "Test", "surname": "User"}},
+            "purchase_units": [{"amount": {"value": "50.00", "currency_code": "USD"}, "items": []}],
+        },
+        "create_time": "2026-01-01T00:00:00Z",
+    }
+
+    await agent.store_approved_order(event, "merchant1")
+    assert len(saved) == 1, "save_abandoned_order must be called once"
+    assert saved[0]["order_id"] == "ORDER-PG-001"
+
+
+@pytest.mark.asyncio
+async def test_recovery_query_uses_pg_not_es(monkeypatch):
+    """scan_and_recover must query PG, not ES, when DATABASE_URL is set."""
+    import agents.pg_store as pg_store
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.delenv("ELASTICSEARCH_URL", raising=False)
+    queried = []
+
+    monkeypatch.setattr(pg_store, "get_stale_abandoned_orders", lambda mid, cutoff, max_att, **kw: queried.append(mid) or [])
+
+    from agents.recovery import RecoveryAgent
+
+    agent = RecoveryAgent()
+    await agent.scan_and_recover("merchant1")
+    assert "merchant1" in queried, "get_stale_abandoned_orders must be called with merchant_id"

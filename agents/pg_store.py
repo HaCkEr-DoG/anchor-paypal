@@ -86,6 +86,38 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS audit_log_dispute_idx ON audit_log(dispute_id);
 CREATE INDEX IF NOT EXISTS audit_log_ts_idx ON audit_log(timestamp_utc DESC);
+
+CREATE TABLE IF NOT EXISTS abandoned_orders (
+    order_id            TEXT PRIMARY KEY,
+    merchant_id         TEXT NOT NULL,
+    amount              DOUBLE PRECISION NOT NULL,
+    currency            TEXT NOT NULL DEFAULT 'USD',
+    buyer_email         TEXT NOT NULL DEFAULT '',
+    buyer_name          TEXT NOT NULL DEFAULT '',
+    items               JSONB NOT NULL DEFAULT '[]',
+    approved_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    recovery_attempts   INTEGER NOT NULL DEFAULT 0,
+    recovered           BOOLEAN NOT NULL DEFAULT FALSE,
+    recovery_status     TEXT NOT NULL DEFAULT 'pending_recovery',
+    capture_id          TEXT NOT NULL DEFAULT '',
+    recovery_note       TEXT NOT NULL DEFAULT '',
+    last_recovery_at    TIMESTAMPTZ,
+    created_utc         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS abandoned_orders_merchant_idx ON abandoned_orders(merchant_id);
+CREATE INDEX IF NOT EXISTS abandoned_orders_status_idx ON abandoned_orders(recovery_status);
+CREATE INDEX IF NOT EXISTS abandoned_orders_approved_idx ON abandoned_orders(approved_at);
+
+CREATE TABLE IF NOT EXISTS approval_token_used (
+    token_sig       TEXT PRIMARY KEY,
+    dispute_id      TEXT NOT NULL,
+    merchant_id     TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    used_at_utc     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS approval_token_dispute_idx ON approval_token_used(dispute_id);
 """
 
 
@@ -336,6 +368,199 @@ def get_audit_entries(limit: int = 50) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.error("pg_store: get_audit_entries failed: %s", exc)
         return []
+
+
+def save_abandoned_order(order: Dict[str, Any]) -> bool:
+    """INSERT ... ON CONFLICT DO NOTHING — idempotent for redelivered webhooks."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO abandoned_orders (
+                    order_id, merchant_id, amount, currency,
+                    buyer_email, buyer_name, items, approved_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (order_id) DO NOTHING
+                """,
+                (
+                    order["order_id"],
+                    order["merchant_id"],
+                    order["amount"],
+                    order.get("currency", "USD"),
+                    order.get("buyer_email", ""),
+                    order.get("buyer_name", ""),
+                    json.dumps(order.get("items", [])),
+                    order.get("approved_at"),
+                ),
+            )
+            inserted = cur.rowcount == 1
+        conn.commit()
+        return inserted
+    except Exception as exc:
+        logger.error("pg_store: save_abandoned_order failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
+def get_stale_abandoned_orders(merchant_id: str, cutoff_iso: str, max_attempts: int, limit: int = 50) -> List[Dict[str, Any]]:
+    """Return orders eligible for recovery: approved before cutoff, not yet recovered."""
+    try:
+        import psycopg2.extras
+        conn = _get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT * FROM abandoned_orders
+                WHERE merchant_id = %s
+                  AND approved_at <= %s::TIMESTAMPTZ
+                  AND recovered = FALSE
+                  AND recovery_attempts < %s
+                  AND recovery_status NOT IN ('captured', 'needs_review', 'not_eligible', 'completed_externally')
+                ORDER BY approved_at ASC
+                LIMIT %s
+                """,
+                (merchant_id, cutoff_iso, max_attempts, limit),
+            )
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        logger.error("pg_store: get_stale_abandoned_orders failed: %s", exc)
+        return []
+
+
+def claim_abandoned_order(order_id: str, lease_seconds: int = 600) -> bool:
+    """
+    Atomically claim an order for recovery using SELECT FOR UPDATE SKIP LOCKED.
+    Returns True if claim succeeded (order is ours to process).
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT order_id FROM abandoned_orders
+                WHERE order_id = %s
+                  AND recovered = FALSE
+                  AND recovery_status NOT IN ('captured', 'needs_review', 'completed_externally', 'processing')
+                FOR UPDATE SKIP LOCKED
+                """,
+                (order_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                return False
+            cur.execute(
+                """
+                UPDATE abandoned_orders
+                SET recovery_status = 'processing',
+                    last_recovery_at = NOW()
+                WHERE order_id = %s
+                """,
+                (order_id,),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.error("pg_store: claim_abandoned_order failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
+def update_abandoned_order_state(order_id: str, state: str, note: str = "", capture_id: str = "") -> bool:
+    """Update recovery state after a capture attempt."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE abandoned_orders
+                SET recovery_status = %s,
+                    recovery_note = %s,
+                    last_recovery_at = NOW(),
+                    recovery_attempts = recovery_attempts + 1,
+                    recovered = (CASE WHEN %s = 'captured' THEN TRUE ELSE recovered END),
+                    capture_id = (CASE WHEN %s != '' THEN %s ELSE capture_id END)
+                WHERE order_id = %s
+                """,
+                (state, note, state, capture_id, capture_id, order_id),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.error("pg_store: update_abandoned_order_state failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
+def mark_order_captured_externally(order_id: str) -> bool:
+    """Mark order as completed externally (from PAYMENT.CAPTURE.COMPLETED webhook)."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE abandoned_orders
+                SET recovery_status = CASE
+                        WHEN recovery_status = 'pending_recovery' THEN 'completed_externally'
+                        ELSE 'captured'
+                    END,
+                    recovered = CASE
+                        WHEN recovery_status = 'pending_recovery' THEN FALSE
+                        ELSE TRUE
+                    END,
+                    last_recovery_at = NOW()
+                WHERE order_id = %s
+                """,
+                (order_id,),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        logger.error("pg_store: mark_order_captured_externally failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
+def consume_approval_token(token_sig: str, dispute_id: str, merchant_id: str, action: str) -> bool:
+    """
+    Atomically record a token as used. Returns True if this is the first use.
+    INSERT ON CONFLICT DO NOTHING — returns False if token was already consumed.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO approval_token_used (token_sig, dispute_id, merchant_id, action)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (token_sig) DO NOTHING
+                """,
+                (token_sig, dispute_id, merchant_id, action),
+            )
+            is_first_use = cur.rowcount == 1
+        conn.commit()
+        return is_first_use
+    except Exception as exc:
+        logger.error("pg_store: consume_approval_token failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
 
 
 def get_audit_stats() -> Dict[str, Any]:

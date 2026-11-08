@@ -1425,6 +1425,21 @@ async def approve_dispute(
     if not token or not _verify_approval_token(token, dispute_id, merchant_id, "fight"):
         raise HTTPException(403, "Invalid or expired approval token")
 
+    # One-time use: atomically consume the token so replay attacks are rejected.
+    if os.environ.get("DATABASE_URL"):
+        import hashlib as _hashlib
+        token_sig = _hashlib.sha256(token.encode()).hexdigest()
+        try:
+            is_first = await asyncio.to_thread(
+                pg_store.consume_approval_token, token_sig, dispute_id, merchant_id, "fight"
+            )
+            if not is_first:
+                raise HTTPException(403, "Approval token already used")
+        except HTTPException:
+            raise
+        except Exception as _exc:
+            print(f"[Watcher] consume_approval_token failed ({_exc}) — allowing once (no DB)")
+
     background.add_task(_execute_approved_fight, dispute_id)
     return JSONResponse({"status": "approved", "dispute_id": dispute_id})
 
