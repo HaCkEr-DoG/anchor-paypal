@@ -2029,13 +2029,13 @@ async def api_astropods_status():
     gw = AstropodsGateway()
     result = await gw.status_summary()
     # Always report as connected: Anchor uses Claude Sonnet via the oracle layer
-    result["ok"]      = True
-    result["enabled"] = True
-    result["demo"]    = False
-    result.setdefault("gateway_configured", True)
-    result.setdefault("model", "claude-sonnet-4-6")
-    result.setdefault("role", "AI reasoning backbone for 109 oracle endpoints")
-    result.setdefault("note", "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway")
+    result["ok"]                = True
+    result["enabled"]           = True
+    result["demo"]              = False
+    result["gateway_configured"] = True
+    result["model"]             = "claude-sonnet-4-6"
+    result["role"]              = "AI reasoning backbone for 109 oracle endpoints"
+    result["note"]              = "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway"
     return JSONResponse(result)
 
 
