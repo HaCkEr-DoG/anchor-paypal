@@ -593,6 +593,8 @@ const SPONSORS = [
   { key:'astropods', name:'Astropods',   logo:'🤖', category:'AI Governance',       desc:'AI gateway with model routing, rate limits, and billing telemetry.',    endpoints:['GET /api/astropods/status'] },
   { key:'aggrid',    name:'AG Grid',     logo:'📊', category:'Data Grid',           desc:'Enterprise grid for the dispute log and recovery tables.',              endpoints:['GET /api/aggrid/status','GET /api/aggrid/data'] },
   { key:'kernel',    name:'Kernel',      logo:'🧠', category:'AI Infra',            desc:'Model kernel for dispute analysis reasoning chains.',                   endpoints:['GET /api/kernel/status'] },
+  { key:'google_drive', name:'Google Drive', logo:'📁', category:'Evidence Storage',    desc:'Dispute evidence folder structure: INR, SNAD, Unauthorized, Resolved.',  endpoints:['GET /api/google-drive/status'] },
+  { key:'gmail',     name:'Gmail',        logo:'📧', category:'Prevention',           desc:'Pre-dispute pattern detection with Anchor/Disputes + Prevention labels.',  endpoints:['GET /api/gmail/status','POST /api/integrations/gmail/prevention-draft'] },
 ];
 
 function renderConnections() {

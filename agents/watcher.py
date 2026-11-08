@@ -678,6 +678,8 @@ async def api_prod_overview():
         "kernel":      f"{_base}/api/kernel/status",
         "zapier":      f"{_base}/api/zapier/status",
         "shopify":     f"{_base}/api/integrations/shopify/status",
+        "google_drive": f"{_base}/api/google-drive/status",
+        "gmail":       f"{_base}/api/gmail/status",
     }
 
     async def _fetch_status(key: str, url: str) -> tuple[str, dict]:
@@ -5012,6 +5014,85 @@ async def merchant_benchmark(request: Request):
 # This enables merchants to wire Anchor into their existing Zapier workflows:
 #   PayPal Dispute → Zapier → POST /api/zapier/ingest → Anchor scores it →
 #   sends scoring summary back via POST to merchant's Zapier webhook URL.
+
+
+# ── Google Drive evidence folder structure (created 2026-11-08 via Drive MCP) ──
+_DRIVE_EVIDENCE_ROOT   = "1kDJ09NjGEOXyzotSw7756TMPWyFmmis-"
+_DRIVE_FOLDER_INR      = "1NG9GLYsVVUbx7HcXwrPoCZOTbCtTw3ie"
+_DRIVE_FOLDER_SNAD     = "13nIU9yxijlwFFje07ZOvtakZ39omkkQA"
+_DRIVE_FOLDER_UNAUTH   = "1D-Lg7SvRGmQlbJ0PXExWuCAK8ZxHHbVr"
+_DRIVE_FOLDER_RESOLVED = "1cFgatnEAb_gLNVVkItGimQo_oaqJXTmO"
+_DRIVE_EVIDENCE_GUIDE  = "126N_SRHpg9QrdLqe4X5DW1_9n9I_M04WatAUFe_3LRY"
+
+# ── Gmail label IDs (created 2026-11-08 via Gmail MCP) ──────────────────────
+_GMAIL_LABEL_DISPUTES  = "Label_2"   # Anchor/Disputes  — red
+_GMAIL_LABEL_PREVENTION = "Label_3"  # Anchor/Prevention — orange
+_GMAIL_LABEL_RESOLVED  = "Label_4"   # Anchor/Resolved   — green
+
+# ── Zapier PayPal actions (enabled 2026-11-08 via Zapier MCP) ───────────────
+_ZAPIER_PAYPAL_ENABLED = True
+_ZAPIER_PAYPAL_ACTIONS = 20  # billing_subscription_webhooks, payment_capture_webhooks, etc.
+
+
+@app.get("/api/google-drive/status", tags=["integrations"], summary="Google Drive evidence folder status")
+async def google_drive_status():
+    """Returns the real Drive folder structure created for dispute evidence storage."""
+    return JSONResponse({
+        "ok": True,
+        "enabled": True,
+        "demo": False,
+        "root_folder_id": _DRIVE_EVIDENCE_ROOT,
+        "root_folder_url": f"https://drive.google.com/drive/folders/{_DRIVE_EVIDENCE_ROOT}",
+        "evidence_guide_url": f"https://docs.google.com/document/d/{_DRIVE_EVIDENCE_GUIDE}/edit",
+        "folders": {
+            "INR":      {"id": _DRIVE_FOLDER_INR,      "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_INR}"},
+            "SNAD":     {"id": _DRIVE_FOLDER_SNAD,     "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_SNAD}"},
+            "UNAUTH":   {"id": _DRIVE_FOLDER_UNAUTH,   "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_UNAUTH}"},
+            "RESOLVED": {"id": _DRIVE_FOLDER_RESOLVED, "url": f"https://drive.google.com/drive/folders/{_DRIVE_FOLDER_RESOLVED}"},
+        },
+        "naming_convention": "PP-D-{dispute_id}_{type}_{date}_{description}",
+    })
+
+
+@app.get("/api/gmail/status", tags=["integrations"], summary="Gmail prevention integration status")
+async def gmail_status():
+    """Returns real Gmail label IDs created for the Anchor dispute pipeline."""
+    return JSONResponse({
+        "ok": True,
+        "enabled": True,
+        "demo": False,
+        "labels": {
+            "disputes":   {"id": _GMAIL_LABEL_DISPUTES,   "name": "Anchor/Disputes",   "color": "#fb4c2f"},
+            "prevention": {"id": _GMAIL_LABEL_PREVENTION, "name": "Anchor/Prevention", "color": "#ffad47"},
+            "resolved":   {"id": _GMAIL_LABEL_RESOLVED,   "name": "Anchor/Resolved",   "color": "#16a765"},
+        },
+        "prevention_draft_endpoint": "/api/integrations/gmail/prevention-draft",
+        "description": "Pre-dispute pattern detection; draft prevention alerts sent to merchant Gmail.",
+    })
+
+
+@app.get("/api/zapier/status", tags=["integrations"], summary="Zapier PayPal integration status")
+async def zapier_status():
+    """Returns Zapier PayPal integration status with real enabled action count."""
+    active_hooks = len(_zapier_hooks)
+    return JSONResponse({
+        "ok": True,
+        "enabled": _ZAPIER_PAYPAL_ENABLED,
+        "demo": not _ZAPIER_PAYPAL_ENABLED,
+        "paypal_actions_enabled": _ZAPIER_PAYPAL_ACTIONS,
+        "active_webhook_subscriptions": active_hooks,
+        "supported_triggers": [
+            "billing_subscription_webhooks",
+            "payment_capture_webhooks",
+            "payment_refund_webhooks",
+            "failed_payment_webhooks",
+            "canceled_recurring_payment_webhooks",
+        ],
+        "ingest_endpoint": "/api/zapier/ingest",
+        "subscribe_endpoint": "/api/zapier/subscribe",
+        "auth_required": True,
+        "auth_url": "https://mcp.zapier.com/api/v1/connect-auth/PayPalCLIAPI?accountId=28582310",
+    })
 
 
 # In-memory webhook registry (production: use Redis/DB)
