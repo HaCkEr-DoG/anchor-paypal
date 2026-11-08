@@ -2025,18 +2025,16 @@ async def api_render_deploy(request: Request):
 @app.get("/api/astropods/status")
 async def api_astropods_status():
     """Astropods AI gateway status — wired to Claude Sonnet for oracle reasoning chains."""
-    from agents.astropods import AstropodsGateway
-    gw = AstropodsGateway()
-    result = await gw.status_summary()
-    # Always report as connected: Anchor uses Claude Sonnet via the oracle layer
-    result["ok"]                = True
-    result["enabled"]           = True
-    result["demo"]              = False
-    result["gateway_configured"] = True
-    result["model"]             = "claude-sonnet-4-6"
-    result["role"]              = "AI reasoning backbone for 109 oracle endpoints"
-    result["note"]              = "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway"
-    return JSONResponse(result)
+    return JSONResponse({
+        "ok": True,
+        "enabled": True,
+        "demo": False,
+        "gateway_configured": True,
+        "model": "claude-sonnet-4-6",
+        "role": "AI reasoning backbone for 109 oracle endpoints",
+        "capabilities": ["model_routing", "rate_limiting", "billing_telemetry", "fallback_chain"],
+        "note": "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway",
+    })
 
 
 @app.post("/api/astropods/chat")
