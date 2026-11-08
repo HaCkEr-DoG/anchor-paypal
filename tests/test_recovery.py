@@ -100,7 +100,7 @@ async def test_no_buyer_email_skips_store():
     agent = RecoveryAgent()
 
     indexed = []
-    with patch.object(agent, "_index_abandoned_order", new_callable=AsyncMock) as mock_idx:
+    with patch.object(agent, "_save_abandoned_order", new_callable=AsyncMock) as mock_idx:
         event = {
             "resource": {
                 "id": "PP-ORDER-001",
@@ -118,7 +118,7 @@ async def test_amount_below_minimum_skips_store():
     """Order below min_amount should not be indexed."""
     agent = RecoveryAgent(config=RecoveryConfig(min_amount=25.0))
 
-    with patch.object(agent, "_index_abandoned_order", new_callable=AsyncMock) as mock_idx:
+    with patch.object(agent, "_save_abandoned_order", new_callable=AsyncMock) as mock_idx:
         event = {
             "resource": {
                 "id": "PP-ORDER-002",
@@ -137,11 +137,12 @@ async def test_already_recovered_order_skipped():
 
     already_done = _make_order(recovered=True)
 
-    with patch.object(agent, "_query_stale_orders", new_callable=AsyncMock,
-                      return_value=[already_done]):
-        with patch.object(agent, "_get_token", new_callable=AsyncMock, return_value="tok"):
-            with patch.object(agent, "_create_recovery_invoice", new_callable=AsyncMock) as mock_inv:
-                result = await agent.scan_and_recover("merch1")
+    with patch.dict(os.environ, {"RECOVERY_MERCHANT_OPT_IN": "1"}):
+        with patch.object(agent, "_get_stale_orders", new_callable=AsyncMock,
+                          return_value=[already_done]):
+            with patch.object(agent, "_get_token", new_callable=AsyncMock, return_value="tok"):
+                with patch.object(agent, "_create_recovery_invoice", new_callable=AsyncMock) as mock_inv:
+                    result = await agent.scan_and_recover("merch1")
 
     assert result["skipped"] == 1
     assert result["recovered"] == 0
@@ -154,11 +155,12 @@ async def test_max_attempts_exceeded_skipped():
     agent = RecoveryAgent(config=RecoveryConfig(max_attempts=2))
     exhausted = _make_order(recovery_attempts=2, recovered=False)
 
-    with patch.object(agent, "_query_stale_orders", new_callable=AsyncMock,
-                      return_value=[exhausted]):
-        with patch.object(agent, "_get_token", new_callable=AsyncMock, return_value="tok"):
-            with patch.object(agent, "_create_recovery_invoice", new_callable=AsyncMock) as mock_inv:
-                result = await agent.scan_and_recover("merch1")
+    with patch.dict(os.environ, {"RECOVERY_MERCHANT_OPT_IN": "1"}):
+        with patch.object(agent, "_get_stale_orders", new_callable=AsyncMock,
+                          return_value=[exhausted]):
+            with patch.object(agent, "_get_token", new_callable=AsyncMock, return_value="tok"):
+                with patch.object(agent, "_create_recovery_invoice", new_callable=AsyncMock) as mock_inv:
+                    result = await agent.scan_and_recover("merch1")
 
     assert result["skipped"] == 1
     assert not mock_inv.called

@@ -763,46 +763,54 @@ async def health_live():
 @app.get("/health/ready", tags=["health"], summary="Readiness probe — is the service ready to serve?")
 async def health_ready():
     """Returns 200 when all critical sub-systems are operational, 503 when degraded."""
-    # PG connectivity check
-    pg_ok = False
+    # PG connectivity check — use init_db() return value, not just absence of exception
+    pg_ok = None  # None = not configured, False = configured but failed, True = ok
     if os.environ.get("DATABASE_URL"):
         try:
             import agents.pg_store as pg_store
-            await asyncio.to_thread(pg_store.init_db)
-            pg_ok = True
+            pg_ok = await asyncio.to_thread(pg_store.init_db)
         except Exception:
             pg_ok = False
-    else:
-        pg_ok = None  # not configured — not a failure, just unset
 
     # Safety gate level check
     from oracle.production_safety import check_from_env, SafetyLevel
     safety = check_from_env()
-    safety_ok = safety.safety_level not in (SafetyLevel.BLOCKED,)
+    # Only BLOCKED is a hard failure here; HUMAN_REVIEW is a degraded state
+    safety_hard_blocked = safety.safety_level == SafetyLevel.BLOCKED
 
     # Merchant policy loaded (soft check — reports status)
     merchant_policy_loaded = bool(os.environ.get("MERCHANT_POLICY_LOADED", ""))
+
+    # HUMAN_REVIEW without merchant policy = degraded (not hard-blocked but not healthy)
+    safety_degraded = (
+        safety.safety_level == SafetyLevel.HUMAN_REVIEW and not merchant_policy_loaded
+    )
 
     checks = {
         "scheduler_running": _scheduler.running,
         "paypal_creds_configured": bool(
             os.environ.get("PAYPAL_CLIENT_ID") and os.environ.get("PAYPAL_CLIENT_SECRET")
         ),
-        "safety_gate": safety_ok,
+        "safety_gate": not safety_hard_blocked,
         "safety_level": safety.safety_level,
         "merchant_policy_loaded": merchant_policy_loaded,
+        "safety_degraded": safety_degraded,
     }
     if pg_ok is not None:
         checks["postgresql_connected"] = pg_ok
 
-    # Only hard-fail on critical checks
+    # Hard-fail on critical checks (503 when any is False)
     critical = {
         "scheduler_running": checks["scheduler_running"],
         "paypal_creds_configured": checks["paypal_creds_configured"],
-        "safety_gate": safety_ok,
+        "safety_gate": not safety_hard_blocked,
     }
     if pg_ok is not None:
-        critical["postgresql_connected"] = pg_ok
+        critical["postgresql_connected"] = bool(pg_ok)
+
+    # Also degrade when safety gate reports HUMAN_REVIEW with no merchant policy
+    if safety_degraded:
+        critical["safety_degraded"] = False
 
     ready = all(critical.values())
     return JSONResponse(
@@ -842,16 +850,19 @@ async def handle_webhook(request: Request, background: BackgroundTasks):
 
 
 async def _run_and_mark_processed(handler_fn, event_id: str, *args, **kwargs):
-    """Wrapper: run a webhook background handler and mark the outbox event processed."""
-    try:
-        await handler_fn(*args, **kwargs)
-    finally:
-        if event_id and os.environ.get("DATABASE_URL"):
-            import agents.pg_store as pg_store
-            try:
-                await asyncio.to_thread(pg_store.mark_event_processed, event_id)
-            except Exception as _exc:
-                print(f"[Watcher] mark_event_processed({event_id}) failed: {_exc}")
+    """Wrapper: run a webhook background handler and mark the outbox event processed.
+
+    Only marks the event as processed when the handler completes without raising.
+    If the handler raises, the event stays in 'pending' status so a future
+    drainer worker can replay it.
+    """
+    await handler_fn(*args, **kwargs)
+    if event_id and os.environ.get("DATABASE_URL"):
+        import agents.pg_store as pg_store
+        try:
+            await asyncio.to_thread(pg_store.mark_event_processed, event_id)
+        except Exception as _exc:
+            print(f"[Watcher] mark_event_processed({event_id}) failed: {_exc}")
 
 
 async def _process_webhook(merchant_id: str, request: Request, background: BackgroundTasks):
@@ -1254,6 +1265,9 @@ async def _handle_order_approved(event: dict, merchant_id: str = ""):
     if os.environ.get("RECOVERY_VALIDATION_ENABLED", "1") != "0":
         resource = event.get("resource", {})
         order_id = resource.get("id", "")
+        if not order_id:
+            print("[Watcher] Recovery validation: order event missing resource.id — skipping")
+            return
         order_merchant = (
             resource.get("purchase_units", [{}])[0]
             .get("payee", {})
@@ -1267,16 +1281,17 @@ async def _handle_order_approved(event: dict, merchant_id: str = ""):
                 f"payee merchant_id {order_merchant!r} != configured {our_merchant_paypal_id!r} — skipping"
             )
             return
-        # Currency must be present (amount validation happens in RecoveryAgent.capture)
+        # Reject orders with no amount or currency — cannot safely capture without these
         amount_info = (
             resource.get("purchase_units", [{}])[0]
             .get("amount", {})
         )
         if not amount_info.get("value") or not amount_info.get("currency_code"):
             print(
-                f"[Watcher] Recovery validation: order {order_id} missing amount/currency "
-                f"— storing for later but capture will re-validate"
+                f"[Watcher] Recovery validation FAILED for order {order_id}: "
+                f"missing amount or currency_code — skipping (cannot validate before capture)"
             )
+            return
 
     recovery = RecoveryAgent()
     await recovery.store_approved_order(event, mid)
@@ -1425,7 +1440,9 @@ async def approve_dispute(
     if not token or not _verify_approval_token(token, dispute_id, merchant_id, "fight"):
         raise HTTPException(403, "Invalid or expired approval token")
 
-    # One-time use: atomically consume the token so replay attacks are rejected.
+    # One-time use: atomically consume the token before scheduling work.
+    # If DATABASE_URL is set, we must succeed — fail closed on any DB error
+    # to prevent replay attacks when the database is temporarily unavailable.
     if os.environ.get("DATABASE_URL"):
         import hashlib as _hashlib
         token_sig = _hashlib.sha256(token.encode()).hexdigest()
@@ -1438,8 +1455,10 @@ async def approve_dispute(
         except HTTPException:
             raise
         except Exception as _exc:
-            print(f"[Watcher] consume_approval_token failed ({_exc}) — allowing once (no DB)")
+            print(f"[Watcher] consume_approval_token DB error ({_exc}) — refusing (fail closed)")
+            raise HTTPException(503, "Token verification unavailable — retry in a moment")
 
+    # Schedule work only after token is successfully consumed
     background.add_task(_execute_approved_fight, dispute_id)
     return JSONResponse({"status": "approved", "dispute_id": dispute_id})
 

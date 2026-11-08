@@ -205,6 +205,41 @@ def test_health_ready_pg_check_absent_when_no_database_url(_client, monkeypatch)
     )
 
 
+def test_health_ready_pg_false_when_init_db_returns_false(_client, monkeypatch):
+    """init_db() returning False must set postgresql_connected=False and trigger 503."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    import agents.pg_store as pg_store
+    monkeypatch.setattr(pg_store, "init_db", lambda: False)
+    r = _client.get("/health/ready")
+    assert r.status_code == 503, "Must return 503 when init_db returns False"
+    body = r.json()
+    assert body["checks"].get("postgresql_connected") is False, (
+        "postgresql_connected must be False when init_db() returns False"
+    )
+
+
+def test_health_ready_human_review_without_policy_is_not_ready(_client, monkeypatch):
+    """HUMAN_REVIEW safety level without merchant policy must degrade readiness to 503."""
+    monkeypatch.delenv("MERCHANT_POLICY_LOADED", raising=False)
+    from oracle.production_safety import check_from_env, SafetyLevel
+    from unittest.mock import patch, MagicMock
+    mock_report = MagicMock()
+    mock_report.safety_level = SafetyLevel.HUMAN_REVIEW
+    # patch via the oracle module since watcher imports check_from_env from there
+    with patch("oracle.production_safety.check_from_env", return_value=mock_report):
+        r = _client.get("/health/ready")
+    assert r.status_code == 503, (
+        "HUMAN_REVIEW without MERCHANT_POLICY_LOADED must return 503"
+    )
+    body = r.json()
+    assert body["checks"].get("safety_degraded") is True, (
+        "safety_degraded must be True (degraded state detected) when HUMAN_REVIEW without merchant policy"
+    )
+    assert body.get("status") != "ok", (
+        "status must not be 'ok' when HUMAN_REVIEW without merchant policy"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Stage 2. Kill switch — AUTONOMOUS_ACTIONS_ENABLED
 # ---------------------------------------------------------------------------
@@ -328,6 +363,7 @@ async def test_recovery_query_uses_pg_not_es(monkeypatch):
     import agents.pg_store as pg_store
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("RECOVERY_MERCHANT_OPT_IN", "1")
     monkeypatch.delenv("ELASTICSEARCH_URL", raising=False)
     queried = []
 

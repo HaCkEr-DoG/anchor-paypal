@@ -632,18 +632,20 @@ class Guardian:
         return f"{expiry}.{sig}"
 
     async def _request_approval(
-        self, dispute_id: str, amount: float, win_prob: float, decision
+        self, dispute_id: str, amount: float, win_prob, decision
     ):
         """
         Dispute falls in the ask-me zone. Alert the merchant with
         a one-tap approval link containing a signed token.
         """
+        # win_prob may be None when called from the kill switch before Oracle runs
+        safe_win_prob = win_prob if win_prob is not None else 0.0
         action = ActionRecord(
             timestamp=datetime.now(timezone.utc).isoformat(),
             action_type="dispute_pending",
             dispute_id=dispute_id,
             amount=amount,
-            win_probability=win_prob,
+            win_probability=safe_win_prob,
             outcome="pending_approval",
             reasoning=(" | ".join(decision.reasoning) if decision else "manual review needed")
             + self._ai_review_log_suffix(decision),
@@ -656,11 +658,16 @@ class Guardian:
         base_url = os.environ.get("RENDER_EXTERNAL_URL", "https://anchor-api.onrender.com")
         approve_url = f"{base_url}/approve/{dispute_id}?token={token}&mid={mid}"
 
+        # Show the actual expiry from the env var so the message is accurate
+        max_age_s = int(os.environ.get("APPROVAL_LINK_MAX_AGE", "3600"))
+        expiry_desc = f"{max_age_s // 3600}h" if max_age_s % 3600 == 0 else f"{max_age_s // 60}m"
+
+        win_prob_str = f"{safe_win_prob:.0%}" if win_prob is not None else "unknown (pre-analysis)"
         msg = (
             f"🔔 Decision needed: ${amount:.2f} dispute `{dispute_id}`\n"
-            f"Win probability: *{win_prob:.0%}*\n"
+            f"Win probability: *{win_prob_str}*\n"
             f"Evidence ready. <{approve_url}|Approve fight> or reply *NO* to accept the claim.\n"
-            f"_(This link expires in 48h and is specific to this dispute)_"
+            f"_(This link expires in {expiry_desc} and is specific to this dispute)_"
         )
         await self._notify(msg)
 

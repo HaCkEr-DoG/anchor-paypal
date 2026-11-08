@@ -100,6 +100,9 @@ class RecoveryAgent:
                     "currency": item.get("unit_amount", {}).get("currency_code", currency),
                 })
 
+        if not buyer_email:
+            return
+
         if amount < self.config.min_amount:
             return
 
@@ -124,6 +127,13 @@ class RecoveryAgent:
         Finds stale approved orders and safely resumes their existing capture.
         Returns a summary of actions taken.
         """
+        # Recovery requires explicit operator opt-in. Default is disabled.
+        if os.environ.get("RECOVERY_MERCHANT_OPT_IN", "0") != "1":
+            print(
+                f"[Recovery] RECOVERY_MERCHANT_OPT_IN not set — scan skipped for {merchant_id}"
+            )
+            return {"scanned": 0, "recovered": 0, "pending": 0, "skipped": 0, "opted_in": False}
+
         from datetime import timedelta
 
         cutoff = (
@@ -187,6 +197,27 @@ class RecoveryAgent:
             if not await self._claim_recovery_order(order.order_id):
                 skipped += 1
                 continue
+
+            # Snapshot validation: compare current PayPal amount+currency against
+            # what was stored when the order was first approved. Mismatches indicate
+            # a tampered or wrong-merchant order — never capture.
+            live_units = (paypal_order or {}).get("purchase_units", [])
+            if live_units:
+                live_amount = str(live_units[0].get("amount", {}).get("value", "")).strip()
+                live_currency = str(live_units[0].get("amount", {}).get("currency_code", "")).strip().upper()
+                stored_currency = str(order.currency or "").strip().upper()
+                try:
+                    amount_matches = abs(float(live_amount) - float(order.amount)) < 0.01
+                except (ValueError, TypeError):
+                    amount_matches = False
+                if not amount_matches or (live_currency and stored_currency and live_currency != stored_currency):
+                    await self._mark_recovery_state(
+                        order.order_id,
+                        "needs_review",
+                        f"PayPal amount/currency {live_amount} {live_currency} != stored {order.amount} {stored_currency} — skipping",
+                    )
+                    skipped += 1
+                    continue
 
             capture = await self._capture_approved_order(order.order_id, token)
             if not capture:
