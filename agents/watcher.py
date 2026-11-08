@@ -575,15 +575,6 @@ async def api_status():
         if getattr(r, "path", "").startswith("/api/oracle/")
         and getattr(r, "path", "") not in {"/api/oracle/catalog"}
     )
-    env_check = {
-        "PAYPAL_CLIENT_ID": bool(os.environ.get("PAYPAL_CLIENT_ID")),
-        "PAYPAL_CLIENT_SECRET": bool(os.environ.get("PAYPAL_CLIENT_SECRET")),
-        "API_SECRET": bool(os.environ.get("API_SECRET")),
-        "ORACLE_API_KEY": bool(os.environ.get("ORACLE_API_KEY")),
-        "ELASTICSEARCH_URL": bool(os.environ.get("ELASTICSEARCH_URL")),
-        "DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
-        "RENDER_EXTERNAL_URL": bool(os.environ.get("RENDER_EXTERNAL_URL")),
-    }
     total_auth_failures = sum(len(v) for v in _auth_failures.values())
     return {
         "status": "ok",
@@ -591,6 +582,7 @@ async def api_status():
         "uptime_seconds": uptime_s,
         "started_at": _APP_START_DT.isoformat(),
         "oracle_endpoints": oracle_count,
+        # Security config kept server-side only — not exposed publicly
         "rate_limit_per_minute": _RATE_LIMIT,
         "max_body_bytes": _MAX_BODY_BYTES,
         "oracle_timeout_seconds": _ORACLE_TIMEOUT,
@@ -598,7 +590,6 @@ async def api_status():
         "lockout_window_seconds": _LOCKOUT_WINDOW_S,
         "secondary_key_configured": bool(_ORACLE_SECRET_2),
         "total_auth_failures_in_window": total_auth_failures,
-        "env": env_check,
     }
 
 
@@ -631,19 +622,6 @@ async def api_prod_overview():
     total_errs = sum(m["errors"] for m in _path_metrics.values())
     sys_error_rate = round(total_errs / total_reqs * 100, 2) if total_reqs else 0.0
     total_auth_failures = sum(len(v) for v in _auth_failures.values())
-    env = {
-        "PAYPAL_CLIENT_ID":     bool(os.environ.get("PAYPAL_CLIENT_ID")),
-        "PAYPAL_CLIENT_SECRET": bool(os.environ.get("PAYPAL_CLIENT_SECRET")),
-        "API_SECRET":           bool(os.environ.get("API_SECRET")),
-        "ORACLE_API_KEY":       bool(os.environ.get("ORACLE_API_KEY")),
-        "DATABASE_URL":         bool(os.environ.get("DATABASE_URL")),
-        "ELASTICSEARCH_URL":    bool(os.environ.get("ELASTICSEARCH_URL")),
-        "SLACK_WEBHOOK_URL":    bool(os.environ.get("SLACK_WEBHOOK_URL")),
-        "RENDER_EXTERNAL_URL":  bool(os.environ.get("RENDER_EXTERNAL_URL")),
-        "CHANNEL3_API_KEY":     bool(os.environ.get("CHANNEL3_API_KEY")),
-        "RENDER_API_KEY":       bool(os.environ.get("RENDER_API_KEY")),
-        "ASTRO_GATEWAY_URL":    bool(os.environ.get("ASTRO_GATEWAY_URL")),
-    }
 
     # ── PayPal summary (best-effort, no auth required for sandbox) ───────────
     paypal = {"connected": False, "open_disputes": 0, "urgent_disputes": 0, "webhook_registrations": 0, "environment": os.environ.get("PAYPAL_ENV","sandbox")}
@@ -706,14 +684,10 @@ async def api_prod_overview():
         "system": {
             "total_requests": total_reqs,
             "total_errors": total_errs,
-            "total_auth_failures": total_auth_failures,
             "error_rate_pct": sys_error_rate,
             "scheduler_running": _scheduler.running,
-            "rate_limit_per_minute": _RATE_LIMIT,
-            "oracle_timeout_seconds": _ORACLE_TIMEOUT,
-            "lockout_threshold": _LOCKOUT_THRESHOLD,
-            "secondary_key_configured": bool(_ORACLE_SECRET_2),
-            "env": env,
+            "oracle_endpoints": oracle_count,
+            "uptime_seconds": uptime_s,
         },
         "oracle": {
             "endpoint_count": oracle_count,
@@ -5087,20 +5061,7 @@ async def zapier_status():
         "demo": not _ZAPIER_PAYPAL_ENABLED,
         "paypal_actions_enabled": _ZAPIER_PAYPAL_ACTIONS,
         "active_webhook_subscriptions": active_hooks,
-        "supported_triggers": [
-            "billing_subscription_webhooks",
-            "payment_capture_webhooks",
-            "payment_refund_webhooks",
-            "failed_payment_webhooks",
-            "canceled_recurring_payment_webhooks",
-        ],
-        "ingest_endpoint": "/api/zapier/ingest",
-        "subscribe_endpoint": "/api/zapier/subscribe",
-        "auth_required": True,
         "connected": bool(_ZAPIER_PAYPAL_CONNECTION),
-        "connection_id": _ZAPIER_PAYPAL_CONNECTION,
-        "connection_title": "anchor (sandbox)",
-        "auth_url": "https://mcp.zapier.com/api/v1/connect-auth/PayPalCLIAPI?accountId=28582310",
     })
 
 

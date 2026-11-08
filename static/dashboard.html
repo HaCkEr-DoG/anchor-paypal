@@ -280,10 +280,6 @@
         <table class="data-table" id="health-table">
           <tbody id="health-body"></tbody>
         </table>
-        <div style="margin-top:16px">
-          <div class="card-title" style="margin-bottom:10px">Environment Variables</div>
-          <div class="env-grid" id="env-grid"></div>
-        </div>
       </div>
     </div>
 
@@ -484,27 +480,20 @@ function renderOverview() {
     }).join('');
   }
 
-  // system health table
+  // system health table — only operational status, no security config
   const healthBody = document.getElementById('health-body');
   const healthRows = [
     ['Scheduler', sys.scheduler_running ? ['Running','ok'] : ['Stopped','err']],
-    ['Rate limit', [`${sys.rate_limit_per_minute ?? '?'} req/min`, 'ok']],
-    ['Oracle timeout', [`${sys.oracle_timeout_seconds ?? '?'}s`, 'ok']],
-    ['Lockout threshold', [`${sys.lockout_threshold ?? '?'} failures`, 'ok']],
-    ['Auth failures (window)', [sys.total_auth_failures ?? 0, sys.total_auth_failures > 0 ? 'warn' : 'ok']],
-    ['Secondary key', [sys.secondary_key_configured ? 'Configured' : 'Not set', sys.secondary_key_configured ? 'ok' : 'demo']],
+    ['Oracle endpoints', [sys.oracle_endpoints ?? '?', 'ok']],
+    ['Uptime', [formatUptime(sys.uptime_seconds), 'ok']],
   ];
   healthBody.innerHTML = healthRows.map(([label,[val,cls]]) =>
     `<tr><td>${label}</td><td style="text-align:right;font-weight:600" class="num-${cls}">${val}</td></tr>`
   ).join('');
 
-  // env grid
+  // env grid — hidden from public view
   const envGrid = document.getElementById('env-grid');
-  if (sys.env) {
-    envGrid.innerHTML = Object.entries(sys.env).map(([k,v]) =>
-      `<div class="env-row"><div class="env-dot ${v?'ok':'miss'}"></div><span class="env-key">${k}</span></div>`
-    ).join('');
-  }
+  if (envGrid) envGrid.innerHTML = '';
 }
 
 // ── Oracle full tab ─────────────────────────────────────────────────────────
@@ -729,6 +718,7 @@ function closeDrawer() {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+function formatUptime(s) { return fmtUptime(s); }
 function fmtUptime(s) {
   if (s < 60) return s + 's';
   if (s < 3600) return Math.floor(s/60) + 'm';
