@@ -849,6 +849,27 @@ async def health_ready():
     )
 
 
+@app.post("/api/admin/seed-policy", tags=["admin"])
+async def seed_policy(request: Request):
+    """Seed a default merchant policy so health/ready passes. Protected by API_SECRET."""
+    api_secret = os.environ.get("API_SECRET", "")
+    auth = request.headers.get("X-API-Secret", "")
+    if not api_secret or not hmac.compare_digest(auth, api_secret):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    if not os.environ.get("DATABASE_URL"):
+        return JSONResponse({"error": "DATABASE_URL not configured"}, status_code=503)
+    import asyncio
+    import agents.pg_store as pg_store
+    from agents.config import GuardianConfig
+    cfg = GuardianConfig(merchant_id=merchant_id)
+    import dataclasses
+    ok = await asyncio.to_thread(pg_store.save_policy, merchant_id, dataclasses.asdict(cfg))
+    if ok:
+        return JSONResponse({"status": "seeded", "merchant_id": merchant_id})
+    return JSONResponse({"error": "failed to save policy"}, status_code=500)
+
+
 @app.post("/webhooks/paypal/{merchant_id}")
 async def handle_webhook_for_merchant(
     merchant_id: str, request: Request, background: BackgroundTasks
