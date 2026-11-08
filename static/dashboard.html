@@ -330,15 +330,7 @@
       <div class="page-title">Dispute Log</div>
       <div class="page-sub">Autonomous oracle decisions — timestamped, labeled, and traceable.</div>
     </div>
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-title">Live Disputes API Access</div>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Requires <code>X-API-Key</code> for authenticated dispute data.</p>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <input id="disputes-api-key" type="password" placeholder="Enter X-API-Key…" style="flex:1;min-width:200px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px" />
-        <button onclick="loadDisputes()" style="background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer">Load disputes</button>
-      </div>
-      <div id="disputes-status-bar" style="display:none;margin-top:10px;padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600"></div>
-    </div>
+    <div id="disputes-status-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600"></div>
     <div class="card">
       <table class="data-table" id="disputes-table">
         <thead><tr>
@@ -347,7 +339,7 @@
           <th>Action</th>
           <th>Reasoning</th>
         </tr></thead>
-        <tbody id="disputes-body"><tr><td colspan="4" style="color:var(--muted);padding:16px 0">Enter your API key above to load dispute data.</td></tr></tbody>
+        <tbody id="disputes-body"><tr><td colspan="4" style="color:var(--muted);padding:16px 0">Loading dispute records…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -400,6 +392,7 @@ function switchPanel(id) {
   document.getElementById('tab-' + id).setAttribute('aria-selected','true');
   if (id === 'oracle') renderOracleFull();
   if (id === 'connections') renderConnections();
+  if (id === 'disputes') loadDisputes();
 }
 
 // ── Global state ────────────────────────────────────────────────────────────
@@ -548,18 +541,18 @@ function renderOracleFiltered(rows) {
 
 // ── Disputes tab ────────────────────────────────────────────────────────────
 async function loadDisputes() {
-  const key = document.getElementById('disputes-api-key').value.trim();
   const statusBar = document.getElementById('disputes-status-bar');
-  statusBar.style.display = 'block';
-  statusBar.style.background = '#eff6ff';
-  statusBar.style.color = '#1a6cf5';
-  statusBar.textContent = 'Loading…';
+  const body = document.getElementById('disputes-body');
   try {
-    const r = await fetch('/api/disputes', { headers: { 'X-API-Key': key }, signal: AbortSignal.timeout(10000) });
+    const r = await fetch('/api/disputes', { signal: AbortSignal.timeout(10000) });
     const data = await r.json();
+    if (r.status === 401 || r.status === 403) {
+      body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">Dispute data requires authentication — configure ORACLE_API_KEY in Render environment.</td></tr>';
+      statusBar.style.display = 'none';
+      return;
+    }
     if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
     const rows = data.rows || [];
-    const body = document.getElementById('disputes-body');
     if (!rows.length) {
       body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">No dispute records found.</td></tr>';
     } else {
@@ -573,11 +566,14 @@ async function loadDisputes() {
         </tr>`;
       }).join('');
     }
+    statusBar.style.display = 'block';
     statusBar.style.background = '#d1fae5'; statusBar.style.color = '#065f46';
-    statusBar.textContent = `${rows.length} record(s) loaded` + (data.demo ? ' · DEMO data' : '');
+    statusBar.textContent = `${rows.length} record(s) loaded` + (data.demo ? ' · Demo data' : '');
   } catch(e) {
+    statusBar.style.display = 'block';
     statusBar.style.background = '#fee2e2'; statusBar.style.color = '#991b1b';
     statusBar.textContent = 'Error: ' + e.message;
+    body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">Could not load dispute records.</td></tr>';
   }
 }
 
