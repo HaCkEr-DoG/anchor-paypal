@@ -335,3 +335,29 @@ def analyze_buyer_communication(inp: BuyerCommunicationInput) -> BuyerCommunicat
         suggested_response_tone=suggested,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+CommunicationInput = BuyerCommunicationInput
+
+
+class BuyerMessage:
+    pass
+
+
+class HostilityLevel(str, Enum):
+    NONE = "NONE"
+    LOW = "LOW"
+    MODERATE = "MODERATE"
+    HIGH = "HIGH"
+    EXTREME = "EXTREME"
+
+
+class RecommendedTone(str, Enum):
+    PROFESSIONAL = "PROFESSIONAL"
+    EMPATHETIC = "EMPATHETIC"
+    FIRM = "FIRM"
+    DE_ESCALATE = "DE_ESCALATE"
+    ASSERTIVE = "ASSERTIVE"

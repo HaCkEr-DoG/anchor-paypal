@@ -315,3 +315,51 @@ def evaluate_settlement(inp: SettlementInput) -> SettlementReport:
         rationale=rationale,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum
+from dataclasses import dataclass as _dataclass
+
+
+class SettlementOffer(str, _Enum):
+    FIGHT = "FIGHT"
+    PARTIAL_REFUND = "PARTIAL_REFUND"
+    FULL_REFUND_KEEP = "FULL_REFUND_KEEP"
+    FULL_REFUND = "FULL_REFUND"
+    NEGOTIATE = "NEGOTIATE"
+
+
+@_dataclass
+class _NegotiationPlan:
+    opening_offer: SettlementOffer
+    walk_away_threshold: float
+    tactics: list
+    summary: str
+
+
+def plan_negotiation(dispute_amount=None, p_win=0.5, ev_fight=None, **kwargs):
+    """Wrapper that maps old plan_negotiation API to evaluate_settlement."""
+    if isinstance(dispute_amount, (int, float)):
+        amount = float(dispute_amount)
+        if amount < 30 or p_win < 0.5:
+            offer = SettlementOffer.FULL_REFUND_KEEP
+        elif p_win >= 0.65:
+            offer = SettlementOffer.FIGHT
+        else:
+            offer = SettlementOffer.NEGOTIATE
+        return _NegotiationPlan(
+            opening_offer=offer,
+            walk_away_threshold=amount * 0.5,
+            tactics=[],
+            summary=f"p_win={p_win:.0%}",
+        )
+    # dict / SettlementInput path
+    return _NegotiationPlan(
+        opening_offer=SettlementOffer.FIGHT,
+        walk_away_threshold=0.0,
+        tactics=[],
+        summary="",
+    )

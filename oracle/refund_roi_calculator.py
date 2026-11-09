@@ -221,3 +221,27 @@ def calculate_roi(inp: ROIInput) -> ROIReport:
         recommendation_reason=reason,
         paypal_signal=paypal_signal,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum
+
+
+class ROIConfidence(str, _Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class MerchantSegment(str, _Enum):
+    SMB = "SMB"
+    MID_MARKET = "MID_MARKET"
+    ENTERPRISE = "ENTERPRISE"
+
+
+RefundROIInput = ROIInput
+RefundROIReport = ROIReport
+DisputeAction = ROIAction
+calculate_refund_roi = calculate_roi

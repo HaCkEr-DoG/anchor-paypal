@@ -298,3 +298,9 @@ def score_merchant_risk(inp: MerchantRiskInput) -> MerchantRiskReport:
         urgent_actions=urgent_actions,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+RiskTier = HdrTier

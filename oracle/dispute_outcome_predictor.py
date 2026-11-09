@@ -235,3 +235,26 @@ def predict_outcome(inp: OutcomePredictorInput) -> OutcomePredictionReport:
         win_probability_for_ev=ev_p_win,
         paypal_signal=paypal_signal,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum
+
+
+class DecisionStrength(str, _Enum):
+    STRONG = "STRONG"
+    MODERATE = "MODERATE"
+    WEAK = "WEAK"
+    UNCERTAIN = "UNCERTAIN"
+
+
+class OutcomeConfidence(str, _Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+predict_dispute_outcome = predict_outcome
+FinalAction = PredictedOutcome

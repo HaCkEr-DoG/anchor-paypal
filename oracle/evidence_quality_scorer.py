@@ -474,3 +474,11 @@ def score_evidence_quality(inp: EvidenceQualityInput) -> EvidenceQualityReport:
         top_actions=top_actions,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases (older test suites use these names)
+# ---------------------------------------------------------------------------
+score_evidence = score_evidence_quality
+EvidencePackage = EvidenceQualityInput
+EvidenceTier = EvidenceStrength

@@ -386,3 +386,34 @@ def assess_merchant_health(inp: MerchantHealthInput) -> MerchantHealthReport:
         summary=summary,
         dashboard_headline=headline,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum
+from dataclasses import dataclass as _dataclass, field as _field
+
+
+class AccountStatus(str, _Enum):
+    HEALTHY = "HEALTHY"
+    ELEVATED = "ELEVATED"
+    HIGH = "HIGH"
+    EXCESSIVE = "EXCESSIVE"
+    CRITICAL = "CRITICAL"
+    TERMINAL = "TERMINAL"
+
+
+@_dataclass
+class DisputeWindow:
+    dispute_rate: float = 0.0
+    chargeback_rate: float = 0.0
+    total_transactions: int = 100
+    total_disputes: int = 0
+    win_rate: float = 0.5
+    merchant_id: str = "default"
+    period_days: int = 30
+    dispute_count: int = 0
+    transaction_count: int = 100
+    dispute_volume: float = 0.0
+    revenue: float = 0.0

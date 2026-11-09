@@ -359,3 +359,74 @@ def check_seller_protection(inp: SellerProtectionInput) -> SellerProtectionRepor
         paypal_signal=paypal_signal,
         action_detail=action_detail,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum
+
+
+class SPEligibility(str, _Enum):
+    ELIGIBLE = "ELIGIBLE"
+    LIKELY_ELIGIBLE = "LIKELY_ELIGIBLE"
+    PARTIALLY_ELIGIBLE = "PARTIALLY_ELIGIBLE"
+    INELIGIBLE = "INELIGIBLE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    UNCERTAIN = "UNCERTAIN"
+
+
+class SPEligibilityStatus(str, _Enum):
+    ELIGIBLE = "ELIGIBLE"
+    LIKELY_ELIGIBLE = "LIKELY_ELIGIBLE"
+    PARTIALLY_ELIGIBLE = "PARTIALLY_ELIGIBLE"
+    INELIGIBLE = "INELIGIBLE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    UNCERTAIN = "UNCERTAIN"
+
+
+class SPGapSeverity(str, _Enum):
+    HARD_BLOCK = "HARD_BLOCK"
+    SOFT_GAP = "SOFT_GAP"
+    INFO = "INFO"
+
+
+class ExcludedCategory(str, _Enum):
+    VEHICLE = "VEHICLE"
+    GAMBLING = "GAMBLING"
+    DONATION = "DONATION"
+    MONEY_TRANSFER = "MONEY_TRANSFER"
+    DIGITAL_GOODS = "DIGITAL_GOODS"
+
+
+SPInput = SellerProtectionInput
+
+
+class SPCoverageType(str, _Enum):
+    UNAUTHORIZED = "UNAUTHORIZED"
+    ITEM_NOT_RECEIVED = "ITEM_NOT_RECEIVED"
+    NONE = "NONE"
+
+
+class DisputeTypeForSP(str, _Enum):
+    UNAUTHORIZED = "UNAUTHORIZED"
+    INR = "INR"
+    SNAD = "SNAD"
+    SUBSCRIPTION = "SUBSCRIPTION"
+
+
+class SPEligibilityGapType(str, _Enum):
+    MISSING_TRACKING = "MISSING_TRACKING"
+    NO_DELIVERY_CONFIRMATION = "NO_DELIVERY_CONFIRMATION"
+    MISSING_SIGNATURE = "MISSING_SIGNATURE"
+    INTANGIBLE_GOODS = "INTANGIBLE_GOODS"
+    EXCLUDED_CATEGORY = "EXCLUDED_CATEGORY"
+    OTHER = "OTHER"
+
+
+class SPRequirement(str, _Enum):
+    TRACKING_NUMBER = "TRACKING_NUMBER"
+    DELIVERY_CONFIRMATION = "DELIVERY_CONFIRMATION"
+    SIGNATURE = "SIGNATURE"
+    PAYPAL_CHECKOUT = "PAYPAL_CHECKOUT"
+    CONFIRMED_ADDRESS = "CONFIRMED_ADDRESS"

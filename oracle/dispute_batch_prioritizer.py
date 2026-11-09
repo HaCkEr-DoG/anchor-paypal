@@ -263,3 +263,44 @@ def prioritize_dispute_batch(inp: BatchInput) -> BatchPriorityReport:
         expected_value_if_fight_all=round(ev_fight, 2),
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum
+
+
+class DisputeStatus(str, _Enum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+    UNDER_REVIEW = "UNDER_REVIEW"
+
+
+class WorkAction(str, _Enum):
+    FIGHT = "FIGHT"
+    ACCEPT = "ACCEPT"
+    NEGOTIATE = "NEGOTIATE"
+    ESCALATE = "ESCALATE"
+
+
+DisputeBatchItem = DisputeItem
+BatchDisputeItem = DisputeItem
+DisputeForPriority = DisputeItem
+BatchPrioritizerInput = BatchInput
+PriorityTier = DisputeUrgency
+PriorityBand = DisputeUrgency
+
+
+def prioritize_disputes(inp):
+    """Alias for prioritize_dispute_batch accepting BatchInput or list[DisputeItem]."""
+    if isinstance(inp, list):
+        inp = BatchInput(disputes=inp)
+    return prioritize_dispute_batch(inp)
+
+
+def prioritize_batch(inp):
+    """Alias for prioritize_dispute_batch accepting BatchInput or list[DisputeItem]."""
+    if isinstance(inp, list):
+        inp = BatchInput(disputes=inp)
+    return prioritize_dispute_batch(inp)

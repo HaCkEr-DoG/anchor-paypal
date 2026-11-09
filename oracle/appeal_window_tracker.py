@@ -212,3 +212,25 @@ def track_appeal_windows(inp: AppealWindowInput) -> AppealWindowReport:
         has_arb=has_arb,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+track_appeal_window = track_appeal_windows
+DisputeWindowInput = AppealWindowInput
+UrgencyBand = WindowStatus
+
+
+class AppealOutcome(str, Enum):
+    WON = "WON"
+    LOST = "LOST"
+    SETTLED = "SETTLED"
+    PENDING = "PENDING"
+
+
+class AppealRecommendation(str, Enum):
+    APPEAL_NOW = "APPEAL_NOW"
+    PREPARE_APPEAL = "PREPARE_APPEAL"
+    WAIT = "WAIT"
+    NO_ACTION = "NO_ACTION"

@@ -435,3 +435,11 @@ def assess_hdr_war_room(inp: HDRWarRoomInput) -> WarRoomReport:
         avoid_actions=avoid,
         summary=summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility aliases
+# ---------------------------------------------------------------------------
+analyze_hdr_crisis = assess_hdr_war_room
+HDRSnapshot = HDRWarRoomInput
+HDRForecast = HDRProjection

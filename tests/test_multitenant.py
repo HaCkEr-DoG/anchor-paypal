@@ -186,7 +186,8 @@ def test_approve_endpoint_reads_mid_from_query():
     sig = _hmac.new("testsecret".encode(), payload.encode(), _hl.sha256).hexdigest()
     token = f"{expiry}.{sig}"
 
-    with patch("agents.watcher._execute_approved_fight", new_callable=AsyncMock):
+    with patch("agents.watcher._execute_approved_fight", new_callable=AsyncMock), \
+         patch.dict(os.environ, {"ALLOW_EPHEMERAL_APPROVALS": "1"}, clear=False):
         resp = client.post(f"/approve/PP-D-123?token={token}&mid=testmerch")
 
     # Should not be 403 (signature valid for testmerch)
