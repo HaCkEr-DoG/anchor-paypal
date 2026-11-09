@@ -953,6 +953,18 @@ async def health_ready():
         # or the in-process drainer. Gate readiness on that regardless of scheduler mode.
         critical["worker_running"] = checks["worker_running"]
 
+        # Queue depth: flag a stalled drainer when any job has been pending > 5 min
+        if os.environ.get("DATABASE_URL"):
+            try:
+                import agents.pg_store as pg_store
+                oldest_age = await asyncio.to_thread(pg_store.get_oldest_pending_job_age_seconds)
+                checks["oldest_pending_job_age_seconds"] = oldest_age
+                # Warn but don't hard-fail: queue depth is a degraded signal, not a crash
+                if oldest_age is not None and oldest_age > 300:
+                    checks["queue_drainer_stalled"] = True
+            except Exception:
+                pass
+
     # Also degrade when safety gate reports HUMAN_REVIEW with no merchant policy
     if safety_degraded:
         critical["safety_degraded"] = False

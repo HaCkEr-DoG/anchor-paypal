@@ -1023,3 +1023,38 @@ def get_audit_stats() -> Dict[str, Any]:
     except Exception as exc:
         logger.error("pg_store: get_audit_stats failed: %s", exc)
         return {}
+
+
+def get_oldest_pending_job_age_seconds() -> Optional[float]:
+    """
+    Return how many seconds the oldest un-leased pending job has been waiting,
+    across both webhook_outbox and approval_jobs.
+
+    Returns None if there are no pending jobs (queue is empty or DB unreachable).
+    A large value means the drainer/worker is stalled.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_utc))) AS age_s
+                FROM (
+                    SELECT created_utc FROM webhook_outbox
+                    WHERE status = 'pending'
+                      AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                    UNION ALL
+                    SELECT created_utc FROM approval_jobs
+                    WHERE status = 'pending'
+                      AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                ) AS q
+                """
+            )
+            row = cur.fetchone()
+        conn.commit()
+        if row and row[0] is not None:
+            return float(row[0])
+        return None
+    except Exception as exc:
+        logger.error("pg_store: get_oldest_pending_job_age_seconds failed: %s", exc)
+        return None
