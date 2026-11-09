@@ -661,11 +661,19 @@
       <div class="page-title">Settings</div>
       <div class="page-sub">System configuration and service status.</div>
     </div>
-    <div class="card" style="padding:24px">
+    <div class="card" style="padding:24px;margin-bottom:16px">
       <div class="settings-section">
         <div class="settings-section-title">Service Configuration</div>
         <div id="settings-rows">
           <div style="color:var(--muted);font-size:13px">Loading configuration…</div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="padding:24px">
+      <div class="settings-section">
+        <div class="settings-section-title">Sponsor Integrations</div>
+        <div id="settings-integrations">
+          <div style="color:var(--muted);font-size:13px">Loading integrations…</div>
         </div>
       </div>
     </div>
@@ -1406,6 +1414,24 @@ async function loadSettings() {
       <div class="${ok ? 'setting-ok' : 'setting-miss'}">${value}</div>
     </div>
   `).join('');
+
+  // Render integrations
+  const intEl = document.getElementById('settings-integrations');
+  const intMap = ov.integrations || {};
+  const intKeys = Object.keys(intMap);
+  if (!intKeys.length) {
+    intEl.innerHTML = '<div style="color:var(--muted);font-size:13px">No integration data.</div>';
+  } else {
+    const names = { apimatic:'APIMatic', channel3:'Channel3', postman:'Postman', astropods:'AstroPods', render:'Render', bryntum:'Bryntum', aggrid:'AG Grid', kernel:'KERNEL', zapier:'Zapier', shopify:'Shopify', google_drive:'Google Drive', gmail:'Gmail' };
+    intEl.innerHTML = intKeys.map(k => {
+      const v = intMap[k] || {};
+      const ok = v.ok === true;
+      return `<div class="setting-row">
+        <div class="setting-label">${names[k] || k}</div>
+        <div class="${ok ? 'setting-ok' : 'setting-miss'}">${ok ? 'Connected' : 'Error'}</div>
+      </div>`;
+    }).join('');
+  }
 }
 
 // ── Send Test Webhook / Simulate Dispute ─────────────────────────────────────
