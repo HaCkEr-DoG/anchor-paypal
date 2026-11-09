@@ -18,7 +18,7 @@ services:
       - key: PAYPAL_CLIENT_SECRET
         sync: false
       - key: PAYPAL_WEBHOOK_ID
-        sync: false
+        value: "86192318VE190694L"
       - key: PAYPAL_MERCHANT_ID
         sync: false
       - key: API_SECRET
@@ -83,6 +83,8 @@ services:
         value: "3600"
       - key: RECOVERY_MERCHANT_OPT_IN
         value: "0"
+      - key: ANCHOR_RETAIN_DAYS
+        value: "90"
       - key: PYTHON_VERSION
         value: "3.12.0"
 
@@ -146,5 +148,9 @@ services:
         value: "1"
       - key: APPROVAL_LINK_MAX_AGE
         value: "3600"
+      - key: ANCHOR_RETAIN_DAYS
+        value: "90"
+      - key: PAYPAL_WEBHOOK_ID
+        value: "86192318VE190694L"
       - key: PYTHON_VERSION
         value: "3.12.0"
