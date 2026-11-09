@@ -38,6 +38,23 @@ class Evidence:
     seller_account_age_days: int = 0
     seller_dispute_win_rate: float = 0.5  # historical win rate for this seller
 
+    # Channel3 product graph (live when CHANNEL3_API_KEY is set)
+    has_channel3_product_match: bool = False       # product found in 100M+ catalog
+    channel3_price_variance_pct: float = 1.0       # 0.0=exact match, 1.0=no data; <0.15 boosts SNAD
+    channel3_category_risk: float = 0.5            # 0=low-fraud category, 1=high-fraud
+
+    # Kernel stealth-browser evidence (live when KERNEL_API_KEY is set)
+    has_kernel_tracking_screenshot: bool = False   # visual delivery screenshot from carrier site
+    has_signature_confirmation: bool = False        # adult/direct signature on delivery
+
+    # Buyer risk signals (from fraud_detector)
+    buyer_prior_dispute_count: int = 0             # buyer's dispute history
+    is_first_purchase: bool = False                 # higher risk for unauthorized claims
+    shipping_matches_buyer_address: bool = True     # address mismatch → fraud signal
+
+    # Operational mode
+    is_automated_fight: bool = True                 # Anchor handles it; reduces time cost
+
 
 @dataclass
 class OracleDecision:
@@ -76,51 +93,122 @@ DEFAULT_HOURLY_RATE = 50.00  # Seller's implicit time cost to fight
 HOURS_TO_FIGHT = 1.5         # Realistic time to gather + submit evidence
 
 
-def score_evidence(evidence: Evidence, claim_type: ClaimType) -> float:
+def score_evidence(evidence: Evidence, claim_type: ClaimType) -> tuple[float, list[str]]:
     """
-    Returns a multiplier 0.5–1.4 applied to base win rate.
-    Strong evidence pushes above 1.0 (boosts probability).
-    Weak evidence pushes below 1.0.
-    """
-    score = 1.0
-    reasons = []
+    Returns (multiplier, reasons) where multiplier is in [0.40, 1.55].
 
+    Uses additive deltas on a base of 1.0 so each signal contributes a
+    bounded amount — no single piece of evidence can dominate the score.
+    Channel3 product data and Kernel screenshots are incorporated when live.
+    """
+    delta = 0.0
+    reasons: list[str] = []
+
+    # ── Claim-type primary evidence ──────────────────────────────────────────
     if claim_type == ClaimType.ITEM_NOT_RECEIVED:
         if evidence.has_tracking_number and evidence.has_delivery_confirmation:
-            score *= 1.35  # Near-certain win with confirmed delivery
+            delta += 0.38   # Both = near-certain proof of delivery
+            reasons.append("Tracking + confirmed delivery (+38%)")
+        elif evidence.has_tracking_number and evidence.has_kernel_tracking_screenshot:
+            delta += 0.35   # Kernel screenshot of carrier page is strong visual proof
+            reasons.append("Tracking + Kernel carrier screenshot (+35%)")
         elif evidence.has_tracking_number:
-            score *= 1.15
+            delta += 0.18
+            reasons.append("Tracking number present (+18%)")
         else:
-            score *= 0.55  # Without tracking, very hard to win INR
+            delta -= 0.42   # Without any tracking, INR is very hard to win
+            reasons.append("No tracking — hard to prove delivery (−42%)")
+
+        if evidence.has_signature_confirmation:
+            delta += 0.10   # Adult signature = additional layer of proof
+            reasons.append("Signature confirmation (+10%)")
 
     elif claim_type == ClaimType.SIGNIFICANTLY_NOT_AS_DESCRIBED:
         if evidence.has_item_description_proof and evidence.has_buyer_communication:
-            score *= 1.25  # Communication showing buyer accepted item = strong
+            delta += 0.28
+            reasons.append("Item description proof + buyer communication (+28%)")
         elif evidence.has_item_description_proof:
-            score *= 1.10
+            delta += 0.14
+            reasons.append("Item description proof (+14%)")
+
+        # Channel3: price match vs catalog is strong SNAD counter-evidence
+        if evidence.has_channel3_product_match:
+            if evidence.channel3_price_variance_pct < 0.05:
+                delta += 0.18   # Price exactly matches catalog → item is as described
+                reasons.append("Channel3: price within 5% of catalog (+18%)")
+            elif evidence.channel3_price_variance_pct < 0.15:
+                delta += 0.10
+                reasons.append("Channel3: price within 15% of catalog (+10%)")
+            else:
+                delta += 0.04   # At least product exists in catalog
+                reasons.append("Channel3: product found in catalog (+4%)")
+
         if evidence.has_digital_delivery_proof:
-            score *= 1.20  # Access logs are strong for digital goods
+            delta += 0.20   # Access/download logs are hard to fake
+            reasons.append("Digital delivery proof (access logs) (+20%)")
 
     elif claim_type == ClaimType.UNAUTHORIZED:
-        # Unauthorized claims are almost always lost — card issuer side
-        # Only fight if there's clear evidence the buyer themselves authorized
+        # Unauthorized: card-issuer sided. Base rate 10% — only fight with strong signals.
         if evidence.has_buyer_communication:
-            score *= 1.30  # Message saying "I authorize this" is gold
+            delta += 0.28   # Explicit authorization message is gold
+            reasons.append("Buyer authorization communication (+28%)")
+        if evidence.shipping_matches_buyer_address:
+            delta += 0.14   # Shipped to their address → unlikely truly unauthorized
+            reasons.append("Shipping matches buyer address on file (+14%)")
         else:
-            score *= 0.60  # Without this, accept and move on
+            delta -= 0.05
+            reasons.append("Address mismatch — elevated fraud signal (−5%)")
+        if evidence.is_first_purchase:
+            delta -= 0.08   # First-time buyers with unauthorized claims are riskier
+            reasons.append("First purchase — higher unauthorized risk (−8%)")
+        if not evidence.has_buyer_communication and not evidence.shipping_matches_buyer_address:
+            delta -= 0.10   # Both missing → almost certain loss
+            reasons.append("No communication + address mismatch (−10%)")
 
-    # Account history multipliers (trust signal for PayPal)
+    elif claim_type == ClaimType.BILLING_ISSUE:
+        if evidence.has_buyer_communication:
+            delta += 0.12
+            reasons.append("Buyer communication on record (+12%)")
+        if evidence.has_item_description_proof:
+            delta += 0.10
+            reasons.append("Item description documentation (+10%)")
+
+    # ── Buyer risk signals ───────────────────────────────────────────────────
+    if evidence.buyer_prior_dispute_count >= 3:
+        delta += 0.12   # Serial disputer — PayPal pattern-matches this
+        reasons.append(f"Buyer has {evidence.buyer_prior_dispute_count} prior disputes (+12%)")
+    elif evidence.buyer_prior_dispute_count == 0:
+        delta -= 0.03   # No history = neutral-to-slight positive for buyer
+        reasons.append("Buyer has no prior disputes (−3%)")
+
+    # Channel3 category risk (high-fraud categories: electronics, luxury, crypto)
+    if evidence.has_channel3_product_match and evidence.channel3_category_risk > 0.7:
+        delta -= 0.08
+        reasons.append("Channel3: high-fraud product category (−8%)")
+    elif evidence.has_channel3_product_match and evidence.channel3_category_risk < 0.3:
+        delta += 0.05
+        reasons.append("Channel3: low-fraud product category (+5%)")
+
+    # ── Seller account trust signals ─────────────────────────────────────────
     if evidence.seller_account_age_days > 365 * 3:
-        score *= 1.08  # 3+ year old account gets benefit of doubt
+        delta += 0.08
+        reasons.append("Seller account 3+ years old (+8%)")
+    elif evidence.seller_account_age_days > 365:
+        delta += 0.04
+        reasons.append("Seller account 1–3 years old (+4%)")
     elif evidence.seller_account_age_days < 90:
-        score *= 0.88  # New accounts are scrutinized more
+        delta -= 0.10
+        reasons.append("Seller account < 90 days — scrutinized more (−10%)")
 
-    if evidence.seller_dispute_win_rate > 0.7:
-        score *= 1.06  # Track record matters
-    elif evidence.seller_dispute_win_rate < 0.3:
-        score *= 0.90
+    if evidence.seller_dispute_win_rate > 0.70:
+        delta += 0.07
+        reasons.append(f"Seller win rate {evidence.seller_dispute_win_rate:.0%} (+7%)")
+    elif evidence.seller_dispute_win_rate < 0.30:
+        delta -= 0.08
+        reasons.append(f"Seller win rate {evidence.seller_dispute_win_rate:.0%} (−8%)")
 
-    return min(score, 1.45)  # Cap multiplier — probability can't exceed ~1.0 after base
+    multiplier = max(0.40, min(1.0 + delta, 1.55))
+    return multiplier, reasons
 
 
 def calculate(
@@ -187,27 +275,33 @@ def calculate(
     reasoning.append(f"Base win rate for {claim_type.value}: {p_base:.0%}")
 
     # Evidence-adjusted probability
-    evidence_multiplier = score_evidence(evidence, claim_type)
+    evidence_multiplier, evidence_reasons = score_evidence(evidence, claim_type)
+    reasoning.extend(evidence_reasons)
     p_win = min(p_base * evidence_multiplier, 0.95)  # Never claim 100%
 
     # Buyer risk boost from fraud detector (applied before historical blend)
     if buyer_risk_boost > 0:
         p_win = min(p_win + buyer_risk_boost, 0.95)
-        reasoning.append(f"Buyer risk boost applied: +{buyer_risk_boost:.0%} → {p_win:.0%}")
+        reasoning.append(f"Fraud detector boost: +{buyer_risk_boost:.0%} → {p_win:.0%}")
 
     # If we have historical data from Elasticsearch, blend it in (40% weight)
     if similar_dispute_win_rate is not None:
-        # Treat history as a probability input, not an unconstrained multiplier.
         historical_rate = min(max(float(similar_dispute_win_rate), 0.0), 1.0)
         p_win = min(max((p_win * 0.6) + (historical_rate * 0.4), 0.0), 0.95)
         reasoning.append(
-            f"Blended with {historical_rate:.0%} historical win rate "
-            f"from similar past disputes → adjusted to {p_win:.0%}"
+            f"Blended with {historical_rate:.0%} Elastic historical win rate → {p_win:.0%}"
         )
     else:
         reasoning.append(f"Evidence-adjusted win probability: {p_win:.0%}")
 
-    time_cost = HOURS_TO_FIGHT * seller_hourly_rate
+    # Automation discount: when Anchor fights autonomously, human time cost is
+    # ~10 min of oversight rather than 1.5h of manual evidence gathering.
+    if evidence.is_automated_fight:
+        time_cost = seller_hourly_rate * (10 / 60)   # 10 minutes
+        reasoning.append(f"Automated fight — time cost ${time_cost:.2f} (10 min oversight)")
+    else:
+        time_cost = HOURS_TO_FIGHT * seller_hourly_rate
+        reasoning.append(f"Manual fight — time cost ${time_cost:.2f} ({HOURS_TO_FIGHT}h)")
 
     # Break-even: solve EV(fight) = 0 for p analytically.
     # Standard tier: p*(A+15) = time+15  →  p = (time+15)/(A+15)
@@ -255,8 +349,21 @@ def calculate(
         recommendation = Recommendation.ACCEPT
         reasoning.append(f"→ ACCEPT: fighting costs more than it recovers (EV=${ev_fight:.2f})")
 
-    # Confidence: how far we are from the break-even threshold
-    confidence = min(abs(p_win - break_even) / 0.3, 1.0)  # 30% margin = max confidence
+    # Confidence: distance from break-even × evidence quality
+    # A strong decision far from break-even with rich evidence = high confidence.
+    # A borderline decision with minimal evidence = low confidence regardless of EV.
+    ev_clarity = min(abs(p_win - break_even) / 0.25, 1.0)  # 25% margin = full EV clarity
+    evidence_richness = sum([
+        evidence.has_tracking_number,
+        evidence.has_delivery_confirmation,
+        evidence.has_kernel_tracking_screenshot,
+        evidence.has_buyer_communication,
+        evidence.has_item_description_proof,
+        evidence.has_channel3_product_match,
+        evidence.has_digital_delivery_proof,
+        evidence.has_signature_confirmation,
+    ]) / 4.0   # 4 pieces = fully rich (diminishing returns beyond that)
+    confidence = round(min((ev_clarity * 0.65) + (min(evidence_richness, 1.0) * 0.35), 1.0), 3)
 
     # Urgency
     urgency_note = ""
@@ -269,7 +376,7 @@ def calculate(
         ev_fight=round(ev_fight, 2),
         ev_accept=round(ev_accept, 2),
         win_probability=round(p_win, 3),
-        confidence=round(confidence, 3),
+        confidence=confidence,
         break_even_probability=round(break_even, 3),
         reasoning=reasoning,
         time_to_respond_hours=deadline_hours,
