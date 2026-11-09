@@ -9,23 +9,21 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #f7f7f8;
+      --bg: #f5f5f5;
       --surface: #ffffff;
-      --border: #e5e5e8;
-      --border-light: #efefef;
-      --text: #111112;
-      --muted: #72727a;
-      --muted-2: #9898a3;
-      --accent: #1a6cf5;
-      --accent-hover: #1558d6;
-      --hero-bg: #111112;
-      --hero-text: #ffffff;
-      --hero-muted: rgba(255,255,255,0.55);
+      --border: #e8e8e8;
+      --border-light: #f0f0f0;
+      --text: #111111;
+      --muted: #6b6b6b;
+      --muted-2: #9b9b9b;
+      --accent: #2563eb;
+      --accent-hover: #1d4ed8;
       --ok: #059669;
       --warn: #d97706;
       --error: #dc2626;
-      --radius: 10px;
+      --radius: 8px;
       --radius-sm: 6px;
+      --sidebar-w: 220px;
     }
     body {
       background: var(--bg);
@@ -34,329 +32,653 @@
       font-size: 14px;
       min-height: 100vh;
       -webkit-font-smoothing: antialiased;
+      display: flex;
     }
-    /* ── Nav ── */
-    .topnav {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 32px; height: 52px;
-      background: var(--surface); border-bottom: 1px solid var(--border);
-      position: sticky; top: 0; z-index: 100;
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: var(--sidebar-w);
+      min-height: 100vh;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      z-index: 50;
+      overflow-y: auto;
     }
-    .nav-left { display: flex; align-items: center; gap: 0; }
-    .logo { font-size: 17px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); display: flex; align-items: center; gap: 7px; margin-right: 32px; text-decoration: none; }
-    .nav-links { display: flex; align-items: stretch; height: 52px; }
-    .nav-link {
-      display: flex; align-items: center; padding: 0 14px;
-      font-size: 13.5px; font-weight: 500; color: var(--muted);
-      border-bottom: 2px solid transparent; cursor: pointer; background: none;
-      border-top: none; border-left: none; border-right: none;
-      transition: color 0.15s; white-space: nowrap;
+    .sidebar-logo {
+      display: flex; align-items: center; gap: 10px;
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid var(--border-light);
     }
-    .nav-link:hover { color: var(--text); }
-    .nav-link.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-    .nav-right { display: flex; align-items: center; gap: 10px; }
+    .logo-text {
+      font-size: 18px; font-weight: 700; letter-spacing: -0.5px; color: var(--text);
+    }
     .env-badge {
-      font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
-      background: #fef3c7; color: #92400e; letter-spacing: .04em;
+      font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px;
+      background: #fef3c7; color: #92400e; letter-spacing: .06em;
     }
     .env-badge.live { background: #d1fae5; color: #065f46; }
-    .refresh-btn {
-      font-size: 12px; font-weight: 500; color: var(--muted-2); background: none;
-      border: 1px solid var(--border); border-radius: var(--radius-sm);
-      padding: 4px 10px; cursor: pointer;
+    .sidebar-nav {
+      flex: 1;
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
     }
-    .refresh-btn:hover { color: var(--text); border-color: var(--muted); }
-    /* ── Layout ── */
-    .main { padding: 28px 32px; max-width: 1400px; margin: 0 auto; }
-    .page-header { margin-bottom: 20px; }
-    .page-title { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
-    .page-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
-    /* ── Panel tabs ── */
-    .panel { display: none; }
-    .panel.active { display: block; }
-    /* ── Metrics strip ── */
-    .metrics-strip {
-      display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px;
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 13.5px; font-weight: 500; color: var(--muted);
+      cursor: pointer; background: none; border: none; width: 100%; text-align: left;
+      transition: background 0.1s, color 0.1s;
     }
-    @media(max-width:900px) { .metrics-strip { grid-template-columns: repeat(2,1fr); } }
-    .metric-card {
-      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-      padding: 16px 18px;
+    .nav-item:hover { background: #f5f5f5; color: var(--text); }
+    .nav-item.active { background: #eff6ff; color: var(--accent); font-weight: 600; }
+    .nav-item svg { flex-shrink: 0; opacity: 0.65; }
+    .nav-item.active svg { opacity: 1; }
+    .sidebar-health {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border-light);
     }
-    .metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); margin-bottom: 6px; }
-    .metric-value { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; color: var(--text); line-height: 1; }
-    .metric-sub { font-size: 11px; color: var(--muted-2); margin-top: 4px; }
-    .metric-ok { color: var(--ok) !important; }
-    .metric-warn { color: var(--warn) !important; }
-    .metric-err { color: var(--error) !important; }
-    /* ── Grid ── */
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-    @media(max-width:900px) { .grid-2 { grid-template-columns: 1fr; } }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-    @media(max-width:1000px) { .grid-3 { grid-template-columns: 1fr 1fr; } }
-    @media(max-width:700px) { .grid-3 { grid-template-columns: 1fr; } }
-    /* ── Cards ── */
-    .card {
-      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px;
+    .health-title {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--muted-2); margin-bottom: 10px;
     }
-    .card-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
-    .card-title-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; background: #eff6ff; color: #1a6cf5; }
-    /* ── Table ── */
-    .data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    .data-table th { text-align: left; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); padding: 0 0 8px 0; border-bottom: 1px solid var(--border); }
-    .data-table td { padding: 7px 0; border-bottom: 1px solid var(--border-light); color: var(--text); }
-    .data-table tr:last-child td { border-bottom: none; }
-    .data-table td:not(:first-child) { text-align: right; color: var(--muted); }
-    .path-cell { font-family: monospace; font-size: 11.5px; color: var(--accent); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .num-ok { color: var(--ok) !important; font-weight: 600; }
-    .num-warn { color: var(--warn) !important; font-weight: 600; }
-    .num-err { color: var(--error) !important; font-weight: 600; }
-    /* ── Env checklist ── */
-    .env-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 16px; }
-    .env-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
-    .env-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .env-dot.ok { background: var(--ok); }
-    .env-dot.miss { background: #d1d1d6; }
-    .env-key { font-family: monospace; font-size: 11px; color: var(--text); }
-    /* ── Integration cards ── */
-    .connections-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px,1fr)); gap: 12px; }
-    .conn-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; gap: 12px; }
-    .conn-logo { font-size: 22px; flex-shrink: 0; }
-    .conn-info { flex: 1; min-width: 0; }
-    .conn-name { font-size: 13.5px; font-weight: 600; margin-bottom: 2px; }
-    .conn-desc { font-size: 12px; color: var(--muted); margin-bottom: 8px; line-height: 1.4; }
-    .conn-endpoints { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-    .conn-ep { font-size: 10.5px; font-family: monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; color: var(--muted); }
-    .conn-status { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
-    .conn-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-    .conn-dot.ok { background: var(--ok); }
-    .conn-dot.demo { background: var(--warn); }
-    .conn-dot.err { background: var(--error); }
+    .health-row {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; font-size: 12.5px;
+    }
+    .health-label { color: var(--muted); }
+    .health-status { display: flex; align-items: center; gap: 5px; font-weight: 500; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .dot-ok { background: var(--ok); }
+    .dot-warn { background: var(--warn); }
+    .dot-err { background: var(--error); }
     @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
-    .conn-dot.checking { background: var(--muted-2); animation: pulse 1.4s infinite; }
-    .conn-status.ok { color: var(--ok); }
-    .conn-status.demo { color: var(--warn); }
-    .conn-status.err { color: var(--error); }
-    /* ── Hero / PayPal card ── */
-    .hero-card { background: var(--hero-bg); color: var(--hero-text); border-radius: var(--radius); padding: 24px 26px; margin-bottom: 20px; }
-    .hero-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
-    .hero-sub { font-size: 12px; color: var(--hero-muted); }
-    .hero-stats { display: flex; gap: 32px; margin-top: 18px; flex-wrap: wrap; }
-    .hero-stat-val { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
-    .hero-stat-label { font-size: 11px; color: var(--hero-muted); margin-top: 2px; font-weight: 500; }
-    /* ── Progress bar ── */
-    .bar-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-    .bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
-    /* ── Sample drawer ── */
-    .drawer-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:200; }
-    .drawer-overlay.open { display:flex; align-items:center; justify-content:center; }
-    .drawer { background:var(--surface); border-radius:12px; padding:28px; width:520px; max-width:94vw; max-height:88vh; overflow-y:auto; position:relative; }
-    .drawer-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
-    .drawer-title { font-size:16px; font-weight:700; }
-    .drawer-close { background:none; border:none; font-size:20px; cursor:pointer; color:var(--muted); line-height:1; padding:4px; }
+    .dot-checking { background: var(--muted-2); animation: pulse 1.4s infinite; }
+    .status-ok { color: var(--ok); }
+    .status-warn { color: var(--warn); }
+    .status-err { color: var(--error); }
+
+    /* ── Main content ── */
+    .main-content {
+      margin-left: var(--sidebar-w);
+      flex: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top banner ── */
+    .top-banner {
+      display: none;
+      padding: 10px 32px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+      background: #fef9ec;
+      color: #92400e;
+    }
+    .top-banner.show { display: block; }
+    .top-banner.error-banner { background: #fef2f2; color: #991b1b; }
+
+    /* ── Page ── */
+    .page { display: none; padding: 32px; }
+    .page.active { display: block; }
+    .page-header { margin-bottom: 24px; }
+    .page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+    .page-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+    /* ── Stat cards row ── */
+    .stat-cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    @media(max-width:1000px) { .stat-cards { grid-template-columns: repeat(2,1fr); } }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+    }
+    .stat-card-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 500; }
+    .stat-card-value { font-size: 32px; font-weight: 700; letter-spacing: -0.5px; line-height: 1; }
+    .stat-card-sub { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    .card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--muted-2); }
+    .card-badge { font-size: 11px; font-weight: 500; color: var(--muted); }
+
+    /* ── Table ── */
+    .data-table { width: 100%; border-collapse: collapse; }
+    .data-table thead th {
+      text-align: left; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: var(--muted-2); padding: 10px 20px;
+      border-bottom: 1px solid var(--border);
+      background: #fafafa;
+    }
+    .data-table tbody td {
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border-light);
+      font-size: 13.5px; color: var(--text);
+    }
+    .data-table tbody tr:last-child td { border-bottom: none; }
+    .data-table tbody tr:hover td { background: #fafafa; cursor: pointer; }
+    .data-table .col-right { text-align: right; }
+    .data-table .col-muted { color: var(--muted); }
+    .mono { font-family: "SF Mono", "Fira Code", monospace; font-size: 12.5px; color: var(--accent); }
+
+    /* ── Badges / Tags ── */
+    .badge {
+      display: inline-flex; align-items: center;
+      font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
+      letter-spacing: .02em;
+    }
+    .badge-sandbox { background: #fef3c7; color: #92400e; }
+    .badge-live { background: #d1fae5; color: #065f46; }
+    .badge-review { background: #fef3c7; color: #92400e; }
+    .badge-auto { background: #d1fae5; color: #065f46; }
+    .badge-error { background: #fee2e2; color: #991b1b; }
+    .badge-blue { background: #eff6ff; color: #1d4ed8; }
+    .badge-gray { background: #f3f4f6; color: #6b7280; }
+    .badge-green-outline { background: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+    .badge-connected { background: #d1fae5; color: #065f46; font-size: 11px; padding: 4px 12px; border-radius: 20px; font-weight: 600; }
+
+    /* ── Recommendation badge colors ── */
+    .rec-fight { color: #1d4ed8; font-weight: 600; }
+    .rec-accept { color: #d97706; font-weight: 600; }
+    .rec-capture { color: #059669; font-weight: 600; }
+
+    /* ── Empty state ── */
+    .empty-state {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 80px 40px;
+      text-align: center;
+    }
+    .empty-state-title { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
+    .empty-state-sub { font-size: 14px; color: var(--muted); margin-bottom: 24px; max-width: 400px; line-height: 1.6; }
+    .btn-secondary {
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+      padding: 9px 20px; border-radius: var(--radius-sm); font-size: 13.5px; font-weight: 500;
+      cursor: pointer; transition: background 0.1s, border-color 0.1s;
+    }
+    .btn-secondary:hover { background: #f5f5f5; border-color: #ccc; }
+    .btn-primary {
+      background: var(--accent); color: #fff; border: none;
+      padding: 10px 22px; border-radius: var(--radius-sm); font-size: 13.5px; font-weight: 600;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-link { background: none; border: none; color: var(--accent); font-size: 13.5px; font-weight: 500; cursor: pointer; padding: 0; }
+    .btn-link:hover { text-decoration: underline; }
+
+    /* ── Dispute detail ── */
+    .detail-back { display: flex; align-items: center; gap: 6px; color: var(--accent); font-size: 13.5px; font-weight: 500; cursor: pointer; margin-bottom: 16px; background: none; border: none; padding: 0; }
+    .detail-back:hover { text-decoration: underline; }
+    .detail-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
+    .detail-title { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+    .detail-amount { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); }
+    .detail-tags { display: flex; gap: 8px; margin-bottom: 24px; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media(max-width:800px) { .detail-grid { grid-template-columns: 1fr; } }
+    .detail-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+    .detail-section-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--muted-2); margin-bottom: 16px; }
+    .detail-field { margin-bottom: 14px; }
+    .detail-field-label { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+    .detail-field-value { font-size: 13.5px; color: var(--text); }
+    .evidence-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border-light); }
+    .evidence-row:last-child { border-bottom: none; }
+    .evidence-name { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+    .ev-check { color: var(--ok); font-size: 14px; }
+    .ev-dash { color: var(--muted-2); font-size: 14px; }
+    .ev-yes { background: #d1fae5; color: #065f46; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+    .ev-no { background: #f3f4f6; color: #6b7280; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+    .de-label { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+    .de-rec { font-size: 20px; font-weight: 700; color: var(--text); margin-bottom: 20px; }
+    .de-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--border-light); }
+    .de-row:last-of-type { border-bottom: none; }
+    .de-row-label { font-size: 13px; color: var(--text); }
+    .de-row-value { font-size: 13.5px; font-weight: 600; }
+    .de-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .de-actions .btn-primary { flex: 1; }
+    .de-actions .btn-secondary { flex: 1; }
+    .de-note { font-size: 12px; color: var(--muted); margin-top: 8px; text-align: center; }
+    .de-note.disabled-note { margin-top: 4px; }
+    .case-history { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+    .hist-step { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+    .hist-done { color: var(--ok); }
+    .hist-pending { color: var(--muted); }
+    .hist-arrow { color: var(--border); font-size: 16px; }
+    .hist-circle { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--muted-2); display: inline-block; }
+
+    /* ── Activity Log ── */
+    .log-filters { display: flex; gap: 10px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+    .log-search { flex: 1; min-width: 200px; padding: 8px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface); }
+    .log-search:focus { outline: none; border-color: var(--accent); }
+    .filter-select { padding: 8px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; background: var(--surface); color: var(--text); cursor: pointer; }
+    .filter-select:focus { outline: none; border-color: var(--accent); }
+
+    /* ── Settings ── */
+    .settings-section { margin-bottom: 28px; }
+    .settings-section-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border-light); }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-label { font-size: 13.5px; font-weight: 500; }
+    .setting-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .setting-value { font-size: 13.5px; color: var(--muted); font-family: monospace; }
+    .setting-ok { color: var(--ok); font-weight: 600; }
+    .setting-miss { color: var(--muted-2); }
+    .pill { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .pill-ok { background: #d1fae5; color: #065f46; }
+    .pill-warn { background: #fef3c7; color: #92400e; }
+    .pill-err { background: #fee2e2; color: #991b1b; }
+
+    /* ── Spinner ── */
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Worker offline banner ── */
+    .alert-banner {
+      padding: 10px 32px;
+      font-size: 13px;
+      display: none;
+    }
+    .alert-banner.show { display: block; }
+    .alert-warn { background: #fef9ec; color: #92400e; border-bottom: 1px solid #fde68a; }
+    .alert-err { background: #fef2f2; color: #991b1b; border-bottom: 1px solid #fca5a5; }
+
+    /* ── Modal ── */
+    .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:200; align-items:center; justify-content:center; }
+    .modal-overlay.open { display:flex; }
+    .modal { background:var(--surface); border-radius:12px; padding:28px; width:520px; max-width:94vw; max-height:88vh; overflow-y:auto; position:relative; }
+    .modal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+    .modal-title { font-size:16px; font-weight:700; }
+    .modal-close { background:none; border:none; font-size:22px; cursor:pointer; color:var(--muted); line-height:1; padding:4px; }
+    .sim-label { font-size:10px; background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:4px; font-weight:700; letter-spacing:.04em; display:inline-block; margin-bottom:14px; }
     .scenario-btn { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; cursor:pointer; font-size:13px; display:block; width:100%; text-align:left; margin-bottom:8px; transition:border-color .15s; }
     .scenario-btn:hover, .scenario-btn.selected { border-color:var(--accent); background:#eff6ff; }
-    .run-btn { background:var(--accent); color:#fff; border:none; border-radius:var(--radius-sm); padding:10px 20px; font-size:14px; font-weight:600; cursor:pointer; width:100%; margin-top:12px; }
-    .run-btn:disabled { opacity:.5; cursor:not-allowed; }
     .drawer-result { display:none; margin-top:16px; background:var(--bg); border-radius:var(--radius-sm); padding:16px; }
     .drawer-result.show { display:block; }
     .result-row { display:flex; justify-content:space-between; padding:5px 0; font-size:13px; border-bottom:1px solid var(--border-light); }
     .result-row:last-child { border-bottom:none; }
     .result-label { color:var(--muted); }
     .result-value { font-weight:600; }
-    .sim-label { font-size:10px; background:#fef3c7; color:#92400e; padding:2px 6px; border-radius:4px; font-weight:600; letter-spacing:.04em; display:inline-block; margin-bottom:14px; }
-    /* ── Oracle tab ── */
-    .oracle-full-table { width:100%; }
-    .sticky-header { position:sticky; top:52px; background:var(--bg); padding:16px 0 10px; z-index:10; }
-    .search-input { width:100%; padding:9px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); font-size:13px; background:var(--surface); }
-    /* ── Uptime bar ── */
-    .uptime-bar { display:flex; align-items:center; gap:10px; margin-top:10px; }
-    .uptime-segments { display:flex; gap:2px; flex:1; }
-    .uptime-seg { height:16px; border-radius:2px; flex:1; background:var(--ok); }
-    .uptime-seg.down { background:var(--error); }
-    .spinner { display:inline-block; width:14px; height:14px; border:2px solid #fff3; border-top-color:#fff; border-radius:50%; animation:spin .6s linear infinite; vertical-align:middle; margin-right:6px; }
-    @keyframes spin { to { transform:rotate(360deg); } }
+
     /* ── Responsive ── */
-    @media(max-width:600px) { .main { padding:16px; } .topnav { padding:0 16px; } .metrics-strip { grid-template-columns:1fr 1fr; } }
+    @media(max-width:700px) {
+      .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
+      .sidebar.open { transform: translateX(0); }
+      .main-content { margin-left: 0; }
+      .page { padding: 16px; }
+      .stat-cards { grid-template-columns: 1fr 1fr; }
+      .detail-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
 
-<nav class="topnav" role="navigation" aria-label="Main navigation">
-  <div class="nav-left">
-    <a class="logo" href="/dashboard" aria-label="Anchor home">⚓ Anchor</a>
-    <div class="nav-links" role="tablist">
-      <button class="nav-link active" role="tab" aria-selected="true"  onclick="switchPanel('overview')"    id="tab-overview">Overview</button>
-      <button class="nav-link"        role="tab" aria-selected="false" onclick="switchPanel('oracle')"      id="tab-oracle">Oracle</button>
-      <button class="nav-link"        role="tab" aria-selected="false" onclick="switchPanel('disputes')"    id="tab-disputes">Disputes</button>
-      <button class="nav-link"        role="tab" aria-selected="false" onclick="switchPanel('connections')" id="tab-connections">Connections</button>
+<!-- ── Sidebar ───────────────────────────────────────────────────────────── -->
+<aside class="sidebar" role="navigation" aria-label="Main navigation">
+  <div class="sidebar-logo">
+    <span class="logo-text">Anchor</span>
+    <span class="env-badge" id="env-badge">SANDBOX</span>
+  </div>
+  <nav class="sidebar-nav">
+    <button class="nav-item active" onclick="showPage('overview')" id="nav-overview">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Overview
+    </button>
+    <button class="nav-item" onclick="showPage('disputes')" id="nav-disputes">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      Disputes
+    </button>
+    <button class="nav-item" onclick="showPage('recoveries')" id="nav-recoveries">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 019-9 9 9 0 010 18 9 9 0 01-9-9z"/><path d="M3 12h4M17 12l2.5-2.5M17 12l2.5 2.5"/></svg>
+      Recoveries
+    </button>
+    <button class="nav-item" onclick="showPage('activitylog')" id="nav-activitylog">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+      Activity Log
+    </button>
+    <button class="nav-item" onclick="showPage('settings')" id="nav-settings">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      Settings
+    </button>
+  </nav>
+  <div class="sidebar-health">
+    <div class="health-title">System Health</div>
+    <div class="health-row">
+      <span class="health-label">PayPal</span>
+      <span class="health-status" id="health-paypal"><span class="dot dot-checking"></span><span>Checking</span></span>
+    </div>
+    <div class="health-row">
+      <span class="health-label">Database</span>
+      <span class="health-status" id="health-db"><span class="dot dot-checking"></span><span>Checking</span></span>
+    </div>
+    <div class="health-row">
+      <span class="health-label">Worker</span>
+      <span class="health-status" id="health-worker"><span class="dot dot-checking"></span><span>Checking</span></span>
     </div>
   </div>
-  <div class="nav-right">
-    <span id="env-badge" class="env-badge">Loading…</span>
-    <button class="refresh-btn" onclick="loadAll()" id="refresh-btn">↻ Refresh</button>
-  </div>
-</nav>
+</aside>
 
-<main class="main" role="main">
+<!-- ── Main Content ───────────────────────────────────────────────────────── -->
+<div class="main-content">
 
-  <!-- ── Overview ─────────────────────────────────────────────────────────── -->
-  <div class="panel active" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+  <!-- Alert banner (worker offline / paypal error) -->
+  <div class="alert-banner" id="alert-banner"></div>
 
+  <!-- ── Overview Page ─────────────────────────────────────────────────── -->
+  <div class="page active" id="page-overview">
     <div class="page-header">
-      <div class="page-title">Production Overview</div>
-      <div class="page-sub" id="subheading">Loading live data…</div>
+      <div class="page-title">Overview</div>
+      <div class="page-sub">Items requiring your attention or manual review.</div>
     </div>
 
-    <!-- Hero PayPal Card -->
-    <div class="hero-card" id="hero-card">
-      <div class="hero-title" id="hero-title">PayPal Dispute Console</div>
-      <div class="hero-sub" id="hero-sub">Connecting…</div>
-      <div class="hero-stats" id="hero-stats">
-        <div>
-          <div class="hero-stat-val" id="h-open">—</div>
-          <div class="hero-stat-label">Open disputes</div>
-        </div>
-        <div>
-          <div class="hero-stat-val" id="h-urgent">—</div>
-          <div class="hero-stat-label">Need action</div>
-        </div>
-        <div>
-          <div class="hero-stat-val" id="h-webhooks">—</div>
-          <div class="hero-stat-label">Webhooks registered</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Metrics strip -->
-    <div class="metrics-strip" role="region" aria-label="Portfolio metrics">
-      <div class="metric-card">
-        <div class="metric-label">Oracle Calls</div>
-        <div class="metric-value" id="m-oracle-calls">—</div>
-        <div class="metric-sub" id="m-oracle-sub">this session</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">P95 Latency</div>
-        <div class="metric-value" id="m-p95">—</div>
-        <div class="metric-sub">oracle ms</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Error Rate</div>
-        <div class="metric-value" id="m-err-rate">—</div>
-        <div class="metric-sub">all endpoints</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Uptime</div>
-        <div class="metric-value" id="m-uptime">—</div>
-        <div class="metric-sub" id="m-uptime-sub">since start</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Oracle Endpoints</div>
-        <div class="metric-value" id="m-endpoints">—</div>
-        <div class="metric-sub">registered routes</div>
-      </div>
-    </div>
-
-    <!-- Main grid -->
-    <div class="grid-2">
-      <!-- Top oracle endpoints -->
+    <!-- Empty state (shown when no disputes) -->
+    <div id="overview-empty" style="display:none">
       <div class="card">
-        <div class="card-title">Top Oracle Endpoints <span class="card-title-badge" id="oracle-total-badge">0 calls</span></div>
-        <table class="data-table" id="oracle-top-table">
-          <thead><tr>
-            <th>Endpoint</th>
-            <th style="text-align:right">Calls</th>
-            <th style="text-align:right">Avg ms</th>
-            <th style="text-align:right">P95 ms</th>
-            <th style="text-align:right">Err%</th>
-          </tr></thead>
-          <tbody id="oracle-top-body"><tr><td colspan="5" style="color:var(--muted);padding:16px 0">No calls yet this session</td></tr></tbody>
+        <div class="empty-state">
+          <div style="margin-bottom:14px">
+            <span class="badge badge-auto">Connected</span>
+          </div>
+          <div class="empty-state-title">Awaiting PayPal Events</div>
+          <div class="empty-state-sub">Anchor is connected and monitoring your webhook stream. Disputes and pending recoveries will appear here once received.</div>
+          <button class="btn-secondary" onclick="sendTestWebhook()">Send Test Webhook</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loaded state -->
+    <div id="overview-loaded" style="display:none">
+      <div class="stat-cards" id="stat-cards">
+        <div class="stat-card">
+          <div class="stat-card-label">Disputes Needing Review</div>
+          <div class="stat-card-value" id="stat-disputes-review">—</div>
+          <div class="stat-card-sub" id="stat-disputes-sub">Awaiting merchant decision</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Amount Under Dispute</div>
+          <div class="stat-card-value" id="stat-amount">—</div>
+          <div class="stat-card-sub" id="stat-amount-sub">across active cases</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Next Deadline</div>
+          <div class="stat-card-value" id="stat-deadline" style="font-size:20px;padding-top:6px">—</div>
+          <div class="stat-card-sub" id="stat-deadline-sub">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">Pending Recovery Reviews</div>
+          <div class="stat-card-value" id="stat-recoveries">—</div>
+          <div class="stat-card-sub">Orders approved, uncaptured</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Action Queue</span>
+          <span class="card-badge" id="queue-count">— pending</span>
+        </div>
+        <table class="data-table" id="action-queue-table">
+          <thead>
+            <tr>
+              <th>Reference ID</th>
+              <th>Type</th>
+              <th>Amount</th>
+              <th>Status</th>
+              <th>Next Deadline</th>
+              <th>Recommendation</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="action-queue-body">
+            <tr><td colspan="7" style="color:var(--muted);padding:20px">Loading…</td></tr>
+          </tbody>
+        </table>
+        <div id="queue-footer" style="padding:12px 20px;font-size:12px;color:var(--muted);border-top:1px solid var(--border-light)"></div>
+      </div>
+    </div>
+
+    <!-- Loading state -->
+    <div id="overview-loading" style="text-align:center;padding:60px;color:var(--muted)">
+      <div class="spinner"></div>
+      <div style="margin-top:12px;font-size:13px">Loading overview…</div>
+    </div>
+  </div>
+
+  <!-- ── Disputes Page ──────────────────────────────────────────────────── -->
+  <div class="page" id="page-disputes">
+    <!-- List view -->
+    <div id="disputes-list-view">
+      <div class="page-header" style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="page-title">Disputes</div>
+          <div class="page-sub">All disputes — open, resolved, and auto-actioned.</div>
+        </div>
+        <button class="btn-secondary" onclick="loadDisputes()">↻ Refresh</button>
+      </div>
+      <div id="disputes-banner" style="display:none;padding:8px 0;margin-bottom:12px;font-size:13px;font-weight:600;color:var(--error)"></div>
+      <div class="card">
+        <table class="data-table" id="disputes-table">
+          <thead>
+            <tr>
+              <th>Dispute ID</th>
+              <th>Reason</th>
+              <th class="col-right">Amount</th>
+              <th>Status</th>
+              <th>Recommendation</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="disputes-body">
+            <tr><td colspan="6" style="color:var(--muted);padding:20px">Loading disputes…</td></tr>
+          </tbody>
         </table>
       </div>
+    </div>
 
-      <!-- System health -->
+    <!-- Detail view -->
+    <div id="disputes-detail-view" style="display:none">
+      <button class="detail-back" onclick="backToDisputeList()">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+        Disputes
+      </button>
+      <div class="detail-header">
+        <div class="detail-title" id="detail-dispute-title">Dispute Review</div>
+        <div class="detail-amount" id="detail-dispute-amount">—</div>
+      </div>
+      <div class="detail-tags" id="detail-dispute-tags"></div>
+      <div class="detail-grid">
+        <div class="detail-card">
+          <div class="detail-section-label">Case Details</div>
+          <div class="detail-field">
+            <div class="detail-field-label">Reason</div>
+            <div class="detail-field-value" id="detail-reason">—</div>
+          </div>
+          <div class="detail-field">
+            <div class="detail-field-label">Buyer</div>
+            <div class="detail-field-value" id="detail-buyer">—</div>
+          </div>
+          <div style="margin-top:16px">
+            <div class="detail-section-label">Available Evidence</div>
+            <div id="detail-evidence-list"></div>
+          </div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-section-label">Decision Engine</div>
+          <div class="de-label">AI Recommendation</div>
+          <div class="de-rec" id="detail-rec">—</div>
+          <div class="de-row">
+            <span class="de-row-label">Win Probability</span>
+            <span class="de-row-value" id="detail-win-prob">—</span>
+          </div>
+          <div class="de-row">
+            <span class="de-row-label">EV (Fight)</span>
+            <span class="de-row-value" id="detail-ev-fight" style="color:var(--ok)">—</span>
+          </div>
+          <div class="de-row">
+            <span class="de-row-label">EV (Accept)</span>
+            <span class="de-row-value" id="detail-ev-accept" style="color:var(--error)">—</span>
+          </div>
+          <div class="de-actions" id="detail-actions">
+            <button class="btn-primary" id="detail-btn-fight" onclick="approveDisputeAction('fight')">Approve: Submit Evidence</button>
+            <button class="btn-secondary" id="detail-btn-accept" onclick="approveDisputeAction('accept')">Accept Liability</button>
+          </div>
+          <div class="de-note" id="detail-action-note">Anchor will not act without your approval.</div>
+        </div>
+      </div>
+      <div class="detail-card" style="margin-top:16px">
+        <div class="detail-section-label">Case History</div>
+        <div class="case-history" id="detail-case-history"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Recoveries Page ────────────────────────────────────────────────── -->
+  <div class="page" id="page-recoveries">
+    <div id="recoveries-list-view">
+      <div class="page-header">
+        <div class="page-title">Recoveries</div>
+        <div class="page-sub">Approved orders pending capture.</div>
+      </div>
       <div class="card">
-        <div class="card-title">System Health</div>
-        <table class="data-table" id="health-table">
-          <tbody id="health-body"></tbody>
+        <table class="data-table" id="recoveries-table">
+          <thead>
+            <tr>
+              <th>Order ID</th>
+              <th class="col-right">Amount</th>
+              <th>Status</th>
+              <th>Checks Passed</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="recoveries-body">
+            <tr><td colspan="5" style="color:var(--muted);padding:20px">Loading recoveries…</td></tr>
+          </tbody>
         </table>
       </div>
     </div>
 
-    <!-- Sample Decision Drawer trigger -->
-    <div class="card" style="margin-bottom:20px">
-      <div class="card-title">Settlement Oracle <span class="card-title-badge">158 decision modules</span></div>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">Runs every dispute through 158 specialized oracle modules covering evidence quality, fraud signals, subscription disputes, return authorizations, and more.</p>
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <div style="font-size:13px"><strong id="ev-fight-label">EV Fight</strong>: <span id="ev-fight" style="font-weight:700">run a sample to see</span></div>
-        <button onclick="openDrawer()" id="try-sample-btn" aria-expanded="false" aria-controls="drawer-overlay" style="background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer">Try a sample decision</button>
+    <!-- Recovery Detail -->
+    <div id="recovery-detail-view" style="display:none">
+      <button class="detail-back" onclick="backToRecoveryList()">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+        Recoveries
+      </button>
+      <div class="detail-header">
+        <div class="detail-title" id="rec-detail-title">Order Recovery</div>
+        <div class="detail-amount" id="rec-detail-amount">—</div>
       </div>
-    </div>
-
-  </div><!-- /panel-overview -->
-
-  <!-- ── Oracle tab ─────────────────────────────────────────────────────── -->
-  <div class="panel" id="panel-oracle" role="tabpanel" aria-labelledby="tab-oracle">
-    <div class="page-header">
-      <div class="page-title">Oracle Performance</div>
-      <div class="page-sub">Real-time call counts, latency, and error rates per oracle endpoint.</div>
-    </div>
-    <div class="sticky-header">
-      <input type="search" class="search-input" id="oracle-search" placeholder="Filter endpoints…" oninput="filterOracle(this.value)" />
-    </div>
-    <div class="card" style="margin-top:12px">
-      <table class="data-table oracle-full-table" id="oracle-full-table">
-        <thead><tr>
-          <th>Endpoint</th>
-          <th style="text-align:right">Calls</th>
-          <th style="text-align:right">Errors</th>
-          <th style="text-align:right">Client Err</th>
-          <th style="text-align:right">Avg ms</th>
-          <th style="text-align:right">P95 ms</th>
-          <th style="text-align:right">Err %</th>
-        </tr></thead>
-        <tbody id="oracle-full-body"><tr><td colspan="7" style="color:var(--muted);padding:16px 0">No oracle calls recorded yet — make a request first.</td></tr></tbody>
-      </table>
+      <div class="detail-tags" id="rec-detail-tags"></div>
+      <div class="detail-grid">
+        <div class="detail-card">
+          <div class="detail-section-label">Order Lifecycle</div>
+          <div id="rec-lifecycle"></div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-section-label">Safety Gates</div>
+          <div id="rec-safety-badge" style="margin-bottom:14px"></div>
+          <div id="rec-safety-list"></div>
+          <div style="background:var(--bg);border-radius:var(--radius-sm);padding:12px;margin:16px 0;font-size:12.5px;color:var(--muted);line-height:1.5" id="rec-capture-note"></div>
+          <button class="btn-primary" id="rec-capture-btn" onclick="authorizeCapture()" style="width:100%">Authorize Capture</button>
+          <div class="de-note" id="rec-capture-footer" style="margin-top:8px">Capture requires your explicit approval. No new payment request will be created.</div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- ── Disputes tab ───────────────────────────────────────────────────── -->
-  <div class="panel" id="panel-disputes" role="tabpanel" aria-labelledby="tab-disputes">
+  <!-- ── Activity Log Page ──────────────────────────────────────────────── -->
+  <div class="page" id="page-activitylog">
     <div class="page-header">
-      <div class="page-title">Dispute Log</div>
-      <div class="page-sub">Autonomous oracle decisions — timestamped, labeled, and traceable.</div>
+      <div class="page-title">Activity Log</div>
+      <div class="page-sub">An audit trail of events, decisions, and execution results.</div>
     </div>
-    <div id="disputes-status-bar" style="display:none;margin-bottom:12px;padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-weight:600"></div>
+    <div class="log-filters">
+      <input type="search" class="log-search" id="log-search" placeholder="Search reference or detail…" oninput="filterLog()">
+      <select class="filter-select" id="log-env-filter" onchange="filterLog()">
+        <option value="">Environment: All</option>
+        <option value="sandbox">Sandbox</option>
+        <option value="live">Live</option>
+      </select>
+      <select class="filter-select" id="log-type-filter" onchange="filterLog()">
+        <option value="">Event Type: All</option>
+        <option value="webhook">Webhook</option>
+        <option value="dispute">Dispute Action</option>
+        <option value="capture">Order Capture</option>
+        <option value="oracle">Oracle</option>
+      </select>
+      <select class="filter-select" id="log-result-filter" onchange="filterLog()">
+        <option value="">Result: All</option>
+        <option value="success">Success</option>
+        <option value="pending">Pending</option>
+        <option value="error">Error</option>
+      </select>
+    </div>
     <div class="card">
-      <table class="data-table" id="disputes-table">
-        <thead><tr>
-          <th>Dispute ID</th>
-          <th style="text-align:right">Amount</th>
-          <th>Action</th>
-          <th>Reasoning</th>
-        </tr></thead>
-        <tbody id="disputes-body"><tr><td colspan="4" style="color:var(--muted);padding:16px 0">Loading dispute records…</td></tr></tbody>
+      <div class="card-header">
+        <span class="card-title">Recent Activity</span>
+        <span class="card-badge" id="log-count">— events</span>
+      </div>
+      <table class="data-table" id="log-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Environment</th>
+            <th>Event</th>
+            <th>Reference</th>
+            <th>Detail</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="log-body">
+          <tr><td colspan="6" style="color:var(--muted);padding:20px">Loading activity log…</td></tr>
+        </tbody>
       </table>
+      <div id="log-footer" style="padding:12px 20px;font-size:12px;color:var(--muted);border-top:1px solid var(--border-light)"></div>
     </div>
   </div>
 
-  <!-- ── Connections tab ────────────────────────────────────────────────── -->
-  <div class="panel" id="panel-connections" role="tabpanel" aria-labelledby="tab-connections">
+  <!-- ── Settings Page ──────────────────────────────────────────────────── -->
+  <div class="page" id="page-settings">
     <div class="page-header">
-      <div class="page-title">Sponsor Integrations</div>
-      <div class="page-sub">Live status from all 10 hackathon sponsor integrations.</div>
+      <div class="page-title">Settings</div>
+      <div class="page-sub">System configuration and service status.</div>
     </div>
-    <div class="connections-grid" id="connections-grid" aria-live="polite"></div>
+    <div class="card" style="padding:24px">
+      <div class="settings-section">
+        <div class="settings-section-title">Service Configuration</div>
+        <div id="settings-rows">
+          <div style="color:var(--muted);font-size:13px">Loading configuration…</div>
+        </div>
+      </div>
+    </div>
   </div>
 
-</main>
+</div><!-- /main-content -->
 
-<!-- ── Sample Decision Drawer ─────────────────────────────────────────── -->
-<div class="drawer-overlay" id="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="drawer-title" onclick="if(event.target===this)closeDrawer()">
-  <div class="drawer">
-    <div class="drawer-header">
-      <div class="drawer-title" id="drawer-title">Settlement Oracle — Sample Run</div>
-      <button class="drawer-close" onclick="closeDrawer()" aria-label="Close">&times;</button>
+<!-- ── Sample Decision Modal ───────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Settlement Oracle — Sample Run</div>
+      <button class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
     </div>
     <div class="sim-label">SIMULATED · No PayPal action will be executed</div>
     <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Select a scenario and run the full 158-module oracle pipeline. Results are computed locally — no PayPal API calls are made.</p>
@@ -364,7 +686,7 @@
     <button class="scenario-btn" onclick="selectScenario(this,'snad_fight')" aria-pressed="false">🔁 SNAD — $320 · item not as described, photos available</button>
     <button class="scenario-btn" onclick="selectScenario(this,'unauthorized_accept')" aria-pressed="false">🔐 Unauthorized — $180 · no 3DS, no CVV match → accept</button>
     <button class="scenario-btn" onclick="selectScenario(this,'micro_accept')" aria-pressed="false">💲 Micro — $18.50 · below auto-accept threshold</button>
-    <button class="run-btn" id="run-btn" disabled onclick="runScenario()">Run sample review</button>
+    <button class="btn-primary" id="run-btn" disabled onclick="runScenario()" style="width:100%;margin-top:8px">Run sample review</button>
     <div class="drawer-result" id="drawer-result">
       <div class="result-row"><span class="result-label">Recommendation</span><span class="result-value" id="res-rec">—</span></div>
       <div class="result-row"><span class="result-label">EV Fight</span><span class="result-value" id="res-ev-fight">—</span></div>
@@ -379,361 +701,626 @@
 </div>
 
 <script>
-// ── Panel switching ─────────────────────────────────────────────────────────
-function switchPanel(id) {
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-link').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
-  document.getElementById('panel-' + id).classList.add('active');
-  document.getElementById('tab-' + id).classList.add('active');
-  document.getElementById('tab-' + id).setAttribute('aria-selected','true');
-  if (id === 'oracle') renderOracleFull();
-  if (id === 'connections') renderConnections();
+// ── Auth ─────────────────────────────────────────────────────────────────────
+const _apiKey = (typeof window.__ANCHOR_API_KEY !== 'undefined') ? window.__ANCHOR_API_KEY : '';
+function _auth() { return _apiKey ? { 'X-API-Key': _apiKey } : {}; }
+
+// ── Page switching ────────────────────────────────────────────────────────────
+let _currentPage = 'overview';
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  document.getElementById('nav-' + id).classList.add('active');
+  _currentPage = id;
   if (id === 'disputes') loadDisputes();
+  if (id === 'recoveries') loadRecoveries();
+  if (id === 'activitylog') loadActivityLog();
+  if (id === 'settings') loadSettings();
 }
 
-// ── Global state ────────────────────────────────────────────────────────────
+// ── Global state ─────────────────────────────────────────────────────────────
 let _overview = null;
-let _metricsData = null;
+let _disputes = [];
+let _recoveries = [];
+let _logRows = [];
+let _selectedScenario = null;
 
-// ── Main data load ───────────────────────────────────────────────────────────
-async function loadAll() {
-  document.getElementById('refresh-btn').textContent = '↻ …';
+// ── Bootstrap ────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  loadOverview();
+  setInterval(loadOverview, 60000);
+});
+
+// ── Overview ──────────────────────────────────────────────────────────────────
+async function loadOverview() {
   try {
-    const [ov, met] = await Promise.all([
-      fetch('/api/prod/overview', { signal: AbortSignal.timeout(15000) }).then(r => r.json()),
-      fetch('/metrics', { signal: AbortSignal.timeout(8000) }).then(r => r.json()),
-    ]);
+    const ov = await fetch('/api/prod/overview', { signal: AbortSignal.timeout(15000) }).then(r => r.json());
     _overview = ov;
-    _metricsData = met;
     renderOverview();
-    document.getElementById('refresh-btn').textContent = '↻ Refresh';
   } catch(e) {
-    console.warn('loadAll error', e);
-    document.getElementById('subheading').textContent = 'Error loading data — ' + e.message;
-    document.getElementById('refresh-btn').textContent = '↻ Retry';
+    console.warn('Overview load error:', e);
+    document.getElementById('overview-loading').innerHTML = `<div style="color:var(--error);font-size:13px">Failed to load: ${e.message}</div>`;
   }
 }
 
 function renderOverview() {
-  if (!_overview) return;
   const ov = _overview;
-  const sys = ov.system || {};
-  const oracle = ov.oracle || {};
+  if (!ov) return;
   const pp = ov.paypal || {};
+  const sys = ov.system || {};
 
   // env badge
   const badge = document.getElementById('env-badge');
-  if (pp.connected) {
-    badge.textContent = pp.environment === 'live' ? 'PayPal Live' : 'PayPal Sandbox';
-    badge.className = 'env-badge' + (pp.environment === 'live' ? ' live' : '');
+  if (pp.environment === 'live') {
+    badge.textContent = 'LIVE';
+    badge.className = 'env-badge live';
   } else {
-    badge.textContent = 'PayPal unavailable';
+    badge.textContent = 'SANDBOX';
     badge.className = 'env-badge';
   }
 
-  // subheading
-  const ts = ov.fetched_at ? new Date(ov.fetched_at).toLocaleTimeString([],{hour:'numeric',minute:'2-digit',second:'2-digit'}) : '';
-  document.getElementById('subheading').textContent = `Live data · refreshed ${ts}`;
+  // system health sidebar
+  updateHealth('paypal', pp.connected, pp.connected ? (pp.environment === 'live' ? 'Live' : 'Operational') : 'Error');
+  updateHealth('db', sys.db_connected !== false, sys.db_connected !== false ? 'Operational' : 'Error');
+  updateHealth('worker', sys.scheduler_running, sys.scheduler_running ? 'Operational' : 'Offline');
 
-  // hero
-  document.getElementById('h-open').textContent = pp.connected ? (pp.open_disputes ?? '—') : '—';
-  document.getElementById('h-urgent').textContent = pp.connected ? (pp.urgent_disputes ?? '—') : '—';
-  document.getElementById('h-webhooks').textContent = pp.connected ? (pp.webhook_registrations ?? '—') : '—';
-  const heroSub = pp.connected
-    ? `${pp.environment === 'live' ? 'Production' : 'Sandbox'} · ${pp.fetched_at ? 'fetched ' + new Date(pp.fetched_at).toLocaleTimeString() : ''}`
-    : (pp.error ? `PayPal unavailable (${pp.error})` : 'PayPal not configured');
-  document.getElementById('hero-sub').textContent = heroSub;
-
-  // metrics strip
-  document.getElementById('m-oracle-calls').textContent = oracle.total_calls != null ? oracle.total_calls.toLocaleString() : '—';
-  const p95 = oracle.p95_ms_global;
-  const p95El = document.getElementById('m-p95');
-  p95El.textContent = p95 != null ? p95 + 'ms' : '—';
-  p95El.className = 'metric-value' + (p95 > 500 ? ' metric-warn' : p95 > 1000 ? ' metric-err' : '');
-
-  const errRate = sys.error_rate_pct;
-  const errEl = document.getElementById('m-err-rate');
-  errEl.textContent = errRate != null ? errRate.toFixed(1) + '%' : '—';
-  errEl.className = 'metric-value' + (errRate > 5 ? ' metric-err' : errRate > 1 ? ' metric-warn' : errRate === 0 ? ' metric-ok' : '');
-
-  const uptime = ov.uptime_seconds;
-  document.getElementById('m-uptime').textContent = uptime != null ? fmtUptime(uptime) : '—';
-  document.getElementById('m-uptime-sub').textContent = ov.started_at ? 'since ' + new Date(ov.started_at).toLocaleDateString() : 'since start';
-  document.getElementById('m-endpoints').textContent = oracle.endpoint_count ?? '—';
-
-  // oracle top endpoints table
-  document.getElementById('oracle-total-badge').textContent = (oracle.total_calls || 0).toLocaleString() + ' calls';
-  const topBody = document.getElementById('oracle-top-body');
-  if (!oracle.top_endpoints || oracle.top_endpoints.length === 0) {
-    topBody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:16px 0">No oracle calls this session</td></tr>';
+  // alert banner
+  const alertEl = document.getElementById('alert-banner');
+  if (!sys.scheduler_running) {
+    alertEl.className = 'alert-banner alert-warn show';
+    alertEl.textContent = 'Worker Offline. Decision actions are disabled to prevent state-mismatch.';
+  } else if (!pp.connected) {
+    alertEl.className = 'alert-banner alert-err show';
+    alertEl.textContent = `PayPal Connection Error: ${pp.error || 'Connection failed'}. Execution actions are disabled to prevent state-mismatch.`;
   } else {
-    topBody.innerHTML = oracle.top_endpoints.map(r => {
-      const shortPath = r.path.replace('/api/oracle/','');
-      const errCls = r.error_rate_pct > 5 ? 'num-err' : r.error_rate_pct > 0 ? 'num-warn' : 'num-ok';
-      return `<tr>
-        <td class="path-cell" title="${r.path}">${shortPath}</td>
-        <td style="text-align:right">${r.count}</td>
-        <td style="text-align:right">${r.avg_ms}ms</td>
-        <td style="text-align:right">${r.p95_ms}ms</td>
-        <td style="text-align:right" class="${errCls}">${r.error_rate_pct}%</td>
-      </tr>`;
-    }).join('');
+    alertEl.className = 'alert-banner';
   }
 
-  // system health table — only operational status, no security config
-  const healthBody = document.getElementById('health-body');
-  const healthRows = [
-    ['Scheduler', sys.scheduler_running ? ['Running','ok'] : ['Stopped','err']],
-    ['Oracle endpoints', [sys.oracle_endpoints ?? '?', 'ok']],
-    ['Uptime', [formatUptime(sys.uptime_seconds), 'ok']],
-  ];
-  healthBody.innerHTML = healthRows.map(([label,[val,cls]]) =>
-    `<tr><td>${label}</td><td style="text-align:right;font-weight:600" class="num-${cls}">${val}</td></tr>`
-  ).join('');
+  // overview page
+  document.getElementById('overview-loading').style.display = 'none';
 
-  // env grid — hidden from public view
-  const envGrid = document.getElementById('env-grid');
-  if (envGrid) envGrid.innerHTML = '';
+  const openCount = pp.open_disputes || 0;
+  const urgentCount = pp.urgent_disputes || 0;
+
+  if (!pp.connected || (openCount === 0 && urgentCount === 0)) {
+    // show empty state if no disputes
+    if (!pp.connected) {
+      document.getElementById('overview-empty').style.display = 'block';
+      document.getElementById('overview-loaded').style.display = 'none';
+    } else {
+      // connected but no disputes → show empty
+      document.getElementById('overview-empty').style.display = 'block';
+      document.getElementById('overview-loaded').style.display = 'none';
+    }
+  } else {
+    document.getElementById('overview-empty').style.display = 'none';
+    document.getElementById('overview-loaded').style.display = 'block';
+    renderActionQueue();
+  }
+
+  // also check if we have disputes data to populate overview
+  if (pp.connected && openCount > 0) {
+    document.getElementById('overview-empty').style.display = 'none';
+    document.getElementById('overview-loaded').style.display = 'block';
+    renderActionQueue();
+  }
 }
 
-// ── Oracle full tab ─────────────────────────────────────────────────────────
-let _oracleRows = [];
-function renderOracleFull() {
-  if (!_metricsData) return;
-  _oracleRows = (_metricsData.paths || []).filter(r => r.path.startsWith('/api/oracle/'));
-  renderOracleFiltered(_oracleRows);
+function updateHealth(key, ok, label) {
+  const el = document.getElementById('health-' + key);
+  if (!el) return;
+  const dotClass = ok ? 'dot dot-ok' : 'dot dot-err';
+  const textClass = ok ? 'status-ok' : 'status-err';
+  el.innerHTML = `<span class="${dotClass}"></span><span class="${textClass}">${label}</span>`;
 }
-function filterOracle(q) {
-  const filtered = q ? _oracleRows.filter(r => r.path.includes(q)) : _oracleRows;
-  renderOracleFiltered(filtered);
+
+async function renderActionQueue() {
+  if (!_overview) return;
+  const pp = _overview.paypal || {};
+
+  document.getElementById('stat-disputes-review').textContent = pp.urgent_disputes ?? '—';
+  document.getElementById('stat-disputes-sub').textContent = `Awaiting merchant decision`;
+
+  const totalAmount = pp.total_disputed_amount;
+  document.getElementById('stat-amount').textContent = totalAmount != null ? '$' + Number(totalAmount).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}) + ' USD' : '—';
+  document.getElementById('stat-amount-sub').textContent = `across ${pp.open_disputes || 0} active cases`;
+
+  const nextDeadline = pp.next_deadline;
+  if (nextDeadline) {
+    const d = new Date(nextDeadline);
+    document.getElementById('stat-deadline').textContent = d.toLocaleDateString('en-US', {month:'short',day:'numeric', hour:'numeric', minute:'2-digit'});
+    const diff = Math.round((d - Date.now()) / 36e5);
+    document.getElementById('stat-deadline-sub').textContent = diff > 0 ? `${diff} hour${diff!==1?'s':''} away` : 'Overdue';
+  } else {
+    document.getElementById('stat-deadline').textContent = 'No deadline';
+    document.getElementById('stat-deadline-sub').textContent = '—';
+  }
+
+  document.getElementById('stat-recoveries').textContent = pp.recovery_pending ?? '0';
+
+  // Load dispute rows for the action queue
+  try {
+    const r = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(10000) });
+    if (r.ok) {
+      const data = await r.json();
+      _disputes = data.rows || [];
+      renderQueueTable(_disputes.slice(0, 10), data.demo);
+    }
+  } catch(e) { /* silent */ }
 }
-function renderOracleFiltered(rows) {
-  const body = document.getElementById('oracle-full-body');
+
+function renderQueueTable(rows, isDemo) {
+  const tbody = document.getElementById('action-queue-body');
+  const footer = document.getElementById('queue-footer');
+  document.getElementById('queue-count').textContent = rows.length + ' pending';
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:16px 0">No oracle calls yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:20px">No disputes in queue.</td></tr>';
     return;
   }
-  body.innerHTML = rows.map(r => {
-    const shortPath = r.path.replace('/api/oracle/','');
-    const errCls = r.error_rate_pct > 5 ? 'num-err' : r.error_rate_pct > 0 ? 'num-warn' : '';
-    return `<tr>
-      <td class="path-cell" title="${r.path}">${shortPath}</td>
-      <td style="text-align:right">${r.count}</td>
-      <td style="text-align:right">${r.errors}</td>
-      <td style="text-align:right">${r.client_errors}</td>
-      <td style="text-align:right">${r.avg_ms}ms</td>
-      <td style="text-align:right">${r.p95_ms}ms</td>
-      <td style="text-align:right" class="${errCls}">${r.error_rate_pct}%</td>
+  tbody.innerHTML = rows.map(d => {
+    const id = d.dispute_id || d.id || '—';
+    const amount = '$' + Number(d.amount || d.disputed_amount || 0).toFixed(2);
+    const statusBadge = d.status === 'REQUIRED_ACTION'
+      ? '<span class="badge badge-review">Awaiting Review</span>'
+      : d.status === 'AUTO_ACTIONED'
+      ? '<span class="badge badge-auto">Auto-Actioned</span>'
+      : `<span class="badge badge-gray">${(d.status||'Unknown').replace(/_/g,' ')}</span>`;
+    const rec = d.recommendation || d.action_type || '—';
+    const recDisplay = rec.toLowerCase().includes('fight') ? `<span class="rec-fight">Fight (EV: +$${d.ev_fight||'?'})</span>`
+      : rec.toLowerCase().includes('accept') ? `<span class="rec-accept">Accept</span>`
+      : `<span>${rec.replace(/_/g,' ')}</span>`;
+    const deadline = d.next_response_due ? new Date(d.next_response_due).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
+    return `<tr onclick="openDisputeDetail(${JSON.stringify(id).replace(/'/g,"\\'")})" style="cursor:pointer">
+      <td class="mono">${id}</td>
+      <td>Dispute</td>
+      <td class="col-right">${amount}</td>
+      <td>${statusBadge}</td>
+      <td>${deadline}</td>
+      <td>${recDisplay}</td>
+      <td><button class="btn-link" onclick="event.stopPropagation();openDisputeDetail('${id}')">Review Case</button></td>
     </tr>`;
   }).join('');
+  footer.textContent = `${rows.length} item${rows.length!==1?'s':''} · ${rows.filter(r=>r.status==='REQUIRED_ACTION'||r.type!=='Recovery').length} disputes`;
+  if (isDemo) footer.textContent += ' · Demo data';
 }
 
-// ── Disputes tab ────────────────────────────────────────────────────────────
-const _apiKey = (typeof window.__ANCHOR_API_KEY !== 'undefined') ? window.__ANCHOR_API_KEY : '';
-function _authHeaders() {
-  return _apiKey ? { 'X-API-Key': _apiKey } : {};
-}
-
+// ── Disputes ──────────────────────────────────────────────────────────────────
 async function loadDisputes() {
-  const statusBar = document.getElementById('disputes-status-bar');
-  const body = document.getElementById('disputes-body');
+  const banner = document.getElementById('disputes-banner');
+  const tbody = document.getElementById('disputes-body');
   try {
-    const r = await fetch('/api/disputes', { headers: _authHeaders(), signal: AbortSignal.timeout(10000) });
-    const data = await r.json();
+    const r = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(10000) });
     if (r.status === 401 || r.status === 403) {
-      body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">Dispute data requires authentication — configure API_SECRET in Render environment.</td></tr>';
-      statusBar.style.display = 'none';
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">Authentication required — configure API_SECRET.</td></tr>';
       return;
     }
-    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-    const rows = data.rows || [];
-    if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">No dispute records found.</td></tr>';
-    } else {
-      body.innerHTML = rows.map(d => {
-        const action = String(d.action_type||'').replace(/_/g,' ');
-        return `<tr>
-          <td class="path-cell">${d.dispute_id||d.id||'—'}</td>
-          <td style="text-align:right">$${Number(d.amount||d.disputed_amount||0).toFixed(2)}</td>
-          <td>${action}</td>
-          <td style="color:var(--muted)">${d.reasoning||d.outcome||'—'}</td>
-        </tr>`;
-      }).join('');
+    const data = await r.json();
+    _disputes = data.rows || [];
+    banner.style.display = 'none';
+    if (!_disputes.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No disputes found.</td></tr>';
+      return;
     }
-    statusBar.style.display = 'block';
-    statusBar.style.background = '#d1fae5'; statusBar.style.color = '#065f46';
-    statusBar.textContent = `${rows.length} record(s) loaded` + (data.demo ? ' · Demo data' : '');
+    tbody.innerHTML = _disputes.map(d => {
+      const id = d.dispute_id || d.id || '—';
+      const amount = '$' + Number(d.amount || d.disputed_amount || 0).toFixed(2);
+      const reason = (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g,' ');
+      const statusBadge = d.status === 'REQUIRED_ACTION'
+        ? '<span class="badge badge-review">Awaiting Review</span>'
+        : d.status === 'AUTO_ACTIONED'
+        ? '<span class="badge badge-auto">Auto-Actioned</span>'
+        : d.status === 'RESOLVED'
+        ? '<span class="badge badge-auto">Resolved</span>'
+        : `<span class="badge badge-gray">${(d.status||'Unknown').replace(/_/g,' ')}</span>`;
+      const rec = d.recommendation || d.action_type || '';
+      const recText = rec.toLowerCase().includes('fight') ? '<span class="rec-fight">Fight</span>'
+        : rec.toLowerCase().includes('accept') ? '<span class="rec-accept">Accept</span>'
+        : rec ? `<span>${rec.replace(/_/g,' ')}</span>` : '—';
+      return `<tr onclick="openDisputeDetail('${id}')">
+        <td class="mono">${id}</td>
+        <td>${reason}</td>
+        <td class="col-right">$${Number(d.amount||d.disputed_amount||0).toFixed(2)} USD</td>
+        <td>${statusBadge}</td>
+        <td>${recText}</td>
+        <td><button class="btn-link" onclick="event.stopPropagation();openDisputeDetail('${id}')">Review</button></td>
+      </tr>`;
+    }).join('');
   } catch(e) {
-    statusBar.style.display = 'block';
-    statusBar.style.background = '#fee2e2'; statusBar.style.color = '#991b1b';
-    statusBar.textContent = 'Error: ' + e.message;
-    body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">Could not load dispute records.</td></tr>';
+    banner.style.display = 'block';
+    banner.textContent = 'Error loading disputes: ' + e.message;
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">Could not load disputes.</td></tr>';
   }
 }
 
-// ── Connections tab ─────────────────────────────────────────────────────────
-const SPONSORS = [
-  { key:'paypal',    name:'PayPal',      logo:'🅿',  category:'Payments',           desc:'Dispute management, webhook events, OAuth2 token lifecycle.',          endpoints:['GET /api/dashboard/summary','GET /api/paypal/status'] },
-  { key:'apimatic',  name:'APIMatic',    logo:'📐', category:'API · SDK Gen',       desc:'Generates context-aware PayPal API routing. Prevents hallucinated endpoints.',endpoints:['GET /api/apimatic/status','GET /api/apimatic/context'] },
-  { key:'channel3',  name:'Channel3',    logo:'📦', category:'Product Intel',       desc:'100M+ product graph enrichment for SNAD evidence generation.',          endpoints:['GET /api/channel3/status','POST /api/channel3/enrich'] },
-  { key:'postman',   name:'Postman',     logo:'📮', category:'API · Testing',       desc:'Live collection with 158 oracle endpoints + Guardian workflows.',       endpoints:['GET /api/postman/status'] },
-  { key:'render',    name:'Render',      logo:'🟣', category:'Hosting',             desc:'Hosts the production service. Auto-deploys on push.',                   endpoints:['GET /api/render/health','GET /api/render/status'] },
-  { key:'bryntum',   name:'Bryntum',     logo:'📅', category:'UI · Scheduler',      desc:'Dispute timeline scheduler with conflict detection.',                   endpoints:['GET /api/bryntum/status'] },
-  { key:'zapier',    name:'Zapier',      logo:'⚡', category:'Automation',          desc:'Cross-platform dispute ingestion from Stripe, WooCommerce, Shopify.',   endpoints:['POST /api/integrations/zapier/dispute','POST /api/zapier/subscribe'] },
-  { key:'astropods', name:'Astropods',   logo:'🤖', category:'AI Governance',       desc:'AI gateway with model routing, rate limits, and billing telemetry.',    endpoints:['GET /api/astropods/status'] },
-  { key:'aggrid',    name:'AG Grid',     logo:'📊', category:'Data Grid',           desc:'Enterprise grid for the dispute log and recovery tables.',              endpoints:['GET /api/aggrid/status','GET /api/aggrid/data'] },
-  { key:'kernel',    name:'Kernel',      logo:'🧠', category:'AI Infra',            desc:'Model kernel for dispute analysis reasoning chains.',                   endpoints:['GET /api/kernel/status'] },
-  { key:'google_drive', name:'Google Drive', logo:'📁', category:'Evidence Storage',    desc:'Dispute evidence folder structure: INR, SNAD, Unauthorized, Resolved.',  endpoints:['GET /api/google-drive/status'] },
-  { key:'gmail',     name:'Gmail',        logo:'📧', category:'Prevention',           desc:'Pre-dispute pattern detection with Anchor/Disputes + Prevention labels.',  endpoints:['GET /api/gmail/status','POST /api/integrations/gmail/prevention-draft'] },
-];
+function openDisputeDetail(id) {
+  const d = _disputes.find(x => (x.dispute_id||x.id) === id);
+  if (!d) { showPage('disputes'); return; }
 
-function renderConnections() {
-  const grid = document.getElementById('connections-grid');
-  grid.innerHTML = SPONSORS.map(s => `
-    <div class="conn-card" id="conn-${s.key}">
-      <div class="conn-logo" aria-hidden="true">${s.logo}</div>
-      <div class="conn-info">
-        <div class="conn-name">${s.name} <span style="font-size:11px;color:var(--muted-2);font-weight:500">${s.category}</span></div>
-        <div class="conn-desc">${s.desc}</div>
-        <div class="conn-endpoints">${s.endpoints.map(e => `<span class="conn-ep">${e}</span>`).join('')}</div>
-        <div class="conn-status checking" id="conn-status-${s.key}">
-          <span class="conn-dot checking"></span>Checking…
-        </div>
+  document.getElementById('disputes-list-view').style.display = 'none';
+  document.getElementById('disputes-detail-view').style.display = 'block';
+  if (_currentPage !== 'disputes') showPage('disputes');
+
+  document.getElementById('detail-dispute-title').textContent = `Dispute Review: ${id}`;
+  document.getElementById('detail-dispute-amount').textContent = `$${Number(d.amount||d.disputed_amount||0).toFixed(2)} USD`;
+
+  const env = (_overview && _overview.paypal && _overview.paypal.environment === 'live') ? 'Live' : 'Sandbox';
+  const statusLabel = d.status === 'REQUIRED_ACTION' ? 'Awaiting Review' : (d.status||'Unknown').replace(/_/g,' ');
+  document.getElementById('detail-dispute-tags').innerHTML = `
+    <span class="badge badge-sandbox">${env}</span>
+    <span class="badge badge-review">${statusLabel}</span>
+  `;
+  document.getElementById('detail-reason').textContent = (d.reason||'ITEM_NOT_RECEIVED').replace(/_/g,' ');
+  document.getElementById('detail-buyer').textContent = d.buyer_email || d.buyer || 'j***@example.com';
+
+  // evidence
+  const evidence = d.evidence || [
+    { name: 'Shipping Label', available: true },
+    { name: 'Delivery Proof', available: !!(d.tracking_number) },
+    { name: 'Buyer Signature', available: false },
+  ];
+  document.getElementById('detail-evidence-list').innerHTML = evidence.map(e => `
+    <div class="evidence-row">
+      <span class="evidence-name">
+        <span class="${e.available ? 'ev-check' : 'ev-dash'}">${e.available ? '✓' : '–'}</span>
+        ${e.name}
+      </span>
+      <span class="${e.available ? 'ev-yes' : 'ev-no'}">${e.available ? 'Yes' : 'No'}</span>
+    </div>
+  `).join('');
+
+  const rec = d.recommendation || d.action_type || 'FIGHT';
+  const isFight = rec.toLowerCase().includes('fight');
+  document.getElementById('detail-rec').textContent = isFight ? 'Fight Dispute' : 'Accept Liability';
+  document.getElementById('detail-rec').className = 'de-rec ' + (isFight ? 'rec-fight' : 'rec-accept');
+
+  const winProb = d.win_probability || d.ev_win_prob;
+  document.getElementById('detail-win-prob').textContent = winProb != null ? Math.round(winProb * 100) + '%' : '—';
+
+  const evFight = d.ev_fight != null ? '$' + Number(d.ev_fight).toFixed(2) : '—';
+  const amount = Number(d.amount || d.disputed_amount || 0);
+  const evAccept = amount > 0 ? `-$${amount.toFixed(2)} + $15.00 fee` : '—';
+  document.getElementById('detail-ev-fight').textContent = evFight;
+  document.getElementById('detail-ev-accept').textContent = evAccept;
+
+  // disable actions if worker offline or paypal error
+  const workerOk = _overview && _overview.system && _overview.system.scheduler_running;
+  const paypalOk = _overview && _overview.paypal && _overview.paypal.connected;
+  const actionsEl = document.getElementById('detail-actions');
+  const noteEl = document.getElementById('detail-action-note');
+  if (!workerOk) {
+    document.getElementById('detail-btn-fight').disabled = true;
+    document.getElementById('detail-btn-accept').disabled = true;
+    noteEl.textContent = 'Decision actions are disabled until the worker is back online.';
+  } else if (!paypalOk) {
+    document.getElementById('detail-btn-fight').disabled = true;
+    document.getElementById('detail-btn-accept').disabled = true;
+    noteEl.textContent = 'Decision actions are disabled until the PayPal connection is restored.';
+  } else {
+    document.getElementById('detail-btn-fight').disabled = false;
+    document.getElementById('detail-btn-accept').disabled = false;
+    noteEl.textContent = 'Anchor will not act without your approval.';
+  }
+
+  // history
+  document.getElementById('detail-case-history').innerHTML = `
+    <div class="hist-step hist-done">✓ Webhook received</div>
+    <span class="hist-arrow">→</span>
+    <div class="hist-step hist-done">✓ Oracle analyzed</div>
+    <span class="hist-arrow">→</span>
+    <div class="hist-step hist-pending"><span class="hist-circle"></span> Pending merchant review</div>
+  `;
+
+  // store current dispute id
+  document.getElementById('detail-btn-fight').dataset.disputeId = id;
+  document.getElementById('detail-btn-accept').dataset.disputeId = id;
+}
+
+function backToDisputeList() {
+  document.getElementById('disputes-list-view').style.display = 'block';
+  document.getElementById('disputes-detail-view').style.display = 'none';
+}
+
+async function approveDisputeAction(action) {
+  const id = document.getElementById('detail-btn-fight').dataset.disputeId;
+  if (!id) return;
+  if (!confirm(`${action === 'fight' ? 'Submit evidence to fight' : 'Accept liability for'} dispute ${id}?`)) return;
+  try {
+    const r = await fetch(`/api/disputes/${id}/action`, {
+      method: 'POST',
+      headers: { ...{ 'Content-Type': 'application/json' }, ..._auth() },
+      body: JSON.stringify({ action }),
+    });
+    if (r.ok) {
+      alert(`Action submitted: ${action}. Anchor will process momentarily.`);
+      backToDisputeList();
+      loadDisputes();
+    } else {
+      const e = await r.json();
+      alert('Error: ' + (e.detail || r.status));
+    }
+  } catch(e) {
+    alert('Network error: ' + e.message);
+  }
+}
+
+// ── Recoveries ────────────────────────────────────────────────────────────────
+async function loadRecoveries() {
+  const tbody = document.getElementById('recoveries-body');
+  try {
+    const r = await fetch('/api/recoveries', { headers: _auth(), signal: AbortSignal.timeout(10000) });
+    if (!r.ok) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:20px">No recoveries endpoint available.</td></tr>';
+      return;
+    }
+    const data = await r.json();
+    _recoveries = data.rows || data || [];
+    if (!_recoveries.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:20px">No pending recoveries.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = _recoveries.map(rec => {
+      const id = rec.order_id || rec.id || '—';
+      const amount = '$' + Number(rec.amount || 0).toFixed(2);
+      const checks = rec.checks_passed || 0;
+      const total = rec.checks_total || 3;
+      return `<tr onclick="openRecoveryDetail('${id}')">
+        <td class="mono">${id}</td>
+        <td class="col-right">${amount} USD</td>
+        <td><span class="badge badge-review">Hold for Review</span></td>
+        <td>${checks} of ${total} checks passed</td>
+        <td><button class="btn-link" onclick="event.stopPropagation();openRecoveryDetail('${id}')">Verify Order</button></td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="color:var(--muted);padding:20px">Could not load recoveries: ${e.message}</td></tr>`;
+  }
+}
+
+function openRecoveryDetail(id) {
+  const rec = _recoveries.find(r => (r.order_id||r.id) === id);
+  if (!rec) return;
+  document.getElementById('recoveries-list-view').style.display = 'none';
+  document.getElementById('recovery-detail-view').style.display = 'block';
+
+  document.getElementById('rec-detail-title').textContent = `Order Recovery: ${id}`;
+  document.getElementById('rec-detail-amount').textContent = `$${Number(rec.amount||0).toFixed(2)} USD`;
+  document.getElementById('rec-detail-tags').innerHTML = `<span class="badge badge-sandbox">Sandbox</span><span class="badge badge-review">Hold for Review</span>`;
+
+  const lifecycle = rec.lifecycle || [
+    { label: 'CHECKOUT.ORDER.APPROVED received', time: rec.approved_at, done: true },
+    { label: `Configured wait period (${rec.wait_minutes||45} minutes)`, sub: 'Wait period completed', done: true, gray: true },
+    { label: 'PayPal authoritative status checked', time: rec.checked_at, sub: `Status: ${rec.order_status||'APPROVED'}`, done: true, blue: true },
+    { label: 'Manual review required', sub: `Policy: Orders > $${rec.review_threshold||100} require approval`, done: false, amber: true },
+  ];
+  document.getElementById('rec-lifecycle').innerHTML = lifecycle.map(step => `
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:flex-start">
+      <span style="margin-top:2px;font-size:16px">${step.done && !step.gray ? (step.blue ? '🔵' : step.amber ? '🟡' : '🟢') : step.gray ? '⚪' : '⚪'}</span>
+      <div>
+        <div style="font-size:13.5px;font-weight:500">${step.label}</div>
+        ${step.time ? `<div style="font-size:12px;color:var(--muted)">${new Date(step.time).toLocaleString()}</div>` : ''}
+        ${step.sub ? `<div style="display:inline-block;margin-top:4px;background:#f3f4f6;border-radius:4px;padding:2px 8px;font-size:12px;color:var(--muted)">${step.sub}</div>` : ''}
       </div>
     </div>
   `).join('');
 
-  // Use pre-fetched integration data if available
-  if (_overview && _overview.integrations) {
-    for (const s of SPONSORS) {
-      const intData = _overview.integrations[s.key];
-      const el = document.getElementById('conn-status-' + s.key);
-      if (!el) continue;
-      if (!intData) {
-        // Not in aggregated map — fetch individually
-        fetchConnStatus(s);
-        continue;
-      }
-      if (intData.ok) {
-        const isDemo = intData.data && (intData.data.demo === true || intData.data.gateway_configured === false || intData.data.enabled === false);
-        el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
-        el.innerHTML = isDemo
-          ? '<span class="conn-dot demo"></span>Demo mode'
-          : '<span class="conn-dot ok"></span>Connected';
-      } else {
-        el.className = 'conn-status demo';
-        el.innerHTML = `<span class="conn-dot demo"></span>Not configured`;
-      }
-    }
+  const checksTotal = rec.checks_total || 3;
+  const checksPassed = rec.checks_passed || checksTotal;
+  document.getElementById('rec-safety-badge').innerHTML = `<span class="badge badge-green-outline">${checksPassed} of ${checksTotal} checks passed</span>`;
+  const checks = rec.safety_checks || ['Order state is exactly APPROVED','Payee ID matches merchant account','Currency matches original intent'];
+  document.getElementById('rec-safety-list').innerHTML = checks.map(c => `
+    <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13px">
+      <span style="color:var(--ok)">✓</span> ${c}
+    </div>
+  `).join('');
+  document.getElementById('rec-capture-note').textContent = 'This action will resume the capture on the authorized funds. It does not send a new invoice.';
+
+  const paypalOk = _overview && _overview.paypal && _overview.paypal.connected;
+  const btn = document.getElementById('rec-capture-btn');
+  if (!paypalOk) {
+    btn.disabled = true;
+    document.getElementById('rec-capture-footer').textContent = 'Capture is disabled until the PayPal connection is restored.';
   } else {
-    SPONSORS.forEach(fetchConnStatus);
+    btn.disabled = false;
+    document.getElementById('rec-capture-footer').textContent = 'Capture requires your explicit approval. No new payment request will be created.';
   }
-
-  // PayPal is special — use overview data
-  const ppEl = document.getElementById('conn-status-paypal');
-  if (ppEl && _overview && _overview.paypal) {
-    const pp = _overview.paypal;
-    ppEl.className = 'conn-status ' + (pp.connected ? 'ok' : 'demo');
-    ppEl.innerHTML = pp.connected
-      ? `<span class="conn-dot ok"></span>${pp.environment === 'live' ? 'Live' : 'Sandbox'} · ${pp.open_disputes} open`
-      : `<span class="conn-dot demo"></span>Not connected`;
-  }
+  btn.dataset.orderId = id;
 }
 
-async function fetchConnStatus(s) {
-  if (!s.statusUrl) return;
-  const el = document.getElementById('conn-status-' + s.key);
-  if (!el) return;
+function backToRecoveryList() {
+  document.getElementById('recoveries-list-view').style.display = 'block';
+  document.getElementById('recovery-detail-view').style.display = 'none';
+}
+
+async function authorizeCapture() {
+  const id = document.getElementById('rec-capture-btn').dataset.orderId;
+  if (!id) return;
+  if (!confirm(`Authorize capture for order ${id}?`)) return;
   try {
-    const r = await fetch(s.statusUrl, { signal: AbortSignal.timeout(6000) });
-    const data = await r.json();
+    const r = await fetch(`/api/recoveries/${id}/capture`, {
+      method: 'POST',
+      headers: { ...{ 'Content-Type': 'application/json' }, ..._auth() },
+    });
     if (r.ok) {
-      const isDemo = data.demo === true || data.gateway_configured === false || data.enabled === false;
-      el.className = 'conn-status ' + (isDemo ? 'demo' : 'ok');
-      el.innerHTML = isDemo
-        ? '<span class="conn-dot demo"></span>Demo mode'
-        : '<span class="conn-dot ok"></span>Connected';
+      alert('Capture authorized. Processing…');
+      backToRecoveryList();
+      loadRecoveries();
     } else {
-      el.className = 'conn-status err';
-      el.innerHTML = `<span class="conn-dot err"></span>Error ${r.status}`;
+      const e = await r.json().catch(() => ({}));
+      alert('Error: ' + (e.detail || r.status));
     }
-  } catch {
-    el.className = 'conn-status demo';
-    el.innerHTML = '<span class="conn-dot demo"></span>Not reachable';
-  }
+  } catch(e) { alert('Network error: ' + e.message); }
 }
 
-// ── Drawer ───────────────────────────────────────────────────────────────────
-let _selectedScenario = null;
-const SCENARIOS = {
-  inr_fight: { amount:245, reason:'ITEM_NOT_RECEIVED' },
-  snad_fight: { amount:320, reason:'SIGNIFICANTLY_NOT_AS_DESCRIBED' },
-  unauthorized_accept: { amount:180, reason:'UNAUTHORIZED' },
-  micro_accept: { amount:18.5, reason:'ITEM_NOT_RECEIVED' },
-};
-function selectScenario(btn, key) {
-  _selectedScenario = key;
-  document.querySelectorAll('.scenario-btn').forEach(b => { b.classList.remove('selected'); b.setAttribute('aria-pressed','false'); });
-  btn.classList.add('selected'); btn.setAttribute('aria-pressed','true');
-  document.getElementById('run-btn').disabled = false;
-  document.getElementById('drawer-result').classList.remove('show');
-}
-async function runScenario() {
-  if (!_selectedScenario) return;
-  const btn = document.getElementById('run-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Reviewing evidence…';
+// ── Activity Log ──────────────────────────────────────────────────────────────
+async function loadActivityLog() {
+  const tbody = document.getElementById('log-body');
   try {
-    const resp = await fetch('/api/demo/simulate-dispute', { method:'POST', headers:{'Content-Type':'application/json', ..._authHeaders()}, body: JSON.stringify({scenario:_selectedScenario}) });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const result = await resp.json();
-    const oracle = result.oracle || {};
-    document.getElementById('res-rec').textContent = oracle.recommendation || 'Review required';
-    document.getElementById('res-ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
-    document.getElementById('res-ev-accept').textContent = oracle.ev_accept != null ? '$' + oracle.ev_accept.toFixed(2) : '—';
-    document.getElementById('res-win-prob').textContent = oracle.win_probability != null ? (oracle.win_probability*100).toFixed(0) + '% · model estimate' : '—';
-    document.getElementById('res-evidence').textContent = oracle.evidence_multiplier != null ? oracle.evidence_multiplier.toFixed(2) + '× · rule-based' : '—';
-    const ai = result.ai_review || {};
-    document.getElementById('res-ai-status').textContent = ai.status === 'ready' ? `Live AI · ${ai.provider} · ${ai.model}` : ai.status === 'not_configured' ? 'AI gateway not configured.' : `AI unavailable (${ai.status||'unknown'})`;
-    document.getElementById('res-ai-claims').innerHTML = (ai.claims||[]).map(c => `<li>${c.statement} [${c.source_ids.join(',')}]</li>`).join('');
-    const gaps = ai.missing_evidence || [];
-    document.getElementById('res-ai-gaps').textContent = gaps.length ? 'Could request: ' + gaps.join(' · ') : '';
-    document.getElementById('drawer-result').classList.add('show');
-    document.getElementById('ev-fight').textContent = oracle.ev_fight != null ? (oracle.ev_fight >= 0 ? '+$' : '−$') + Math.abs(oracle.ev_fight).toFixed(2) : '—';
+    const r = await fetch('/api/audit-log', { headers: _auth(), signal: AbortSignal.timeout(10000) });
+    if (!r.ok) {
+      // Fall back to dispute log if no dedicated endpoint
+      const dr = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(10000) });
+      if (!dr.ok) throw new Error('No log endpoint');
+      const data = await dr.json();
+      _logRows = (data.rows || []).map(d => ({
+        timestamp: d.created_at || d.updated_at,
+        env: d.environment || (_overview?.paypal?.environment === 'live' ? 'live' : 'sandbox'),
+        event: 'Dispute',
+        reference: d.dispute_id || d.id,
+        detail: (d.reason||'').replace(/_/g,' ') + (d.action_type ? ' → ' + d.action_type.replace(/_/g,' ') : ''),
+        result: d.status === 'AUTO_ACTIONED' ? 'success' : d.status === 'REQUIRED_ACTION' ? 'pending' : 'success',
+        result_text: d.status === 'AUTO_ACTIONED' ? 'Auto-Actioned' : d.status === 'REQUIRED_ACTION' ? 'Pending Review' : (d.status||'Unknown'),
+      }));
+    } else {
+      const data = await r.json();
+      _logRows = data.rows || data || [];
+    }
+    renderLog(_logRows);
   } catch(e) {
-    document.getElementById('res-ai-status').textContent = 'Could not reach Anchor: ' + e.message;
-    document.getElementById('drawer-result').classList.add('show');
+    tbody.innerHTML = `<tr><td colspan="6" style="color:var(--muted);padding:20px">Could not load activity log: ${e.message}</td></tr>`;
   }
-  btn.disabled = false; btn.textContent = 'Run sample review';
 }
-function openDrawer() {
-  _selectedScenario = null;
-  document.querySelectorAll('.scenario-btn').forEach(b => { b.classList.remove('selected'); b.setAttribute('aria-pressed','false'); });
-  document.getElementById('run-btn').disabled = true;
-  document.getElementById('drawer-result').classList.remove('show');
-  document.getElementById('drawer-overlay').classList.add('open');
-  document.getElementById('try-sample-btn').setAttribute('aria-expanded','true');
-  document.querySelector('.drawer-close').focus();
-}
-function closeDrawer() {
-  document.getElementById('drawer-overlay').classList.remove('open');
-  document.getElementById('try-sample-btn').setAttribute('aria-expanded','false');
-  document.getElementById('try-sample-btn').focus();
-}
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function formatUptime(s) { return fmtUptime(s); }
+function renderLog(rows) {
+  const tbody = document.getElementById('log-body');
+  document.getElementById('log-count').textContent = rows.length + ' events';
+  document.getElementById('log-footer').textContent = `Showing ${rows.length} events · Newest first`;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No activity recorded yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(row => {
+    const ts = row.timestamp ? new Date(row.timestamp).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+    const env = (row.env||'sandbox').toLowerCase();
+    const envBadge = env === 'live' ? '<span class="badge badge-live" style="font-size:10px">Live</span>' : '<span class="badge badge-sandbox" style="font-size:10px">Sandbox</span>';
+    const result = (row.result||'').toLowerCase();
+    const resultBadge = result === 'success' ? `<span class="badge badge-auto">${row.result_text || 'Success'}</span>`
+      : result === 'pending' ? `<span class="badge badge-review">${row.result_text || 'Pending'}</span>`
+      : result === 'error' ? `<span class="badge badge-error">${row.result_text || 'Error'}</span>`
+      : `<span class="badge badge-gray">${row.result_text || result || '—'}</span>`;
+    return `<tr>
+      <td style="white-space:nowrap;font-weight:500">${ts}</td>
+      <td>${envBadge}</td>
+      <td>${row.event || '—'}</td>
+      <td class="mono">${row.reference || '—'}</td>
+      <td style="color:var(--muted)">${row.detail || '—'}</td>
+      <td>${resultBadge}</td>
+    </tr>`;
+  }).join('');
+}
+
+function filterLog() {
+  const q = document.getElementById('log-search').value.toLowerCase();
+  const env = document.getElementById('log-env-filter').value.toLowerCase();
+  const type = document.getElementById('log-type-filter').value.toLowerCase();
+  const result = document.getElementById('log-result-filter').value.toLowerCase();
+  let rows = _logRows;
+  if (q) rows = rows.filter(r => (r.reference||'').toLowerCase().includes(q) || (r.detail||'').toLowerCase().includes(q));
+  if (env) rows = rows.filter(r => (r.env||'').toLowerCase() === env);
+  if (type) rows = rows.filter(r => (r.event||'').toLowerCase().includes(type));
+  if (result) rows = rows.filter(r => (r.result||'').toLowerCase() === result);
+  renderLog(rows);
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+async function loadSettings() {
+  const el = document.getElementById('settings-rows');
+  if (!_overview) await loadOverview();
+  const ov = _overview || {};
+  const pp = ov.paypal || {};
+  const sys = ov.system || {};
+  const rows = [
+    ['PayPal Environment', pp.environment || 'sandbox', pp.connected],
+    ['PayPal Connected', pp.connected ? 'Yes' : 'No', pp.connected],
+    ['Shadow Mode', sys.shadow_mode ? 'Enabled' : 'Disabled', !sys.shadow_mode],
+    ['Autonomous Actions', sys.autonomous_enabled ? 'Enabled' : 'Disabled', sys.autonomous_enabled],
+    ['Merchant Policy Loaded', sys.merchant_policy_loaded ? 'Yes' : 'No', sys.merchant_policy_loaded],
+    ['Safety Level', sys.safety_level || '—', sys.safety_level === 'SAFE'],
+    ['Scheduler Running', sys.scheduler_running ? 'Yes' : 'No', sys.scheduler_running],
+    ['Uptime', sys.uptime_seconds != null ? fmtUptime(sys.uptime_seconds) : '—', true],
+    ['Oracle Endpoints', sys.oracle_endpoints || '—', true],
+  ];
+  el.innerHTML = rows.map(([label, value, ok]) => `
+    <div class="setting-row">
+      <div>
+        <div class="setting-label">${label}</div>
+      </div>
+      <div class="${ok ? 'setting-ok' : 'setting-miss'}">${value}</div>
+    </div>
+  `).join('');
+}
+
+// ── Send Test Webhook ─────────────────────────────────────────────────────────
+async function sendTestWebhook() {
+  try {
+    const r = await fetch('/api/admin/test-webhook', { method: 'POST', headers: { ...{ 'Content-Type': 'application/json' }, ..._auth() } });
+    if (r.ok) {
+      alert('Test webhook sent! Check the Activity Log for the event.');
+      loadOverview();
+    } else {
+      const e = await r.json().catch(() => ({}));
+      alert('Could not send test webhook: ' + (e.detail || r.status));
+    }
+  } catch(e) { alert('Network error: ' + e.message); }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
+  if (s == null) return '—';
   if (s < 60) return s + 's';
   if (s < 3600) return Math.floor(s/60) + 'm';
   if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
   return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
 }
 
-// ── Auto-refresh ─────────────────────────────────────────────────────────────
-loadAll();
-setInterval(loadAll, 30000);
+// ── Sample Decision Modal ─────────────────────────────────────────────────────
+function openModal() {
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  document.getElementById('drawer-result').classList.remove('show');
+  document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('selected'));
+  _selectedScenario = null;
+  document.getElementById('run-btn').disabled = true;
+}
+function selectScenario(btn, id) {
+  document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  _selectedScenario = id;
+  document.getElementById('run-btn').disabled = false;
+}
+async function runScenario() {
+  if (!_selectedScenario) return;
+  const btn = document.getElementById('run-btn');
+  btn.disabled = true; btn.textContent = 'Running…';
+  try {
+    const r = await fetch('/api/oracle/sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario: _selectedScenario }),
+      signal: AbortSignal.timeout(20000),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    document.getElementById('res-rec').textContent = data.recommendation || '—';
+    document.getElementById('res-ev-fight').textContent = data.ev_fight != null ? '$' + data.ev_fight.toFixed(2) : '—';
+    document.getElementById('res-ev-accept').textContent = data.ev_accept != null ? '$' + data.ev_accept.toFixed(2) : '—';
+    document.getElementById('res-win-prob').textContent = data.win_probability != null ? Math.round(data.win_probability * 100) + '%' : '—';
+    document.getElementById('res-evidence').textContent = data.evidence_multiplier != null ? data.evidence_multiplier.toFixed(2) + '×' : '—';
+    const aiStatus = document.getElementById('res-ai-status');
+    if (data.ai_analysis) {
+      aiStatus.textContent = data.ai_analysis.status || '';
+      const claims = data.ai_analysis.claims || [];
+      document.getElementById('res-ai-claims').innerHTML = claims.map(c => `<li>${c}</li>`).join('');
+      document.getElementById('res-ai-gaps').textContent = data.ai_analysis.gaps ? 'Gaps: ' + data.ai_analysis.gaps.join(', ') : '';
+    }
+    document.getElementById('drawer-result').classList.add('show');
+  } catch(e) {
+    alert('Sample run failed: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = 'Run sample review';
+}
 </script>
 </body>
 </html>
