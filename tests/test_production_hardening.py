@@ -529,18 +529,34 @@ async def test_drain_outbox_drains_approval_jobs_when_not_shadow(monkeypatch):
     import agents.watcher as watcher
 
     approval_rows = [{"job_id": "j1", "dispute_id": "PP-D-001"}]
-    approval_drained = []
+    executed_disputes = []
+    completed_jobs = []
+    failed_jobs = []
     heartbeat_calls = []
 
     monkeypatch.setattr(pg_store, "claim_pending_webhook_events", lambda *a, **kw: [])
     monkeypatch.setattr(pg_store, "claim_pending_approval_jobs", lambda *a, **kw: approval_rows)
-    monkeypatch.setattr(pg_store, "complete_approval_job", lambda job_id, wid: approval_drained.append(job_id) or True)
-    monkeypatch.setattr(pg_store, "fail_approval_job", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        pg_store,
+        "complete_approval_job",
+        lambda job_id, wid: completed_jobs.append(job_id) or True,
+    )
+    monkeypatch.setattr(
+        pg_store,
+        "fail_approval_job",
+        lambda job_id, *a, **kw: failed_jobs.append(job_id) or True,
+    )
     monkeypatch.setattr(pg_store, "heartbeat_worker", lambda wid: heartbeat_calls.append(wid))
-    monkeypatch.setattr(watcher, "_execute_approved_fight", lambda dispute_id: approval_drained.append(dispute_id))
+
+    async def _execute_approved_fight(dispute_id):
+        executed_disputes.append(dispute_id)
+
+    monkeypatch.setattr(watcher, "_execute_approved_fight", _execute_approved_fight)
 
     await watcher._drain_outbox_in_process()
-    assert "PP-D-001" in approval_drained, "Approval job must be executed when not in shadow mode"
+    assert executed_disputes == ["PP-D-001"]
+    assert completed_jobs == ["j1"]
+    assert not failed_jobs, "Successful approval execution must not be marked failed"
     assert heartbeat_calls, "Heartbeat must be written after successful cycle"
 
 
