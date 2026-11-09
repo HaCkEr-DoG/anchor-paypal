@@ -4603,6 +4603,20 @@ async def api_shopify_enrich(request: Request):
         return JSONResponse({"error": "An internal error occurred"}, status_code=400)
 
 
+@app.get("/api/integrations/shopify/status", tags=["integrations"], summary="Shopify enricher status")
+async def shopify_status():
+    """Report Shopify enricher availability — no OAuth needed, enrichment is stateless."""
+    from integrations.shopify_enricher import enrich_from_shopify_order  # noqa: F401 — verify importable
+    return JSONResponse({
+        "ok": True,
+        "enabled": True,
+        "connected": True,
+        "demo": False,
+        "enrich_endpoint": "/api/integrations/shopify/enrich",
+        "note": "Shopify order enricher is active. POST an order payload to enrich it for the oracle pipeline.",
+    })
+
+
 @app.post("/api/integrations/zapier/dispute")
 async def api_zapier_ingest(request: Request):
     """
