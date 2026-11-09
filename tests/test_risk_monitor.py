@@ -145,7 +145,7 @@ async def test_get_account_health_approaching_limited():
 
     # 97 disputes at avg $50 on $500,000 in captures = 0.97% rate
     # Next threshold is 1.0%, so quota = floor((0.01 * 500000 - 4850) / 50) = floor(150/50) = 3
-    def mock_query_window(merchant_id, days, es_url, es_key):
+    def mock_query_window(merchant_id, days, es_url, es_key, memory_events=None):
         from agents.risk_monitor import DisputeRateWindow
         return DisputeRateWindow(
             window_days=days,
@@ -170,7 +170,7 @@ async def test_get_account_health_in_hdr_zone():
     os.environ["ELASTICSEARCH_URL"] = "http://es:9200"
     os.environ["ELASTICSEARCH_API_KEY"] = "key"
 
-    def mock_query_window(merchant_id, days, es_url, es_key):
+    def mock_query_window(merchant_id, days, es_url, es_key, memory_events=None):
         from agents.risk_monitor import DisputeRateWindow
         return DisputeRateWindow(
             window_days=days,
@@ -318,7 +318,7 @@ async def test_projections_calculated_correctly():
     os.environ["ELASTICSEARCH_URL"] = "http://es:9200"
     os.environ["ELASTICSEARCH_API_KEY"] = "key"
 
-    def mock_query_window(merchant_id, days, es_url, es_key):
+    def mock_query_window(merchant_id, days, es_url, es_key, memory_events=None):
         from agents.risk_monitor import DisputeRateWindow
         return DisputeRateWindow(
             window_days=days,

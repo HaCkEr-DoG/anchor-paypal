@@ -85,9 +85,12 @@ async def run_worker() -> None:
     try:
         while True:
             try:
-                await _heartbeat(pg_store)
                 await _drain_webhooks(pg_store, watcher)
                 await _drain_approval_jobs(pg_store, watcher)
+                # Heartbeat written AFTER a successful drain cycle (fail-closed):
+                # a crashing drain loop does not advance the heartbeat, so
+                # /health/ready correctly detects a stalled worker.
+                await _heartbeat(pg_store)
             except Exception:
                 log.exception("Worker loop failed; leased work will become available after expiry")
             await asyncio.sleep(5)
