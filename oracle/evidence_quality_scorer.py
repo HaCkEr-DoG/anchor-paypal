@@ -84,7 +84,29 @@ class EvidenceGapSeverity(str, Enum):
 
 @dataclass
 class EvidenceItem:
-    """One piece of evidence in the package."""
+    """One piece of evidence in the package. Class attrs serve as wave15 enum-style constants."""
+    # Class-level string constants for wave15 enum-style access (non-annotated = not dataclass fields)
+    TRACKING_SHOWS_DELIVERED = "TRACKING_SHOWS_DELIVERED"
+    TRACKING_NUMBER          = "TRACKING_NUMBER"
+    SIGNATURE_CONFIRMATION   = "SIGNATURE_CONFIRMATION"
+    DELIVERY_PHOTO           = "DELIVERY_PHOTO"
+    CARRIER_AFFIDAVIT        = "CARRIER_AFFIDAVIT"
+    BUYER_MESSAGES_LOG       = "BUYER_MESSAGES_LOG"
+    SHIPPING_LABEL           = "SHIPPING_LABEL"
+    PRODUCT_PHOTOS           = "PRODUCT_PHOTOS"
+    LISTING_SCREENSHOT       = "LISTING_SCREENSHOT"
+    MATCHING_IP_ADDRESS      = "MATCHING_IP_ADDRESS"
+    MATCHING_DEVICE          = "MATCHING_DEVICE"
+    PRIOR_SUCCESSFUL_ORDERS  = "PRIOR_SUCCESSFUL_ORDERS"
+    TOS_ACCEPTANCE           = "TOS_ACCEPTANCE"
+    CANCELLATION_POLICY      = "CANCELLATION_POLICY"
+    RETURN_POLICY_DOC        = "RETURN_POLICY_DOC"
+    INVOICE                  = "INVOICE"
+    COMMUNICATION_LOG        = "COMMUNICATION_LOG"
+    PROOF_OF_DELIVERY        = "PROOF_OF_DELIVERY"
+    CARRIER_CONFIRMATION     = "CARRIER_CONFIRMATION"
+
+    # Dataclass instance fields
     evidence_type: EvidenceType
     is_present: bool
     is_dated: bool = False       # Does it have a clear date?
@@ -479,6 +501,176 @@ def score_evidence_quality(inp: EvidenceQualityInput) -> EvidenceQualityReport:
 # ---------------------------------------------------------------------------
 # Backward-compatibility aliases (older test suites use these names)
 # ---------------------------------------------------------------------------
-score_evidence = score_evidence_quality
-EvidencePackage = EvidenceQualityInput
-EvidenceTier = EvidenceStrength
+score_evidence_quality_legacy = score_evidence_quality
+
+
+# ---------------------------------------------------------------------------
+# Wave15 / test-API — enum-based EvidenceItem, EvidencePackage, EvidenceTier
+# ---------------------------------------------------------------------------
+from enum import Enum as _Enum2
+from dataclasses import dataclass as _dc2, field as _f2
+
+
+class EvidenceTier(str, _Enum2):
+    EXCELLENT    = "EXCELLENT"
+    GOOD         = "GOOD"
+    ADEQUATE     = "ADEQUATE"
+    POOR         = "POOR"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
+@_dc2
+class EvidencePackage:
+    dispute_id: str
+    claim_type: str = "INR"
+    items: list = _f2(default_factory=list)
+
+
+# Per-claim-type item weights (higher = more relevant to this claim)
+_ITEM_WEIGHTS: dict = {
+    "INR": {
+        EvidenceItem.TRACKING_SHOWS_DELIVERED: 30,
+        EvidenceItem.TRACKING_NUMBER: 20,
+        EvidenceItem.SIGNATURE_CONFIRMATION: 20,
+        EvidenceItem.DELIVERY_PHOTO: 15,
+        EvidenceItem.CARRIER_AFFIDAVIT: 15,
+        EvidenceItem.BUYER_MESSAGES_LOG: 10,
+        EvidenceItem.SHIPPING_LABEL: 8,
+    },
+    "SNAD": {
+        EvidenceItem.PRODUCT_PHOTOS: 30,
+        EvidenceItem.LISTING_SCREENSHOT: 25,
+        EvidenceItem.BUYER_MESSAGES_LOG: 15,
+        EvidenceItem.RETURN_POLICY_DOC: 15,
+        EvidenceItem.COMMUNICATION_LOG: 10,
+        EvidenceItem.TRACKING_NUMBER: 5,
+    },
+    "UNAUTHORIZED": {
+        EvidenceItem.MATCHING_IP_ADDRESS: 30,
+        EvidenceItem.MATCHING_DEVICE: 25,
+        EvidenceItem.PRIOR_SUCCESSFUL_ORDERS: 20,
+        EvidenceItem.BUYER_MESSAGES_LOG: 10,
+        EvidenceItem.SIGNATURE_CONFIRMATION: 15,
+    },
+    "SUBSCRIPTION": {
+        EvidenceItem.TOS_ACCEPTANCE: 35,
+        EvidenceItem.CANCELLATION_POLICY: 25,
+        EvidenceItem.BUYER_MESSAGES_LOG: 20,
+        EvidenceItem.COMMUNICATION_LOG: 15,
+        EvidenceItem.INVOICE: 5,
+    },
+}
+
+_CRITICAL_REQUIRED: dict = {
+    "INR": [EvidenceItem.TRACKING_SHOWS_DELIVERED, EvidenceItem.TRACKING_NUMBER],
+    "SNAD": [EvidenceItem.PRODUCT_PHOTOS, EvidenceItem.LISTING_SCREENSHOT],
+    "UNAUTHORIZED": [EvidenceItem.MATCHING_IP_ADDRESS, EvidenceItem.MATCHING_DEVICE],
+    "SUBSCRIPTION": [EvidenceItem.TOS_ACCEPTANCE, EvidenceItem.CANCELLATION_POLICY],
+}
+
+
+@_dc2
+class _EvidenceGapV2:
+    item: "EvidenceItem"
+    severity: str
+    description: str
+
+
+@_dc2
+class _EvidenceQualityReportV2:
+    dispute_id: str
+    tier: EvidenceTier
+    normalized_score: float
+    win_rate_boost: float
+    critical_gaps: list     # list[EvidenceItem] — items missing that are critical
+    gaps: list              # list[_EvidenceGapV2]
+    items_present_count: int
+    top_evidence_items: list  # list[tuple[EvidenceItem, float]] sorted desc by score
+    collection_priority: list  # list[EvidenceItem] — recommended items to collect
+    summary: str
+
+
+def score_evidence(pkg: EvidencePackage) -> _EvidenceQualityReportV2:
+    """Score an evidence package for a dispute (wave15 test-API)."""
+    claim = (pkg.claim_type or "INR").upper()
+    present_set = set(pkg.items)
+    n_present = len(present_set)
+
+    weights = _ITEM_WEIGHTS.get(claim, _ITEM_WEIGHTS["INR"])
+    required = _CRITICAL_REQUIRED.get(claim, [])
+
+    # Score each item by its weight for this claim type
+    item_scores: list = []
+    for item, w in weights.items():
+        if item in present_set:
+            item_scores.append((item, float(w)))
+
+    # Normalized score: sum of present item weights / max possible (top 5 items)
+    all_weights = sorted(weights.values(), reverse=True)
+    max_score = sum(all_weights[:5]) if all_weights else 100.0
+    raw = sum(s for _, s in item_scores)
+    normalized = min(100.0, round(raw / max_score * 100.0, 1)) if max_score > 0 else 0.0
+
+    # Tier
+    if normalized >= 80:
+        tier = EvidenceTier.EXCELLENT
+    elif normalized >= 60:
+        tier = EvidenceTier.GOOD
+    elif normalized >= 40:
+        tier = EvidenceTier.ADEQUATE
+    elif normalized >= 15:
+        tier = EvidenceTier.POOR
+    else:
+        tier = EvidenceTier.INSUFFICIENT
+
+    # Win rate boost
+    _TIER_BOOST = {
+        EvidenceTier.EXCELLENT:    +0.12,
+        EvidenceTier.GOOD:         +0.07,
+        EvidenceTier.ADEQUATE:     +0.02,
+        EvidenceTier.POOR:         -0.08,
+        EvidenceTier.INSUFFICIENT: -0.15,
+    }
+    win_rate_boost = _TIER_BOOST[tier]
+
+    # Critical gaps: required items not in present set
+    critical_gaps = [item for item in required if item not in present_set]
+
+    # All gaps: missing items from weight map
+    gaps = []
+    for item in weights:
+        if item not in present_set:
+            sev = "CRITICAL" if item in required else "MAJOR"
+            gaps.append(_EvidenceGapV2(
+                item=item,
+                severity=sev,
+                description=f"Missing {item.value if hasattr(item, 'value') else item}",
+            ))
+
+    # Collection priority: critical first, then by weight descending
+    collection_priority = (
+        [item for item in required if item not in present_set] +
+        [item for item, _ in sorted(weights.items(), key=lambda x: x[1], reverse=True)
+         if item not in present_set and item not in required]
+    )
+
+    top_evidence_items = sorted(item_scores, key=lambda x: x[1], reverse=True)
+
+    summary = (
+        f"Evidence {pkg.dispute_id} [{claim}]: "
+        f"score={normalized:.0f}/100 | tier={tier.value} | "
+        f"items={n_present} | critical_gaps={len(critical_gaps)}"
+    )
+
+    return _EvidenceQualityReportV2(
+        dispute_id=pkg.dispute_id,
+        tier=tier,
+        normalized_score=normalized,
+        win_rate_boost=win_rate_boost,
+        critical_gaps=critical_gaps,
+        gaps=gaps,
+        items_present_count=n_present,
+        top_evidence_items=top_evidence_items,
+        collection_priority=collection_priority,
+        summary=summary,
+    )

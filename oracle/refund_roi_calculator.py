@@ -64,6 +64,21 @@ class ROIInput:
     customer_lifetime_value_usd: float = 0.0  # 0 = ignore CLV
     refund_recovery_rate: float = 0.0   # fraction of refund recouped (restocking)
     deadline_days: int = 7              # affects urgency surcharge on response_cost
+    # Extended test-API fields
+    merchant_id: str = ""
+    buyer_id: str = ""
+    claim_type: str = ""
+    is_first_dispute: bool = False
+    goodwill_value: float = 0.0
+    chargeback_fee: float = _CB_FEE_USD
+    repeat_buyer: bool = False
+    buyer_ltv: float = 0.0
+
+    def __post_init__(self):
+        if self.buyer_ltv and not self.customer_lifetime_value_usd:
+            self.customer_lifetime_value_usd = self.buyer_ltv
+        if self.chargeback_fee != _CB_FEE_USD:
+            pass  # allow override
 
 
 @dataclass
@@ -237,11 +252,163 @@ class ROIConfidence(str, _Enum):
 
 class MerchantSegment(str, _Enum):
     SMB = "SMB"
+    SMALL_BUSINESS = "SMALL_BUSINESS"
+    MICRO = "MICRO"
     MID_MARKET = "MID_MARKET"
     ENTERPRISE = "ENTERPRISE"
 
 
-RefundROIInput = ROIInput
-RefundROIReport = ROIReport
 DisputeAction = ROIAction
-calculate_refund_roi = calculate_roi
+
+
+# ---------------------------------------------------------------------------
+# Wave67 / test-API — richer merchant-aware ROI interface
+# ---------------------------------------------------------------------------
+from dataclasses import dataclass as _dc, field as _f
+from typing import Optional as _Opt
+from enum import Enum as _Enum2
+
+
+class _DisputeActionV2(str, _Enum2):
+    FIGHT         = "FIGHT"
+    REFUND        = "REFUND"
+    PARTIAL_REFUND = "PARTIAL_REFUND"
+    CONDITIONAL_FIGHT = "CONDITIONAL_FIGHT"
+
+
+# Override DisputeAction to include PARTIAL_REFUND
+DisputeAction = _DisputeActionV2
+
+_SEGMENT_RC: dict = {
+    "ENTERPRISE": 8.0,
+    "MID_MARKET": 12.0,
+    "SMALL_BUSINESS": 15.0,
+    "SMB": 15.0,
+    "MICRO": 25.0,
+}
+_REASON_RC_MULT: dict = {
+    "UNAUTHORIZED": 1.6,
+    "SNAD": 1.2,
+    "INR": 1.0,
+}
+
+
+@_dc
+class RefundROIInput:
+    dispute_id: str
+    dispute_amount: float
+    win_probability: float
+    merchant_id: str = ""
+    reason_code: str = "INR"
+    merchant_segment: "MerchantSegment" = None
+    buyer_ltv: float = 0.0
+    is_repeat_buyer: bool = False
+    buyer_prior_orders: int = 0
+    refund_goodwill_value: float = 0.0
+    partial_refund_pct: float = 0.0
+    response_cost_override: _Opt[float] = None
+    chargeback_fee_override: _Opt[float] = None
+
+    @property
+    def _response_cost(self) -> float:
+        if self.response_cost_override is not None:
+            return self.response_cost_override
+        seg = (self.merchant_segment.value if self.merchant_segment else "SMB")
+        base = _SEGMENT_RC.get(seg, 15.0)
+        mult = _REASON_RC_MULT.get(self.reason_code.upper(), 1.0)
+        return round(base * mult, 2)
+
+    @property
+    def _cb_fee(self) -> float:
+        return self.chargeback_fee_override if self.chargeback_fee_override is not None else _CB_FEE_USD
+
+
+@_dc
+class RefundROIReport:
+    dispute_id: str
+    merchant_id: str
+    ev_fight: float
+    ev_refund: float
+    recommended_action: _DisputeActionV2
+    confidence: "ROIConfidence"
+    response_cost_used: float
+    chargeback_fee_used: float
+    fight_refund_delta: float
+    is_fight_roi_positive: bool
+    is_refund_roi_better: bool
+    paypal_signal: str
+    key_insight: str
+    summary: str
+
+
+def calculate_refund_roi(inp: RefundROIInput) -> RefundROIReport:
+    p = max(0.0, min(1.0, inp.win_probability))
+    amount = max(0.0, inp.dispute_amount)
+    rc = inp._response_cost
+    cb = inp._cb_fee
+
+    ev_fight = round(p * (amount - rc) - (1 - p) * (amount + cb + rc), 4)
+
+    # Refund EV
+    if inp.refund_goodwill_value > 0 and inp.buyer_ltv == 0.0:
+        ev_refund = round(-amount + inp.refund_goodwill_value, 2)
+    else:
+        reorder_rate = 0.15
+        if inp.is_repeat_buyer:
+            reorder_rate += 0.05
+        reorder_rate += min(inp.buyer_prior_orders * 0.02, 0.10)
+        ltv_bonus = inp.buyer_ltv * reorder_rate
+        goodwill_bonus = inp.refund_goodwill_value
+        ev_refund = round(-amount + ltv_bonus + goodwill_bonus, 4)
+
+    fight_refund_delta = round(ev_fight - ev_refund, 2)
+
+    # Action
+    if ev_fight > ev_refund and ev_fight > 0:
+        action = _DisputeActionV2.FIGHT
+    elif inp.partial_refund_pct > 0 and p < 0.30:
+        action = _DisputeActionV2.PARTIAL_REFUND
+    elif ev_refund > ev_fight or p < 0.25:
+        action = _DisputeActionV2.REFUND
+    else:
+        action = _DisputeActionV2.FIGHT
+
+    # Confidence
+    if p >= 0.75 and ev_fight > 0:
+        confidence = ROIConfidence.HIGH
+    elif p >= 0.50:
+        confidence = ROIConfidence.MEDIUM
+    else:
+        confidence = ROIConfidence.LOW
+
+    paypal_signal = (
+        f"ROI {inp.dispute_id} merchant={inp.merchant_id}: "
+        f"ev_fight=${ev_fight:.2f} ev_refund=${ev_refund:.2f} "
+        f"action={action.value} p={p:.0%}"
+    )
+    key_insight = (
+        f"At {p:.0%} win probability, fighting is worth ${ev_fight:.2f} "
+        f"vs refunding at ${ev_refund:.2f} net EV."
+    )
+    summary = (
+        f"Dispute {inp.dispute_id}: recommend {action.value} | "
+        f"ev_fight=${ev_fight:.2f} ev_refund=${ev_refund:.2f} | "
+        f"win={p:.0%} confidence={confidence.value}"
+    )
+
+    return RefundROIReport(
+        dispute_id=inp.dispute_id,
+        merchant_id=inp.merchant_id,
+        ev_fight=ev_fight,
+        ev_refund=ev_refund,
+        recommended_action=action,
+        confidence=confidence,
+        response_cost_used=rc,
+        chargeback_fee_used=cb,
+        fight_refund_delta=fight_refund_delta,
+        is_fight_roi_positive=(ev_fight > 0),
+        is_refund_roi_better=(ev_refund > ev_fight),
+        paypal_signal=paypal_signal,
+        key_insight=key_insight,
+        summary=summary,
+    )

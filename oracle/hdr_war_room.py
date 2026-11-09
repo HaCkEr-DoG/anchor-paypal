@@ -438,8 +438,130 @@ def assess_hdr_war_room(inp: HDRWarRoomInput) -> WarRoomReport:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatibility aliases
+# Wave5 / test-API  — HDRSnapshot, HDRForecast, analyze_hdr_crisis
 # ---------------------------------------------------------------------------
-analyze_hdr_crisis = assess_hdr_war_room
-HDRSnapshot = HDRWarRoomInput
-HDRForecast = HDRProjection
+from dataclasses import dataclass as _dc5w, field as _f5w
+
+
+@_dc5w
+class HDRSnapshot:
+    """Wave5 merchant snapshot for war-room analysis."""
+    snapshot_date: object = None
+    total_transactions_90d: int = 1000
+    total_disputes_90d: int = 10
+    dispute_rate: float = 0.010
+    zone: HDRZone = HDRZone.LIMITED
+    weekly_new_disputes: list = _f5w(default_factory=lambda: [2, 2, 3, 3])
+    weekly_new_transactions: list = _f5w(default_factory=lambda: [70, 70, 70, 70])
+    open_disputes: int = 5
+
+
+@_dc5w
+class _HDRAction:
+    action_id: str
+    description: str
+    urgency: str = "HIGH"
+
+
+@_dc5w
+class HDRForecast:
+    trajectory: str           # "WORSENING" | "IMPROVING" | "STABLE"
+    zone_30d: HDRZone
+    days_30_projected: float  # projected dispute rate in 30 days
+
+
+@_dc5w
+class _HDRCrisisReport:
+    current_zone: HDRZone
+    executive_escalation_required: bool
+    paypal_proactive_contact_recommended: bool
+    basis_points_from_limited: float
+    immediate_actions: list
+    forecast: HDRForecast
+    maximum_new_disputes_this_month: int
+    transactions_needed_to_normalize: int
+    summary: str
+    alarm_message: str
+
+
+def analyze_hdr_crisis(snap: HDRSnapshot) -> _HDRCrisisReport:
+    """Wave5 crisis analysis from HDRSnapshot."""
+    rate = snap.dispute_rate
+    zone = snap.zone
+    tx = snap.total_transactions_90d
+    disp = snap.total_disputes_90d
+
+    # Basis points from LIMITED threshold (1.00%)
+    bps_from_limited = (0.010 - rate) * 10000.0
+
+    # Escalation / contact flags
+    exec_escalate = zone in (HDRZone.SEVERE, HDRZone.TERMINAL)
+    pp_contact = zone in (HDRZone.LIMITED, HDRZone.FEE_TIER, HDRZone.SEVERE, HDRZone.TERMINAL)
+
+    # Immediate actions
+    actions = [_HDRAction("REVIEW_DISPUTE_ROOT_CAUSE", "Audit last 30 disputes for root cause")]
+    if zone in (HDRZone.LIMITED, HDRZone.FEE_TIER, HDRZone.SEVERE, HDRZone.TERMINAL):
+        actions.insert(0, _HDRAction("PREEMPTIVE_REFUNDS", "Issue preemptive refunds on at-risk orders"))
+        actions.append(_HDRAction("PAUSE_HIGH_RISK_PRODUCTS", "Pause listings with elevated dispute rates"))
+    if zone in (HDRZone.SEVERE, HDRZone.TERMINAL):
+        actions.insert(0, _HDRAction("EXEC_ESCALATION", "Escalate to executive team and PayPal account manager"))
+
+    # Forecast
+    wd = snap.weekly_new_disputes
+    if len(wd) >= 2:
+        trend = wd[-1] - wd[0]
+        if trend > 0.5:
+            traj = "WORSENING"
+        elif trend < -0.5:
+            traj = "IMPROVING"
+        else:
+            traj = "STABLE"
+    else:
+        traj = "STABLE"
+
+    tx_per_week = sum(snap.weekly_new_transactions) / max(1, len(snap.weekly_new_transactions))
+    disp_per_week = sum(wd) / max(1, len(wd))
+    # Simple 30d projection
+    tx_30d = tx_per_week * 4.3 + max(0, tx - tx_per_week * 13)
+    disp_delta = (wd[-1] - wd[0]) * 2 if len(wd) >= 2 else 0
+    proj_disp = disp + disp_delta
+    proj_rate = proj_disp / max(1, tx) if tx > 0 else rate
+    proj_zone = _classify_zone(proj_rate)
+    forecast = HDRForecast(trajectory=traj, zone_30d=proj_zone, days_30_projected=round(proj_rate, 5))
+
+    # Max new disputes before next threshold
+    next_thresh = {HDRZone.SAFE: 0.005, HDRZone.ELEVATED: 0.010, HDRZone.LIMITED: 0.015,
+                   HDRZone.FEE_TIER: 0.030, HDRZone.SEVERE: 0.050, HDRZone.TERMINAL: 1.0}
+    upper = next_thresh.get(zone, 1.0)
+    max_new = max(0, int(upper * tx) - disp)
+
+    # Transactions needed to normalize (bring rate to safe 0.005)
+    target_rate = 0.005
+    tx_needed = max(0, int(disp / target_rate) - tx) if target_rate > 0 else 0
+
+    summary = (
+        f"HDR {zone.value}: rate={rate*100:.2f}% ({bps_from_limited:+.0f}bps from LIMITED) | "
+        f"disputes={disp}/{tx} | forecast={traj}"
+    )
+
+    if zone == HDRZone.TERMINAL:
+        alarm = f"TERMINAL HDR zone: {rate*100:.2f}% — suspension risk. Immediate intervention required."
+    elif zone == HDRZone.SEVERE:
+        alarm = f"SEVERE HDR zone: {rate*100:.2f}% — HDR program consequences escalating. Exec escalation needed."
+    elif zone in (HDRZone.LIMITED, HDRZone.FEE_TIER):
+        alarm = f"{zone.value} HDR zone: {rate*100:.2f}% — contact PayPal and reduce dispute volume immediately."
+    else:
+        alarm = f"HDR zone {zone.value}: {rate*100:.2f}% — monitor closely, {bps_from_limited:+.0f}bps from LIMITED."
+
+    return _HDRCrisisReport(
+        current_zone=zone,
+        executive_escalation_required=exec_escalate,
+        paypal_proactive_contact_recommended=pp_contact,
+        basis_points_from_limited=bps_from_limited,
+        immediate_actions=actions,
+        forecast=forecast,
+        maximum_new_disputes_this_month=max_new,
+        transactions_needed_to_normalize=tx_needed,
+        summary=summary,
+        alarm_message=alarm,
+    )
