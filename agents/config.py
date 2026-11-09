@@ -250,6 +250,8 @@ async def policy_is_loaded(merchant_id: str) -> bool:
     """Return true only for a valid, explicitly operator-reviewed policy."""
     # MERCHANT_POLICY_LOADED=1 is the operator's explicit approval signal in render.yaml.
     # When set, treat any valid DB policy record as reviewed (env var IS the review).
+    # When set and no DB record exists yet, fall back to the env-var-derived DEFAULT_CONFIG
+    # which is always structurally valid.
     env_approved = os.environ.get("MERCHANT_POLICY_LOADED", "").strip().lower() in {"1", "true", "yes"}
     try:
         if os.environ.get("DATABASE_URL"):
@@ -257,6 +259,17 @@ async def policy_is_loaded(merchant_id: str) -> bool:
             import agents.pg_store as pg_store
             data = await asyncio.to_thread(pg_store.get_policy, merchant_id)
             if not data:
+                # No DB record yet — accept env_approved with the default config as stand-in
+                if env_approved:
+                    cfg = GuardianConfig(
+                        merchant_id=merchant_id,
+                        auto_accept_below=float(os.environ.get("AUTO_ACCEPT_BELOW", "60")),
+                        auto_fight_above=float(os.environ.get("AUTO_FIGHT_ABOVE", "200")),
+                        auto_fight_min_prob=float(os.environ.get("AUTO_FIGHT_MIN_PROB", "0.60")),
+                        account_age_days=int(os.environ.get("SELLER_ACCOUNT_AGE_DAYS", "730")),
+                        hourly_rate=float(os.environ.get("SELLER_HOURLY_RATE", "50")),
+                    )
+                    return _valid_merchant_config(cfg, merchant_id)
                 return False
             cfg = GuardianConfig.from_dict(dict(data))
             reviewed = data.get("_reviewed") is True or env_approved
