@@ -274,7 +274,7 @@ def test_update_merchant_policy_sets_reviewed_marker(_client, monkeypatch):
 
 
 def test_update_merchant_policy_rejects_unknown_keys(_client, monkeypatch):
-    """PUT /api/admin/merchant-policy must reject invalid config values."""
+    """PUT /api/admin/merchant-policy must reject invalid config types."""
     monkeypatch.setenv("API_SECRET", "testsecret")
     monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
     import agents.pg_store as pg_store
@@ -285,6 +285,54 @@ def test_update_merchant_policy_rejects_unknown_keys(_client, monkeypatch):
         headers={"X-API-Secret": "testsecret"},
     )
     assert r.status_code == 422, "Invalid field type must return 422"
+
+
+def test_update_merchant_policy_rejects_unknown_and_tenant_fields(_client, monkeypatch):
+    monkeypatch.setenv("API_SECRET", "testsecret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("MERCHANT_ID", "test-merchant")
+    headers = {"X-API-Secret": "testsecret"}
+    unknown = _client.put("/api/admin/merchant-policy", json={"made_up": 1}, headers=headers)
+    cross_tenant = _client.put(
+        "/api/admin/merchant-policy",
+        json={"merchant_id": "other-merchant"},
+        headers=headers,
+    )
+    assert unknown.status_code == 422
+    assert cross_tenant.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_policy_is_loaded_requires_positive_review_marker(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    from agents.config import GuardianConfig, policy_is_loaded
+    import agents.pg_store as pg_store
+    import dataclasses
+    record = dataclasses.asdict(GuardianConfig(merchant_id="test-merchant"))
+    monkeypatch.setattr(pg_store, "get_policy", lambda _mid: dict(record, _auto_seeded=True))
+    assert await policy_is_loaded("test-merchant") is False
+    monkeypatch.setattr(pg_store, "get_policy", lambda _mid: dict(record, _reviewed=True))
+    assert await policy_is_loaded("test-merchant") is True
+
+
+def test_ready_requires_worker_even_when_web_scheduler_runs(_client, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("MERCHANT_ID", "test-merchant")
+    monkeypatch.setenv("RUN_SCHEDULER", "1")
+    monkeypatch.setenv("WEBHOOK_OUTBOX_ENABLED", "1")
+    monkeypatch.setenv("PAYPAL_CLIENT_ID", "client")
+    monkeypatch.setenv("PAYPAL_CLIENT_SECRET", "secret")
+    import agents.pg_store as pg_store
+    from agents.config import GuardianConfig
+    import dataclasses
+    reviewed = dataclasses.asdict(GuardianConfig(merchant_id="test-merchant"))
+    reviewed["_reviewed"] = True
+    monkeypatch.setattr(pg_store, "health_check", lambda: True)
+    monkeypatch.setattr(pg_store, "get_policy", lambda _mid: reviewed)
+    monkeypatch.setattr(pg_store, "get_worker_heartbeat_age", lambda _worker: None)
+    response = _client.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["checks"]["worker_running"] is False
 
 
 def test_health_ready_pg_check_absent_when_no_database_url(_client, monkeypatch):

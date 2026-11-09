@@ -812,7 +812,7 @@ async def health_ready():
             import agents.pg_store as pg_store
             _raw = await asyncio.to_thread(pg_store.get_policy, merchant_id)
             if isinstance(_raw, dict):
-                policy_is_default = not bool(_raw.get("_reviewed", False))
+                policy_is_default = _raw.get("_reviewed") is not True
         except Exception:
             pass
     safety = check_from_env(merchant_policy_loaded=merchant_policy_loaded)
@@ -852,7 +852,7 @@ async def health_ready():
     elif os.environ.get("REQUIRE_DURABLE_WEBHOOKS", "0") == "1" or os.environ.get("PAYPAL_ENV", "sandbox") == "live":
         critical["postgresql_connected"] = False
 
-    if os.environ.get("RUN_SCHEDULER", "1") != "1" and os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1":
+    if os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1":
         worker_age = None
         if os.environ.get("DATABASE_URL"):
             try:
@@ -862,7 +862,11 @@ async def health_ready():
                 worker_age = None
         checks["worker_heartbeat_age_seconds"] = worker_age
         checks["worker_running"] = worker_age is not None and worker_age < 90
-        critical["worker_running"] = checks["worker_running"]
+        # Only gate readiness on worker heartbeat when the web is NOT the scheduler.
+        # When RUN_SCHEDULER=1 the web owns scheduled tasks; there may be no separate
+        # worker process, and worker_running stays informational.
+        if os.environ.get("RUN_SCHEDULER", "1") != "1":
+            critical["worker_running"] = checks["worker_running"]
 
     # Also degrade when safety gate reports HUMAN_REVIEW with no merchant policy
     if safety_degraded:
@@ -892,6 +896,9 @@ async def seed_policy(request: Request):
     import asyncio
     import agents.pg_store as pg_store
     from agents.config import GuardianConfig
+    existing = await asyncio.to_thread(pg_store.get_policy, merchant_id)
+    if isinstance(existing, dict) and existing.get("_reviewed") is True:
+        return JSONResponse({"error": "a reviewed merchant policy already exists"}, status_code=409)
     cfg = GuardianConfig(merchant_id=merchant_id)
     import dataclasses
     cfg_dict = dataclasses.asdict(cfg)
@@ -906,7 +913,7 @@ async def seed_policy(request: Request):
 async def update_merchant_policy(request: Request):
     """Store an operator-reviewed merchant policy. Sets _reviewed:true so health/ready
     reports policy_is_default:false. Body is a JSON object whose keys override GuardianConfig
-    defaults; unknown keys are ignored. Protected by API_SECRET.
+    defaults; unknown keys are rejected. Protected by API_SECRET.
 
     Example body: {"auto_accept_below": 50, "auto_fight_above": 150}
     """
@@ -924,28 +931,44 @@ async def update_merchant_policy(request: Request):
     if not isinstance(body, dict):
         return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
     import dataclasses
+    import math
+    import typing
     import agents.pg_store as pg_store
-    from agents.config import GuardianConfig
+    from agents.config import GuardianConfig, _valid_merchant_config
     # Build from defaults then apply operator overrides
     base = dataclasses.asdict(GuardianConfig(merchant_id=merchant_id))
-    # Only allow known GuardianConfig fields; _reserved keys are ours
+    # Only allow known config fields. Tenant identity is deployment-scoped.
     known = {f.name for f in dataclasses.fields(GuardianConfig)}
-    # Validate types for numeric fields before merging (dataclass won't coerce)
-    _float_fields = {f.name for f in dataclasses.fields(GuardianConfig) if f.type in ("float", float)}
-    _int_fields = {f.name for f in dataclasses.fields(GuardianConfig) if f.type in ("int", int)}
+    if "merchant_id" in body:
+        return JSONResponse({"error": "merchant_id is deployment-scoped and cannot be overridden"}, status_code=422)
+    unknown = sorted(set(body) - known)
+    if unknown:
+        return JSONResponse({"error": f"unknown policy fields: {', '.join(unknown)}"}, status_code=422)
+    hints = typing.get_type_hints(GuardianConfig)
     for k, v in body.items():
-        if k not in known:
-            continue
-        if k in _float_fields and not isinstance(v, (int, float)):
-            return JSONResponse({"error": f"{k} must be a number"}, status_code=422)
-        if k in _int_fields and not isinstance(v, int):
+        expected = hints.get(k)
+        if expected is float and (type(v) not in (int, float) or not math.isfinite(v)):
+            return JSONResponse({"error": f"{k} must be a finite number"}, status_code=422)
+        if expected is int and type(v) is not int:
             return JSONResponse({"error": f"{k} must be an integer"}, status_code=422)
+        if expected is bool and type(v) is not bool:
+            return JSONResponse({"error": f"{k} must be a boolean"}, status_code=422)
+        if expected is str and not isinstance(v, str):
+            return JSONResponse({"error": f"{k} must be a string"}, status_code=422)
+        if expected is list and (not isinstance(v, list) or any(type(item) is not int for item in v)):
+            return JSONResponse({"error": f"{k} must be a list of integers"}, status_code=422)
         base[k] = v
     base["_reviewed"] = True
     base.pop("_auto_seeded", None)
     try:
-        # Validate the merged config constructs cleanly
-        GuardianConfig(**{k: v for k, v in base.items() if k in known})
+        # Validate the merged config and policy bounds before persisting it.
+        cfg = GuardianConfig(**{k: v for k, v in base.items() if k in known})
+        if not _valid_merchant_config(cfg, merchant_id):
+            raise ValueError("policy thresholds are invalid")
+        if not 0 <= cfg.morning_brief_hour <= 23:
+            raise ValueError("morning_brief_hour must be between 0 and 23")
+        from zoneinfo import ZoneInfo
+        ZoneInfo(cfg.morning_brief_timezone)
     except Exception as exc:
         return JSONResponse({"error": f"invalid policy config: {exc}"}, status_code=422)
     ok = await asyncio.to_thread(pg_store.save_policy, merchant_id, base)

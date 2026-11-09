@@ -66,19 +66,21 @@ async def run_worker() -> None:
 
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     config = await load_config(merchant_id)
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(watcher._run_recovery_check, "cron", minute="*/15", id="recovery")
-    scheduler.add_job(watcher._run_deadline_check, "cron", minute="*/30", id="deadlines")
-    scheduler.add_job(
-        watcher._send_morning_brief,
-        "cron",
-        hour=config.morning_brief_hour,
-        minute=0,
-        id="brief",
-        timezone=ZoneInfo(config.morning_brief_timezone),
-    )
-    scheduler.start()
-    log.info("Anchor worker started: scheduler and durable queues active")
+    scheduler = None
+    if os.environ.get("RUN_SCHEDULER", "0") == "1":
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(watcher._run_recovery_check, "cron", minute="*/15", id="recovery")
+        scheduler.add_job(watcher._run_deadline_check, "cron", minute="*/30", id="deadlines")
+        scheduler.add_job(
+            watcher._send_morning_brief,
+            "cron",
+            hour=config.morning_brief_hour,
+            minute=0,
+            id="brief",
+            timezone=ZoneInfo(config.morning_brief_timezone),
+        )
+        scheduler.start()
+    log.info("Anchor worker started: queue draining active; scheduler=%s", bool(scheduler))
 
     try:
         while True:
@@ -90,7 +92,8 @@ async def run_worker() -> None:
                 log.exception("Worker loop failed; leased work will become available after expiry")
             await asyncio.sleep(5)
     finally:
-        scheduler.shutdown(wait=False)
+        if scheduler and scheduler.running:
+            scheduler.shutdown(wait=False)
 
 
 if __name__ == "__main__":

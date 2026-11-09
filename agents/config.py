@@ -10,6 +10,7 @@ With it, Anchor handles 80% of disputes while the merchant sleeps.
 """
 
 import os
+import math
 from dataclasses import dataclass, asdict
 
 
@@ -213,18 +214,40 @@ def _manual_review_for(merchant_id: str) -> GuardianConfig:
 def _valid_merchant_config(config: GuardianConfig, merchant_id: str) -> bool:
     """Reject malformed or cross-merchant policy records before using them."""
     try:
+        finite_values = (
+            config.auto_accept_below, config.auto_fight_above, config.auto_fight_min_prob,
+            config.ask_range_low, config.ask_range_high, config.dispute_rate_alert,
+            config.dispute_rate_critical, config.high_risk_score_threshold,
+            config.hourly_rate,
+        )
+        from zoneinfo import ZoneInfo
+        ZoneInfo(config.morning_brief_timezone)
         return (
             config.merchant_id == merchant_id
+            and all(type(value) in (int, float) and math.isfinite(value) for value in finite_values)
+            and type(config.account_age_days) is int
+            and type(config.morning_brief_hour) is int
+            and 0 <= config.morning_brief_hour <= 23
+            and type(config.morning_brief_enabled) is bool
+            and type(config.auto_protect_account) is bool
+            and type(config.high_volume_fee_tier) is bool
+            and type(config.reminder_sequence_days) is list
+            and all(type(day) is int and day >= 0 for day in config.reminder_sequence_days)
+            and config.business_type in {"general", "freelancer", "ecommerce", "saas"}
             and config.auto_accept_below >= 0
             and config.auto_fight_above > config.auto_accept_below
             and 0 <= config.auto_fight_min_prob <= 1
+            and 0 <= config.dispute_rate_alert <= config.dispute_rate_critical <= 1
+            and config.hourly_rate >= 0
+            and config.account_age_days >= 0
+            and 0 <= config.high_risk_score_threshold <= 1
         )
     except (TypeError, ValueError):
         return False
 
 
 async def policy_is_loaded(merchant_id: str) -> bool:
-    """Return true only when a valid, merchant-scoped policy exists in storage."""
+    """Return true only for a valid, explicitly operator-reviewed policy."""
     try:
         if os.environ.get("DATABASE_URL"):
             import asyncio
@@ -233,7 +256,7 @@ async def policy_is_loaded(merchant_id: str) -> bool:
             if not data:
                 return False
             cfg = GuardianConfig.from_dict(dict(data))
-            return _valid_merchant_config(cfg, merchant_id)
+            return data.get("_reviewed") is True and _valid_merchant_config(cfg, merchant_id)
         es_url = os.environ.get("ELASTICSEARCH_URL")
         es_key = os.environ.get("ELASTICSEARCH_API_KEY")
         if not es_url or not es_key:
@@ -247,7 +270,8 @@ async def policy_is_loaded(merchant_id: str) -> bool:
         if response.status_code != 200:
             return False
         cfg = GuardianConfig.from_dict(response.json().get("_source", {}))
-        return _valid_merchant_config(cfg, merchant_id)
+        source = response.json().get("_source", {})
+        return source.get("_reviewed") is True and _valid_merchant_config(cfg, merchant_id)
     except Exception:
         return False
 
@@ -256,11 +280,14 @@ async def save_config(config: GuardianConfig) -> bool:
     """Persist merchant policy to PostgreSQL, or legacy Elasticsearch."""
     if not _valid_merchant_config(config, config.merchant_id):
         return False
+    policy = config.to_dict()
+    policy["_reviewed"] = True
+    policy.pop("_auto_seeded", None)
     if os.environ.get("DATABASE_URL"):
         try:
             import asyncio
             import agents.pg_store as pg_store
-            return await asyncio.to_thread(pg_store.save_policy, config.merchant_id, config.to_dict())
+            return await asyncio.to_thread(pg_store.save_policy, config.merchant_id, policy)
         except Exception as exc:
             print(f"[Config] PostgreSQL policy save failed for {config.merchant_id}: {exc}")
             return False
@@ -278,7 +305,7 @@ async def save_config(config: GuardianConfig) -> bool:
                     "Authorization": f"ApiKey {es_key}",
                     "Content-Type": "application/json",
                 },
-                json=config.to_dict(),
+                json=policy,
                 timeout=3.0,
             )
             return r.status_code in (200, 201)
