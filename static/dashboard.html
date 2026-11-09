@@ -727,6 +727,7 @@ let _logRows = [];
 let _selectedScenario = null;
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
+let _health = null;
 document.addEventListener('DOMContentLoaded', () => {
   loadOverview();
   setInterval(loadOverview, 60000);
@@ -735,8 +736,12 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Overview ──────────────────────────────────────────────────────────────────
 async function loadOverview() {
   try {
-    const ov = await fetch('/api/prod/overview', { signal: AbortSignal.timeout(15000) }).then(r => r.json());
+    const [ov, h] = await Promise.all([
+      fetch('/api/prod/overview', { signal: AbortSignal.timeout(15000) }).then(r => r.json()),
+      fetch('/health/ready', { signal: AbortSignal.timeout(10000) }).then(r => r.json()).catch(() => null),
+    ]);
     _overview = ov;
+    _health = h;
     renderOverview();
   } catch(e) {
     console.warn('Overview load error:', e);
@@ -749,6 +754,7 @@ function renderOverview() {
   if (!ov) return;
   const pp = ov.paypal || {};
   const sys = ov.system || {};
+  const hc = (_health && _health.checks) || {};
 
   // env badge
   const badge = document.getElementById('env-badge');
@@ -760,19 +766,25 @@ function renderOverview() {
     badge.className = 'env-badge';
   }
 
-  // system health sidebar
+  // system health sidebar — use /health/ready for accurate state
+  const dbOk = hc.postgresql_connected !== false;
+  const workerOk = hc.worker_running !== false && sys.scheduler_running !== false;
   updateHealth('paypal', pp.connected, pp.connected ? (pp.environment === 'live' ? 'Live' : 'Operational') : 'Error');
-  updateHealth('db', sys.db_connected !== false, sys.db_connected !== false ? 'Operational' : 'Error');
-  updateHealth('worker', sys.scheduler_running, sys.scheduler_running ? 'Operational' : 'Offline');
+  updateHealth('db', dbOk, dbOk ? 'Operational' : 'Error');
+  updateHealth('worker', workerOk, workerOk ? 'Operational' : 'Offline');
 
   // alert banner
   const alertEl = document.getElementById('alert-banner');
-  if (!sys.scheduler_running) {
+  const safetyLevel = hc.safety_level || '';
+  if (!workerOk) {
     alertEl.className = 'alert-banner alert-warn show';
     alertEl.textContent = 'Worker Offline. Decision actions are disabled to prevent state-mismatch.';
   } else if (!pp.connected) {
     alertEl.className = 'alert-banner alert-err show';
-    alertEl.textContent = `PayPal Connection Error: ${pp.error || 'Connection failed'}. Execution actions are disabled to prevent state-mismatch.`;
+    alertEl.textContent = `PayPal Connection Error. Execution actions are disabled.`;
+  } else if (safetyLevel === 'HUMAN_REVIEW' || safetyLevel === 'SHADOW') {
+    alertEl.className = 'alert-banner alert-warn show';
+    alertEl.textContent = `Safety level: ${safetyLevel} — Autonomous actions require merchant policy to be loaded. All decisions route to manual review.`;
   } else {
     alertEl.className = 'alert-banner';
   }
@@ -781,26 +793,10 @@ function renderOverview() {
   document.getElementById('overview-loading').style.display = 'none';
 
   const openCount = pp.open_disputes || 0;
-  const urgentCount = pp.urgent_disputes || 0;
-
-  if (!pp.connected || (openCount === 0 && urgentCount === 0)) {
-    // show empty state if no disputes
-    if (!pp.connected) {
-      document.getElementById('overview-empty').style.display = 'block';
-      document.getElementById('overview-loaded').style.display = 'none';
-    } else {
-      // connected but no disputes → show empty
-      document.getElementById('overview-empty').style.display = 'block';
-      document.getElementById('overview-loaded').style.display = 'none';
-    }
+  if (!pp.connected || openCount === 0) {
+    document.getElementById('overview-empty').style.display = 'block';
+    document.getElementById('overview-loaded').style.display = 'none';
   } else {
-    document.getElementById('overview-empty').style.display = 'none';
-    document.getElementById('overview-loaded').style.display = 'block';
-    renderActionQueue();
-  }
-
-  // also check if we have disputes data to populate overview
-  if (pp.connected && openCount > 0) {
     document.getElementById('overview-empty').style.display = 'none';
     document.getElementById('overview-loaded').style.display = 'block';
     renderActionQueue();
@@ -853,9 +849,19 @@ async function renderActionQueue() {
 function renderQueueTable(rows, isDemo) {
   const tbody = document.getElementById('action-queue-body');
   const footer = document.getElementById('queue-footer');
+  const pp = _overview && _overview.paypal || {};
   document.getElementById('queue-count').textContent = rows.length + ' pending';
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:20px">No disputes in queue.</td></tr>';
+    const openCount = pp.open_disputes || 0;
+    if (openCount > 0) {
+      tbody.innerHTML = `<tr><td colspan="7" style="padding:20px">
+        <div style="color:var(--muted);margin-bottom:6px">${openCount} dispute${openCount!==1?'s':''} reported by PayPal — awaiting webhook sync. Send a test webhook to populate the queue.</div>
+        <button class="btn-secondary" style="font-size:12px;padding:6px 14px" onclick="sendTestWebhook()">Send Test Webhook</button>
+      </td></tr>`;
+    } else {
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:20px">No disputes in queue.</td></tr>';
+    }
+    footer.textContent = '';
     return;
   }
   tbody.innerHTML = rows.map(d => {
@@ -899,7 +905,16 @@ async function loadDisputes() {
     _disputes = data.rows || [];
     banner.style.display = 'none';
     if (!_disputes.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No disputes found.</td></tr>';
+      const pp = _overview && _overview.paypal || {};
+      const openCount = pp.open_disputes || 0;
+      if (openCount > 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="padding:20px">
+          <div style="color:var(--muted);margin-bottom:8px">${openCount} dispute${openCount!==1?'s':''} found in PayPal but not yet synced to local storage. This happens before the first webhook is received.</div>
+          <button class="btn-secondary" style="font-size:12px;padding:6px 14px" onclick="sendTestWebhook()">Send Test Webhook to Sync</button>
+        </td></tr>`;
+      } else {
+        tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No disputes found. Disputes will appear here once received via PayPal webhook.</td></tr>';
+      }
       return;
     }
     tbody.innerHTML = _disputes.map(d => {
@@ -1156,25 +1171,71 @@ async function authorizeCapture() {
 async function loadActivityLog() {
   const tbody = document.getElementById('log-body');
   try {
-    const r = await fetch('/api/audit-log', { headers: _auth(), signal: AbortSignal.timeout(10000) });
-    if (!r.ok) {
-      // Fall back to dispute log if no dedicated endpoint
-      const dr = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(10000) });
-      if (!dr.ok) throw new Error('No log endpoint');
-      const data = await dr.json();
-      _logRows = (data.rows || []).map(d => ({
-        timestamp: d.created_at || d.updated_at,
-        env: d.environment || (_overview?.paypal?.environment === 'live' ? 'live' : 'sandbox'),
-        event: 'Dispute',
-        reference: d.dispute_id || d.id,
-        detail: (d.reason||'').replace(/_/g,' ') + (d.action_type ? ' → ' + d.action_type.replace(/_/g,' ') : ''),
-        result: d.status === 'AUTO_ACTIONED' ? 'success' : d.status === 'REQUIRED_ACTION' ? 'pending' : 'success',
-        result_text: d.status === 'AUTO_ACTIONED' ? 'Auto-Actioned' : d.status === 'REQUIRED_ACTION' ? 'Pending Review' : (d.status||'Unknown'),
-      }));
-    } else {
-      const data = await r.json();
+    // Try dedicated audit-log endpoint first; fall back to metrics + disputes
+    const auditRes = await fetch('/api/audit-log', { headers: _auth(), signal: AbortSignal.timeout(8000) }).catch(() => null);
+    if (auditRes && auditRes.ok) {
+      const data = await auditRes.json();
       _logRows = data.rows || data || [];
+      renderLog(_logRows);
+      return;
     }
+
+    // Build activity log from /metrics path data + /api/disputes
+    const [metricsData, disputeData] = await Promise.all([
+      fetch('/metrics', { signal: AbortSignal.timeout(8000) }).then(r => r.json()).catch(() => null),
+      fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(8000) }).then(r => r.json()).catch(() => null),
+    ]);
+
+    const env = _overview?.paypal?.environment === 'live' ? 'live' : 'sandbox';
+    const rows = [];
+
+    // Convert dispute rows to log entries
+    if (disputeData && disputeData.rows) {
+      for (const d of disputeData.rows) {
+        rows.push({
+          timestamp: d.created_at || d.updated_at,
+          env,
+          event: 'Dispute',
+          reference: d.dispute_id || d.id || '—',
+          detail: (d.reason||'').replace(/_/g,' ') + (d.action_type ? ' → ' + d.action_type.replace(/_/g,' ') : ''),
+          result: d.status === 'AUTO_ACTIONED' ? 'success' : d.status === 'REQUIRED_ACTION' ? 'pending' : 'success',
+          result_text: d.status === 'AUTO_ACTIONED' ? 'Auto-Actioned' : d.status === 'REQUIRED_ACTION' ? 'Pending Review' : (d.status||'Unknown'),
+        });
+      }
+    }
+
+    // Convert metrics paths to log entries (oracle endpoint calls)
+    if (metricsData && Array.isArray(metricsData.paths)) {
+      const startedAt = _overview?.started_at ? new Date(_overview.started_at) : new Date();
+      for (const p of metricsData.paths.slice(0, 30)) {
+        if (!p.count) continue;
+        rows.push({
+          timestamp: startedAt.toISOString(),
+          env,
+          event: 'Oracle',
+          reference: p.path,
+          detail: `${p.count} call${p.count!==1?'s':''} · avg ${p.avg_ms ? p.avg_ms.toFixed(0) : '—'}ms · ${p.errors} error${p.errors!==1?'s':''}`,
+          result: p.errors > 0 ? 'error' : 'success',
+          result_text: p.errors > 0 ? `Error: ${p.errors}` : `Success: ${p.count}`,
+        });
+      }
+    }
+
+    // If nothing, show startup event
+    if (!rows.length && _overview) {
+      const startedAt = _overview.started_at || new Date().toISOString();
+      rows.push({
+        timestamp: startedAt,
+        env,
+        event: 'Service',
+        reference: 'anchor-paypal',
+        detail: `Service started · ${_overview.system?.oracle_endpoints || 0} oracle endpoints loaded`,
+        result: 'success',
+        result_text: 'Online',
+      });
+    }
+
+    _logRows = rows;
     renderLog(_logRows);
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="6" style="color:var(--muted);padding:20px">Could not load activity log: ${e.message}</td></tr>`;
@@ -1184,13 +1245,16 @@ async function loadActivityLog() {
 function renderLog(rows) {
   const tbody = document.getElementById('log-body');
   document.getElementById('log-count').textContent = rows.length + ' events';
-  document.getElementById('log-footer').textContent = `Showing ${rows.length} events · Newest first`;
+  const footer = document.getElementById('log-footer');
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No activity recorded yet.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No activity recorded yet. Activity will appear here once disputes or oracle events are processed.</td></tr>';
+    footer.textContent = '';
     return;
   }
+  footer.textContent = `Showing ${rows.length} event${rows.length!==1?'s':''} · Source: metrics + disputes`;
   tbody.innerHTML = rows.map(row => {
-    const ts = row.timestamp ? new Date(row.timestamp).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+    let ts = '—';
+    try { if (row.timestamp) ts = new Date(row.timestamp).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}); } catch(e) {}
     const env = (row.env||'sandbox').toLowerCase();
     const envBadge = env === 'live' ? '<span class="badge badge-live" style="font-size:10px">Live</span>' : '<span class="badge badge-sandbox" style="font-size:10px">Sandbox</span>';
     const result = (row.result||'').toLowerCase();
@@ -1198,12 +1262,14 @@ function renderLog(rows) {
       : result === 'pending' ? `<span class="badge badge-review">${row.result_text || 'Pending'}</span>`
       : result === 'error' ? `<span class="badge badge-error">${row.result_text || 'Error'}</span>`
       : `<span class="badge badge-gray">${row.result_text || result || '—'}</span>`;
+    const ref = (row.reference || '—');
+    const refDisplay = ref.startsWith('/api') ? `<span style="font-family:monospace;font-size:12px;color:var(--accent)">${ref}</span>` : `<span class="mono">${ref}</span>`;
     return `<tr>
       <td style="white-space:nowrap;font-weight:500">${ts}</td>
       <td>${envBadge}</td>
       <td>${row.event || '—'}</td>
-      <td class="mono">${row.reference || '—'}</td>
-      <td style="color:var(--muted)">${row.detail || '—'}</td>
+      <td>${refDisplay}</td>
+      <td style="color:var(--muted);font-size:12.5px">${row.detail || '—'}</td>
       <td>${resultBadge}</td>
     </tr>`;
   }).join('');
@@ -1229,22 +1295,39 @@ async function loadSettings() {
   const ov = _overview || {};
   const pp = ov.paypal || {};
   const sys = ov.system || {};
+  const hc = (_health && _health.checks) || {};
+
+  const safetyLevel = hc.safety_level || sys.safety_level || '—';
+  const merchantPolicyLoaded = hc.merchant_policy_loaded === true;
+  const dbConnected = hc.postgresql_connected !== false;
+  const workerRunning = hc.worker_running !== false && sys.scheduler_running !== false;
+  const uptime = ov.uptime_seconds || (_health && _health.uptime_seconds);
+
   const rows = [
-    ['PayPal Environment', pp.environment || 'sandbox', pp.connected],
+    ['PayPal Environment', (pp.environment || 'sandbox').toUpperCase(), pp.connected],
     ['PayPal Connected', pp.connected ? 'Yes' : 'No', pp.connected],
-    ['Shadow Mode', sys.shadow_mode ? 'Enabled' : 'Disabled', !sys.shadow_mode],
-    ['Autonomous Actions', sys.autonomous_enabled ? 'Enabled' : 'Disabled', sys.autonomous_enabled],
-    ['Merchant Policy Loaded', sys.merchant_policy_loaded ? 'Yes' : 'No', sys.merchant_policy_loaded],
-    ['Safety Level', sys.safety_level || '—', sys.safety_level === 'SAFE'],
-    ['Scheduler Running', sys.scheduler_running ? 'Yes' : 'No', sys.scheduler_running],
-    ['Uptime', sys.uptime_seconds != null ? fmtUptime(sys.uptime_seconds) : '—', true],
+    ['Database', dbConnected ? 'Connected (PostgreSQL)' : 'Error', dbConnected],
+    ['Scheduler Running', workerRunning ? 'Yes' : 'No', workerRunning],
+    ['Merchant Policy Loaded', merchantPolicyLoaded ? 'Yes' : 'No — policy not seeded', merchantPolicyLoaded],
+    ['Safety Level', safetyLevel, safetyLevel === 'SAFE'],
+    ['PayPal Credentials', hc.paypal_creds_configured ? 'Configured' : 'Missing', hc.paypal_creds_configured !== false],
+    ['Open Disputes (PayPal)', pp.open_disputes ?? '—', true],
+    ['Webhook Registrations', pp.webhook_registrations ?? '—', (pp.webhook_registrations || 0) > 0],
     ['Oracle Endpoints', sys.oracle_endpoints || '—', true],
+    ['Uptime', uptime != null ? fmtUptime(uptime) : '—', true],
+    ['Service Status', _health ? _health.status || 'unknown' : '—', _health?.status === 'healthy'],
   ];
-  el.innerHTML = rows.map(([label, value, ok]) => `
+
+  el.innerHTML = `
+    <div style="margin-bottom:20px">
+      ${safetyLevel !== 'SAFE' ? `<div style="background:#fef9ec;border:1px solid #fde68a;border-radius:6px;padding:12px 14px;font-size:13px;color:#92400e;margin-bottom:16px">
+        <strong>Safety Level: ${safetyLevel}</strong><br>
+        ${!merchantPolicyLoaded ? 'Merchant policy is not loaded. Set <code>AUTONOMOUS_ACTIONS_ENABLED=1</code> in Render env vars to auto-seed policy.' : ''}
+      </div>` : ''}
+    </div>
+  ` + rows.map(([label, value, ok]) => `
     <div class="setting-row">
-      <div>
-        <div class="setting-label">${label}</div>
-      </div>
+      <div class="setting-label">${label}</div>
       <div class="${ok ? 'setting-ok' : 'setting-miss'}">${value}</div>
     </div>
   `).join('');
