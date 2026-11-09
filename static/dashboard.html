@@ -727,6 +727,31 @@ if (window.location.protocol === 'file:' || !window.location.hostname) {
 const _apiKey = (typeof window.__ANCHOR_API_KEY !== 'undefined') ? window.__ANCHOR_API_KEY : '';
 function _auth() { return _apiKey ? { 'X-API-Key': _apiKey } : {}; }
 
+// ── Helpers for PayPal API vs DB field shapes ─────────────────────────────────
+function disputeAmt(d) {
+  // PayPal API: dispute_amount.value | DB: amount | DB alt: disputed_amount
+  if (d.dispute_amount && d.dispute_amount.value != null) return Number(d.dispute_amount.value);
+  if (d.amount != null) return Number(d.amount);
+  if (d.disputed_amount != null) return Number(d.disputed_amount);
+  return 0;
+}
+function disputeBuyer(d) {
+  if (d.buyer_email) return d.buyer_email;
+  if (d.buyer) return d.buyer;
+  // PayPal API shape: disputed_transactions[0].buyer.email_address or payer_id
+  const tx = d.disputed_transactions && d.disputed_transactions[0];
+  if (tx && tx.buyer) {
+    return tx.buyer.email_address || ('payer:' + tx.buyer.payer_id) || 'Unknown';
+  }
+  return 'Unknown';
+}
+function disputeDeadline(d) {
+  // DB: next_response_due | PayPal API: seller_response_due_date
+  const raw = d.next_response_due || d.seller_response_due_date;
+  if (!raw) return '—';
+  return new Date(raw).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 // ── Page switching ────────────────────────────────────────────────────────────
 let _currentPage = 'overview';
 function showPage(id) {
@@ -888,7 +913,7 @@ function renderQueueTable(rows, isDemo) {
   }
   tbody.innerHTML = rows.map(d => {
     const id = d.dispute_id || d.id || '—';
-    const amount = '$' + Number(d.amount || d.disputed_amount || 0).toFixed(2);
+    const amount = '$' + disputeAmt(d).toFixed(2);
     const statusBadge = d.status === 'REQUIRED_ACTION'
       ? '<span class="badge badge-review">Awaiting Review</span>'
       : d.status === 'AUTO_ACTIONED'
@@ -898,7 +923,7 @@ function renderQueueTable(rows, isDemo) {
     const recDisplay = rec.toLowerCase().includes('fight') ? `<span class="rec-fight">Fight (EV: +$${d.ev_fight||'?'})</span>`
       : rec.toLowerCase().includes('accept') ? `<span class="rec-accept">Accept</span>`
       : `<span>${rec.replace(/_/g,' ')}</span>`;
-    const deadline = d.next_response_due ? new Date(d.next_response_due).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
+    const deadline = disputeDeadline(d);
     return `<tr onclick="openDisputeDetail(${JSON.stringify(id).replace(/'/g,"\\'")})" style="cursor:pointer">
       <td class="mono">${id}</td>
       <td>Dispute</td>
@@ -957,7 +982,7 @@ async function loadDisputes() {
     }
     tbody.innerHTML = _disputes.map(d => {
       const id = d.dispute_id || d.id || '—';
-      const amount = '$' + Number(d.amount || d.disputed_amount || 0).toFixed(2);
+      const amount = '$' + disputeAmt(d).toFixed(2);
       const reason = (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g,' ');
       const statusBadge = d.status === 'REQUIRED_ACTION'
         ? '<span class="badge badge-review">Awaiting Review</span>'
@@ -973,7 +998,7 @@ async function loadDisputes() {
       return `<tr onclick="openDisputeDetail('${id}')">
         <td class="mono">${id}</td>
         <td>${reason}</td>
-        <td class="col-right">$${Number(d.amount||d.disputed_amount||0).toFixed(2)} USD</td>
+        <td class="col-right">$${disputeAmt(d).toFixed(2)} USD</td>
         <td>${statusBadge}</td>
         <td>${recText}</td>
         <td><button class="btn-link" onclick="event.stopPropagation();openDisputeDetail('${id}')">Review</button></td>
@@ -995,7 +1020,8 @@ function openDisputeDetail(id) {
   if (_currentPage !== 'disputes') showPage('disputes');
 
   document.getElementById('detail-dispute-title').textContent = `Dispute Review: ${id}`;
-  document.getElementById('detail-dispute-amount').textContent = `$${Number(d.amount||d.disputed_amount||0).toFixed(2)} USD`;
+  const _amt = disputeAmt(d);
+  document.getElementById('detail-dispute-amount').textContent = `$${_amt.toFixed(2)} USD`;
 
   const env = (_overview && _overview.paypal && _overview.paypal.environment === 'live') ? 'Live' : 'Sandbox';
   const statusLabel = d.status === 'REQUIRED_ACTION' ? 'Awaiting Review' : (d.status||'Unknown').replace(/_/g,' ');
@@ -1004,7 +1030,7 @@ function openDisputeDetail(id) {
     <span class="badge badge-review">${statusLabel}</span>
   `;
   document.getElementById('detail-reason').textContent = (d.reason||'ITEM_NOT_RECEIVED').replace(/_/g,' ');
-  document.getElementById('detail-buyer').textContent = d.buyer_email || d.buyer || 'j***@example.com';
+  document.getElementById('detail-buyer').textContent = disputeBuyer(d);
 
   // evidence
   const evidence = d.evidence || [
@@ -1031,7 +1057,7 @@ function openDisputeDetail(id) {
   document.getElementById('detail-win-prob').textContent = winProb != null ? Math.round(winProb * 100) + '%' : '—';
 
   const evFight = d.ev_fight != null ? '$' + Number(d.ev_fight).toFixed(2) : '—';
-  const amount = Number(d.amount || d.disputed_amount || 0);
+  const amount = _amt;
   const evAccept = amount > 0 ? `-$${amount.toFixed(2)} + $15.00 fee` : '—';
   document.getElementById('detail-ev-fight').textContent = evFight;
   document.getElementById('detail-ev-accept').textContent = evAccept;
