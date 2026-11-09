@@ -78,8 +78,9 @@ class Guardian:
         to decide whether to act autonomously or send a decision request.
         """
         # Emergency kill switch: operator must explicitly opt in to autonomous actions.
-        # Default is 0 (disabled) — set AUTONOMOUS_ACTIONS_ENABLED=1 to enable.
-        if os.environ.get("AUTONOMOUS_ACTIONS_ENABLED", "0") != "1":
+        # Default is disabled — set AUTONOMOUS_ACTIONS_ENABLED=1 (or any truthy value) to enable.
+        _auto_enabled = os.environ.get("AUTONOMOUS_ACTIONS_ENABLED", "0").strip().lower() not in {"", "0", "false", "no", "off"}
+        if not _auto_enabled:
             print(
                 f"[Guardian] AUTONOMOUS_ACTIONS_ENABLED not set — routing {dispute_id} "
                 f"to human review (kill switch active)"

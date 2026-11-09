@@ -1086,9 +1086,13 @@ function openDisputeDetail(id) {
   const winProb = d.win_probability || d.ev_win_prob;
   document.getElementById('detail-win-prob').textContent = winProb != null ? Math.round(winProb * 100) + '%' : '—';
 
-  const evFight = d.ev_fight != null ? '$' + Number(d.ev_fight).toFixed(2) : '—';
+  const evFight = d.ev_fight != null ? (Number(d.ev_fight) >= 0 ? '+' : '') + '$' + Number(d.ev_fight).toFixed(2) : '—';
   const amount = _amt;
-  const evAccept = amount > 0 ? `-$${amount.toFixed(2)} + $15.00 fee` : '—';
+  // $15 = PayPal standard dispute resolution fee (charged to seller if dispute lost/accepted)
+  // High-volume merchants (>100 disputes/mo AND >1.5% ratio) pay $20 instead
+  const ppFee = (d.chargeback_fee != null) ? Number(d.chargeback_fee) : 15;
+  const totalAcceptCost = amount + ppFee;
+  const evAccept = amount > 0 ? `-$${totalAcceptCost.toFixed(2)} (refund $${amount.toFixed(2)} + $${ppFee.toFixed(0)} PayPal fee)` : '—';
   document.getElementById('detail-ev-fight').textContent = evFight;
   document.getElementById('detail-ev-accept').textContent = evAccept;
 
