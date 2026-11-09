@@ -927,12 +927,28 @@ async function loadDisputes() {
     _disputes = data.rows || [];
     banner.style.display = 'none';
     if (!_disputes.length) {
+      // Try fetching live disputes directly from PayPal API
+      try {
+        const ppRes = await fetch('/api/paypal/disputes?state=REQUIRED_ACTION&page_size=20', {
+          headers: _auth(), signal: AbortSignal.timeout(10000)
+        });
+        if (ppRes.ok) {
+          const ppData = await ppRes.json();
+          const ppDisputes = ppData.items || ppData.disputes || ppData.rows || [];
+          if (ppDisputes.length) {
+            _disputes = ppDisputes;
+            // fall through to render
+          }
+        }
+      } catch(e) { /* silent */ }
+    }
+    if (!_disputes.length) {
       const pp = _overview && _overview.paypal || {};
       const openCount = pp.open_disputes || 0;
       if (openCount > 0) {
         tbody.innerHTML = `<tr><td colspan="6" style="padding:20px">
-          <div style="color:var(--muted);margin-bottom:8px">${openCount} dispute${openCount!==1?'s':''} found in PayPal but not yet synced to local storage. This happens before the first webhook is received.</div>
-          <button class="btn-secondary" style="font-size:12px;padding:6px 14px" onclick="sendTestWebhook()">Send Test Webhook to Sync</button>
+          <div style="color:var(--muted);margin-bottom:8px">${openCount} dispute${openCount!==1?'s':''} found in PayPal but not yet synced to local storage. Run a simulation to trigger the pipeline.</div>
+          <button class="btn-secondary" style="font-size:12px;padding:6px 14px" onclick="sendTestWebhook()">Run Dispute Simulation</button>
         </td></tr>`;
       } else {
         tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No disputes found. Disputes will appear here once received via PayPal webhook.</td></tr>';
@@ -1193,16 +1209,27 @@ async function authorizeCapture() {
 async function loadActivityLog() {
   const tbody = document.getElementById('log-body');
   try {
-    // Try dedicated audit-log endpoint first; fall back to metrics + disputes
-    const auditRes = await fetch('/api/audit-log', { headers: _auth(), signal: AbortSignal.timeout(8000) }).catch(() => null);
+    // Try dedicated audit log endpoint first; fall back to metrics + disputes
+    const auditRes = await fetch('/api/audit/log?limit=100', { headers: _auth(), signal: AbortSignal.timeout(8000) }).catch(() => null);
     if (auditRes && auditRes.ok) {
       const data = await auditRes.json();
-      _logRows = data.rows || data || [];
-      renderLog(_logRows);
-      return;
+      const entries = data.entries || data.rows || [];
+      if (entries.length) {
+        _logRows = entries.map(e => ({
+          timestamp: e.timestamp || e.created_at,
+          env: e.is_sandbox ? 'sandbox' : 'live',
+          event: 'Oracle Decision',
+          reference: e.dispute_id || e.id || '—',
+          detail: `${(e.recommendation||'').replace(/_/g,' ')} · win_prob: ${e.win_probability != null ? Math.round(e.win_probability*100)+'%' : '—'} · EV fight: ${e.ev_fight != null ? '$'+Number(e.ev_fight).toFixed(2) : '—'}`,
+          result: e.recommendation && e.recommendation.includes('FIGHT') ? 'success' : 'pending',
+          result_text: (e.recommendation||'').replace(/_/g,' ') || 'Logged',
+        }));
+        renderLog(_logRows);
+        return;
+      }
     }
 
-    // Build activity log from /metrics path data + /api/disputes
+    // Fall back to metrics path data + /api/disputes
     const [metricsData, disputeData] = await Promise.all([
       fetch('/metrics', { signal: AbortSignal.timeout(8000) }).then(r => r.json()).catch(() => null),
       fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(8000) }).then(r => r.json()).catch(() => null),
@@ -1355,16 +1382,23 @@ async function loadSettings() {
   `).join('');
 }
 
-// ── Send Test Webhook ─────────────────────────────────────────────────────────
+// ── Send Test Webhook / Simulate Dispute ─────────────────────────────────────
 async function sendTestWebhook() {
   try {
-    const r = await fetch('/api/admin/test-webhook', { method: 'POST', headers: { ...{ 'Content-Type': 'application/json' }, ..._auth() } });
+    const r = await fetch('/api/demo/simulate-dispute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ..._auth() },
+      body: JSON.stringify({ scenario: 'inr_fight' }),
+    });
+    const data = await r.json().catch(() => ({}));
     if (r.ok) {
-      alert('Test webhook sent! Check the Activity Log for the event.');
+      const rec = data.recommendation || data.action || '';
+      const ev = data.ev_fight != null ? ` · EV fight: $${Number(data.ev_fight).toFixed(2)}` : '';
+      alert(`Simulation complete!\nRecommendation: ${rec}${ev}\n\nCheck Activity Log for the full decision trace.`);
       loadOverview();
+      if (_currentPage === 'activitylog') loadActivityLog();
     } else {
-      const e = await r.json().catch(() => ({}));
-      alert('Could not send test webhook: ' + (e.detail || r.status));
+      alert('Simulation failed: ' + (data.detail || r.status));
     }
   } catch(e) { alert('Network error: ' + e.message); }
 }
