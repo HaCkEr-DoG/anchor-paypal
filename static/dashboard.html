@@ -701,6 +701,28 @@
 </div>
 
 <script>
+// ── File-protocol guard ───────────────────────────────────────────────────────
+if (window.location.protocol === 'file:' || !window.location.hostname) {
+  document.body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f5f5f5;font-family:Inter,sans-serif">
+      <div style="background:#fff;border:1px solid #e8e8e8;border-radius:10px;padding:36px 40px;max-width:420px;text-align:center">
+        <div style="font-size:22px;font-weight:700;margin-bottom:10px">Open from Server</div>
+        <div style="font-size:14px;color:#6b6b6b;margin-bottom:24px;line-height:1.6">
+          This dashboard fetches live data from the Anchor API and cannot run as a local file.
+          Open it from the deployed service instead.
+        </div>
+        <a href="https://anchor-paypal.onrender.com/dashboard"
+           style="display:inline-block;background:#2563eb;color:#fff;border-radius:6px;padding:10px 24px;text-decoration:none;font-weight:600;font-size:14px">
+          Open Dashboard →
+        </a>
+        <div style="margin-top:16px;font-size:12px;color:#9b9b9b">
+          or run <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px">uvicorn agents.watcher:app --reload</code> locally
+        </div>
+      </div>
+    </div>`;
+  throw new Error('file:// protocol — open from server');
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 const _apiKey = (typeof window.__ANCHOR_API_KEY !== 'undefined') ? window.__ANCHOR_API_KEY : '';
 function _auth() { return _apiKey ? { 'X-API-Key': _apiKey } : {}; }
