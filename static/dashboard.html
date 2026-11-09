@@ -969,8 +969,30 @@ async function loadDisputes() {
           const ppData = await ppRes.json();
           const ppDisputes = ppData.items || ppData.disputes || ppData.rows || [];
           if (ppDisputes.length) {
-            _disputes = ppDisputes;
-            // fall through to render
+            // Merge oracle data (win_probability, ev_fight) from audit_log by dispute_id
+            try {
+              const auditRes = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(5000) });
+              if (auditRes.ok) {
+                const auditData = await auditRes.json();
+                const oracleMap = {};
+                for (const e of (auditData.rows || [])) {
+                  if (e.dispute_id && !oracleMap[e.dispute_id]) oracleMap[e.dispute_id] = e;
+                }
+                _disputes = ppDisputes.map(d => {
+                  const did = d.dispute_id || d.id;
+                  const oracle = oracleMap[did];
+                  return oracle ? Object.assign({}, d, {
+                    win_probability: oracle.win_probability,
+                    ev_fight: oracle.ev_fight,
+                    recommendation: oracle.recommendation || oracle.action_type,
+                  }) : d;
+                });
+              } else {
+                _disputes = ppDisputes;
+              }
+            } catch(e2) {
+              _disputes = ppDisputes;
+            }
           }
         }
       } catch(e) { /* silent */ }
