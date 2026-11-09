@@ -109,7 +109,9 @@ async def lifespan(app: FastAPI):
             _existing = await asyncio.to_thread(pg_store.get_policy, _mid)
             if not _existing:
                 _default_cfg = GuardianConfig(merchant_id=_mid)
-                await asyncio.to_thread(pg_store.save_policy, _mid, _dc.asdict(_default_cfg))
+                _seed_dict = _dc.asdict(_default_cfg)
+                _seed_dict["_auto_seeded"] = True
+                await asyncio.to_thread(pg_store.save_policy, _mid, _seed_dict)
                 print(f"[Watcher] Seeded default merchant policy for {_mid}")
         except Exception as _seed_exc:
             print(f"[Watcher] Policy auto-seed failed (non-fatal): {_seed_exc}")
@@ -801,6 +803,16 @@ async def health_ready():
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     from agents.config import policy_is_loaded
     merchant_policy_loaded = await policy_is_loaded(merchant_id)
+    # Check if the loaded policy was auto-seeded (not operator-reviewed)
+    policy_is_default = False
+    if merchant_policy_loaded and os.environ.get("DATABASE_URL"):
+        try:
+            import agents.pg_store as pg_store
+            _raw = await asyncio.to_thread(pg_store.get_policy, merchant_id)
+            if isinstance(_raw, dict):
+                policy_is_default = bool(_raw.get("_auto_seeded", False))
+        except Exception:
+            pass
     safety = check_from_env(merchant_policy_loaded=merchant_policy_loaded)
     # Only BLOCKED is a hard failure here; HUMAN_REVIEW is a degraded state
     safety_hard_blocked = safety.safety_level == SafetyLevel.BLOCKED
@@ -819,6 +831,7 @@ async def health_ready():
         "safety_gate": not safety_hard_blocked,
         "safety_level": safety.safety_level,
         "merchant_policy_loaded": merchant_policy_loaded,
+        "policy_is_default": policy_is_default,
         "safety_degraded": safety_degraded,
     }
     if pg_ok is not None:
@@ -879,7 +892,9 @@ async def seed_policy(request: Request):
     from agents.config import GuardianConfig
     cfg = GuardianConfig(merchant_id=merchant_id)
     import dataclasses
-    ok = await asyncio.to_thread(pg_store.save_policy, merchant_id, dataclasses.asdict(cfg))
+    cfg_dict = dataclasses.asdict(cfg)
+    cfg_dict["_auto_seeded"] = True
+    ok = await asyncio.to_thread(pg_store.save_policy, merchant_id, cfg_dict)
     if ok:
         return JSONResponse({"status": "seeded", "merchant_id": merchant_id})
     return JSONResponse({"error": "failed to save policy"}, status_code=500)

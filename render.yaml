@@ -74,7 +74,7 @@ services:
       - key: REQUIRE_DURABLE_WEBHOOKS
         value: "1"
       - key: RUN_SCHEDULER
-        value: "0"
+        value: "1"
       - key: RECOVERY_VALIDATION_ENABLED
         value: "1"
       - key: AUTONOMOUS_ACTIONS_ENABLED
