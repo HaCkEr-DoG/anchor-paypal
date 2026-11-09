@@ -86,17 +86,16 @@ _OUTBOX_WORKER_ID = "anchor-web"  # heartbeat written by in-process outbox drain
 
 
 async def _drain_outbox_in_process() -> None:
-    """Drain the webhook outbox and approval jobs from the web process.
+    """Drain durable webhook and approval queues from the web process.
 
-    Runs as an APScheduler job when no dedicated worker is deployed
-    (WEBHOOK_OUTBOX_ENABLED=1 and RUN_SCHEDULER=1). Writes a heartbeat so
-    /health/ready can confirm the outbox is being drained.
+    Runs as an APScheduler job when WEBHOOK_OUTBOX_ENABLED=1 and
+    RUN_SCHEDULER=1. PostgreSQL leases allow it to run alongside the dedicated
+    worker. Writes a heartbeat after a successful drain cycle.
     """
     if not os.environ.get("DATABASE_URL"):
         return
     import agents.pg_store as pg_store
     try:
-        await asyncio.to_thread(pg_store.heartbeat_worker, _OUTBOX_WORKER_ID)
         rows = await asyncio.to_thread(
             pg_store.claim_pending_webhook_events, _OUTBOX_WORKER_ID, 20, 120
         )
@@ -118,6 +117,34 @@ async def _drain_outbox_in_process() -> None:
                 )
             else:
                 await asyncio.to_thread(pg_store.mark_event_processed, event_id, _OUTBOX_WORKER_ID)
+
+        # Match the dedicated worker's policy: approved fights stay queued in
+        # shadow mode and are only executed after shadow mode is explicitly off.
+        if os.environ.get("SHADOW_MODE", "0").strip().lower() not in {"1", "true", "yes"}:
+            approval_rows = await asyncio.to_thread(
+                pg_store.claim_pending_approval_jobs, _OUTBOX_WORKER_ID, 10, 180
+            )
+            for row in approval_rows:
+                try:
+                    await _execute_approved_fight(row["dispute_id"])
+                except Exception as exc:
+                    print(f"[Watcher] Approval job {row['job_id']} failed: {exc}")
+                    await asyncio.to_thread(
+                        pg_store.fail_approval_job,
+                        str(row["job_id"]),
+                        _OUTBOX_WORKER_ID,
+                        repr(exc),
+                    )
+                else:
+                    await asyncio.to_thread(
+                        pg_store.complete_approval_job,
+                        str(row["job_id"]),
+                        _OUTBOX_WORKER_ID,
+                    )
+
+        # Update only after a successful queue cycle. A DB/claim/ack failure
+        # must not keep readiness green by refreshing a liveness-only heartbeat.
+        await asyncio.to_thread(pg_store.heartbeat_worker, _OUTBOX_WORKER_ID)
     except Exception as exc:
         print(f"[Watcher] Outbox drain failed: {exc}")
 
@@ -174,10 +201,11 @@ async def lifespan(app: FastAPI):
             id="brief",
             timezone=ZoneInfo(_brief_tz),
         )
-        # When no dedicated worker is deployed, drain the outbox in-process.
+        # Keep the web process able to drain durable queues; PostgreSQL leases
+        # make this safe when the dedicated worker is active too.
         if os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1" and os.environ.get("DATABASE_URL"):
             _scheduler.add_job(_drain_outbox_in_process, "interval", seconds=10, id="outbox_drain")
-            print("[Watcher] In-process outbox drain enabled (no dedicated worker)")
+            print("[Watcher] In-process queue drainer enabled")
         _scheduler.start()
         print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
     else:
