@@ -78,6 +78,18 @@ _SECURITY_HEADERS = {
     "X-XSS-Protection": "1; mode=block",
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
+    # HSTS: enforce HTTPS for 1 year, include subdomains (Render always serves TLS)
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    # CSP: allow Google Fonts (dashboard) and inline scripts/styles; block everything else
+    "Content-Security-Policy": (
+        "default-src 'none'; "
+        "style-src 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src https://fonts.gstatic.com; "
+        "script-src 'unsafe-inline'; "
+        "connect-src 'self'; "
+        "img-src 'self' data:; "
+        "frame-ancestors 'none'"
+    ),
 }
 
 _scheduler = AsyncIOScheduler()
