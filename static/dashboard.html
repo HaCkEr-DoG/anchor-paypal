@@ -1083,18 +1083,50 @@ function openDisputeDetail(id) {
   document.getElementById('detail-rec').textContent = isFight ? 'Fight Dispute' : 'Accept Liability';
   document.getElementById('detail-rec').className = 'de-rec ' + (isFight ? 'rec-fight' : 'rec-accept');
 
-  const winProb = d.win_probability || d.ev_win_prob;
-  document.getElementById('detail-win-prob').textContent = winProb != null ? Math.round(winProb * 100) + '%' : '—';
-
-  const evFight = d.ev_fight != null ? (Number(d.ev_fight) >= 0 ? '+' : '') + '$' + Number(d.ev_fight).toFixed(2) : '—';
+  const winProb = d.win_probability != null ? d.win_probability : (d.ev_win_prob != null ? d.ev_win_prob : null);
   const amount = _amt;
   // $15 = PayPal standard dispute resolution fee (charged to seller if dispute lost/accepted)
-  // High-volume merchants (>100 disputes/mo AND >1.5% ratio) pay $20 instead
   const ppFee = (d.chargeback_fee != null) ? Number(d.chargeback_fee) : 15;
   const totalAcceptCost = amount + ppFee;
   const evAccept = amount > 0 ? `-$${totalAcceptCost.toFixed(2)} (refund $${amount.toFixed(2)} + $${ppFee.toFixed(0)} PayPal fee)` : '—';
-  document.getElementById('detail-ev-fight').textContent = evFight;
   document.getElementById('detail-ev-accept').textContent = evAccept;
+
+  if (winProb != null && d.ev_fight != null) {
+    document.getElementById('detail-win-prob').textContent = Math.round(winProb * 100) + '%';
+    const evFight = (Number(d.ev_fight) >= 0 ? '+' : '') + '$' + Number(d.ev_fight).toFixed(2);
+    document.getElementById('detail-ev-fight').textContent = evFight;
+  } else {
+    // win_probability not stored (dispute processed before oracle fix) — compute on the fly
+    document.getElementById('detail-win-prob').textContent = 'computing…';
+    document.getElementById('detail-ev-fight').textContent = 'computing…';
+    const reason = (d.reason || d.reason_code || 'ITEM_NOT_RECEIVED').toUpperCase();
+    const claimTypeMap = {
+      'MERCHANDISE_OR_SERVICE_NOT_RECEIVED': 'ITEM_NOT_RECEIVED',
+      'ITEM_NOT_RECEIVED': 'ITEM_NOT_RECEIVED',
+      'INR': 'ITEM_NOT_RECEIVED',
+      'MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED': 'SIGNIFICANTLY_NOT_AS_DESCRIBED',
+      'SNAD': 'SIGNIFICANTLY_NOT_AS_DESCRIBED',
+      'UNAUTHORIZED': 'UNAUTHORIZED',
+      'BILLING_ISSUE': 'BILLING_ISSUE',
+    };
+    const claimType = claimTypeMap[reason] || 'ITEM_NOT_RECEIVED';
+    const hasTracking = !!(d.tracking_number);
+    fetch(`/api/oracle/calculate?amount=${encodeURIComponent(amount)}&claim_type=${claimType}&has_tracking=${hasTracking}`, {
+      signal: AbortSignal.timeout(8000)
+    }).then(r => r.json()).then(calc => {
+      const wp = calc.win_probability ?? calc.win_prob;
+      const ef = calc.ev_fight ?? calc.expected_value;
+      document.getElementById('detail-win-prob').textContent = wp != null ? Math.round(wp * 100) + '%' : '—';
+      if (ef != null) {
+        document.getElementById('detail-ev-fight').textContent = (Number(ef) >= 0 ? '+' : '') + '$' + Number(ef).toFixed(2);
+      } else {
+        document.getElementById('detail-ev-fight').textContent = '—';
+      }
+    }).catch(() => {
+      document.getElementById('detail-win-prob').textContent = '—';
+      document.getElementById('detail-ev-fight').textContent = '—';
+    });
+  }
 
   // disable actions if worker offline or paypal error
   const workerOk = _overview && _overview.system && _overview.system.scheduler_running;
