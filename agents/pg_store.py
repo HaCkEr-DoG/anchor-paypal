@@ -276,6 +276,10 @@ def mark_event_processed(event_id: str, worker_id: Optional[str] = None) -> bool
         conn.commit()
         return updated
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         logger.warning("pg_store: mark_event_processed failed: %s", exc)
         raise
 
@@ -1059,6 +1063,10 @@ def purge_old_records(retain_days: int = 90) -> dict:
         conn.commit()
         logger.info("pg_store: purged records older than %d days: %s", retain, removed)
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         logger.error("pg_store: purge_old_records failed: %s", exc)
     return removed
 
@@ -1104,5 +1112,9 @@ def get_oldest_pending_job_age_seconds() -> Optional[float]:
             return float(row[0])
         return None
     except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         logger.error("pg_store: get_oldest_pending_job_age_seconds failed: %s", exc)
         return None

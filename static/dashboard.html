@@ -462,9 +462,9 @@
           <div class="stat-card-sub" id="stat-deadline-sub">—</div>
         </div>
         <div class="stat-card">
-          <div class="stat-card-label">Pending Recovery Reviews</div>
-          <div class="stat-card-value" id="stat-recoveries">—</div>
-          <div class="stat-card-sub">Orders approved, uncaptured</div>
+          <div class="stat-card-label">Time Saved by Anchor</div>
+          <div class="stat-card-value" id="stat-time-saved">—</div>
+          <div class="stat-card-sub" id="stat-time-saved-sub">vs. manual dispute management</div>
         </div>
       </div>
 
@@ -582,6 +582,16 @@
             <button class="btn-secondary" id="detail-btn-accept" onclick="approveDisputeAction('accept')">Accept Liability</button>
           </div>
           <div class="de-note" id="detail-action-note">Anchor will not act without your approval.</div>
+        </div>
+      </div>
+      <div class="detail-card" style="margin-top:16px" id="oracle-reasons-card">
+        <div class="detail-section-label">Why Anchor Made This Decision</div>
+        <div id="detail-oracle-reasons" style="font-size:13px;color:var(--muted);line-height:1.8">
+          <em>Oracle reasons will appear here after analysis.</em>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:var(--muted)">
+          Confidence: <strong id="detail-confidence">—</strong>
+          &nbsp;·&nbsp; Break-even at: <strong id="detail-breakeven">—</strong>
         </div>
       </div>
       <div class="detail-card" style="margin-top:16px">
@@ -845,6 +855,7 @@ function showPage(id) {
 // ── Global state ─────────────────────────────────────────────────────────────
 let _overview = null;
 let _disputes = [];
+const _esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 let _recoveries = [];
 let _logRows = [];
 let _selectedScenario = null;
@@ -957,7 +968,20 @@ async function renderActionQueue() {
     document.getElementById('stat-deadline-sub').textContent = '—';
   }
 
-  document.getElementById('stat-recoveries').textContent = pp.recovery_pending ?? '0';
+  // Time Saved: auto-fought disputes × (90 min human − 10 min machine) at $50/hr
+  const autoFought = _disputes.filter(d => {
+    const rec = (d.recommendation || d.action_type || '').toLowerCase();
+    return rec.includes('fight') && d.win_probability != null;
+  }).length;
+  const timeSavedMins = autoFought * (90 - 10);
+  const timeSavedHrs = (timeSavedMins / 60).toFixed(1);
+  const dollarsSaved = (autoFought * (1.5 - 10/60) * 50).toFixed(0);
+  document.getElementById('stat-time-saved').textContent = timeSavedMins >= 60
+    ? `${timeSavedHrs}h`
+    : `${timeSavedMins}m`;
+  document.getElementById('stat-time-saved-sub').textContent = autoFought > 0
+    ? `~$${dollarsSaved} saved across ${autoFought} auto-fought dispute${autoFought !== 1 ? 's' : ''}`
+    : 'No auto-fought disputes yet';
 
   // Load dispute rows for the action queue
   try {
@@ -1094,13 +1118,13 @@ async function loadDisputes() {
       const recText = rec.toLowerCase().includes('fight') ? '<span class="rec-fight">Fight</span>'
         : rec.toLowerCase().includes('accept') ? '<span class="rec-accept">Accept</span>'
         : rec ? `<span>${rec.replace(/_/g,' ')}</span>` : '—';
-      return `<tr onclick="openDisputeDetail('${id}')">
-        <td class="mono">${id}</td>
-        <td>${reason}</td>
+      return `<tr onclick="openDisputeDetail('${_esc(id)}')">
+        <td class="mono">${_esc(id)}</td>
+        <td>${_esc(reason)}</td>
         <td class="col-right">$${disputeAmt(d).toFixed(2)} USD</td>
         <td>${statusBadge}</td>
         <td>${recText}</td>
-        <td><button class="btn-link" onclick="event.stopPropagation();openDisputeDetail('${id}')">Review</button></td>
+        <td><button class="btn-link" onclick="event.stopPropagation();openDisputeDetail('${_esc(id)}')">Review</button></td>
       </tr>`;
     }).join('');
     // ── AG Grid update ──────────────────────────────────────────────────────
@@ -1115,22 +1139,37 @@ async function loadDisputes() {
 function _renderDisputesGrid(rows) {
   const el = document.getElementById('ag-disputes-grid');
   if (!el || typeof agGrid === 'undefined') return;
-  const rowData = rows.map(d => ({
-    id: d.dispute_id || d.id || '—',
-    reason: (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g, ' '),
-    amount: disputeAmt(d),
-    status: (d.status || 'Unknown').replace(/_/g, ' '),
-    recommendation: d.recommendation || d.action_type || '—',
-    win_prob: d.win_probability != null ? Math.round(d.win_probability * 100) + '%' : '—',
-    _raw: d,
-  }));
+  const rowData = rows.map(d => {
+    let daysLeft = null;
+    if (d.seller_response_due_date) {
+      daysLeft = Math.ceil((new Date(d.seller_response_due_date) - Date.now()) / 864e5);
+    } else if (d.create_time) {
+      daysLeft = Math.ceil((new Date(d.create_time).getTime() + 20 * 864e5 - Date.now()) / 864e5);
+    }
+    return {
+      id: d.dispute_id || d.id || '—',
+      reason: (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g, ' '),
+      amount: disputeAmt(d),
+      status: (d.status || 'Unknown').replace(/_/g, ' '),
+      recommendation: d.recommendation || d.action_type || '—',
+      win_prob: d.win_probability != null ? Math.round(d.win_probability * 100) + '%' : '—',
+      days_left: daysLeft,
+      _raw: d,
+    };
+  });
   const colDefs = [
     { field: 'id', headerName: 'Dispute ID', flex: 1.5, cellClass: 'mono',
       cellRenderer: p => `<span style="font-family:monospace">${p.value}</span>` },
     { field: 'reason', headerName: 'Reason', flex: 2 },
     { field: 'amount', headerName: 'Amount', flex: 1, type: 'numericColumn',
       valueFormatter: p => '$' + p.value.toFixed(2) + ' USD' },
-    { field: 'status', headerName: 'Status', flex: 1.2 },
+    { field: 'days_left', headerName: 'Days Left', flex: 0.8, type: 'numericColumn',
+      cellRenderer: p => {
+        if (p.value == null) return '—';
+        const color = p.value <= 2 ? 'var(--error)' : p.value <= 5 ? 'var(--warn)' : 'inherit';
+        const icon = p.value <= 2 ? '🔴 ' : p.value <= 5 ? '🟡 ' : '';
+        return `<span style="color:${color};font-weight:600">${icon}${p.value}d</span>`;
+      }},
     { field: 'recommendation', headerName: 'Recommendation', flex: 1.2,
       cellRenderer: p => {
         const v = (p.value||'').toLowerCase();
@@ -1306,6 +1345,21 @@ function openDisputeDetail(id) {
     document.getElementById('detail-btn-accept').disabled = false;
     noteEl.textContent = 'Anchor will not act without your approval.';
   }
+
+  // oracle reasons panel
+  const reasonsEl = document.getElementById('detail-oracle-reasons');
+  const reasons = d.oracle_reasons || d.reasoning || [];
+  if (reasons.length) {
+    reasonsEl.innerHTML = reasons.map(r =>
+      `<div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--ok);flex-shrink:0">▸</span><span>${r}</span></div>`
+    ).join('');
+  } else {
+    reasonsEl.innerHTML = '<em style="color:var(--muted)">No oracle reasons available — reprocess dispute to generate explanation.</em>';
+  }
+  document.getElementById('detail-confidence').textContent =
+    d.confidence != null ? Math.round(d.confidence * 100) + '%' : '—';
+  document.getElementById('detail-breakeven').textContent =
+    d.break_even_probability != null ? Math.round(d.break_even_probability * 100) + '%' : '—';
 
   // history
   document.getElementById('detail-case-history').innerHTML = `

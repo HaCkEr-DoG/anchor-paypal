@@ -1296,6 +1296,10 @@ async def _verify_paypal_signature(body: bytes, headers: dict, merchant_id: str 
     if not all([transmission_id, timestamp, cert_url, actual_sig]):
         raise HTTPException(400, "Missing PayPal signature headers")
 
+    _PAYPAL_CERT_DOMAINS = ("https://api.paypal.com", "https://api.sandbox.paypal.com")
+    if not any(cert_url.startswith(d) for d in _PAYPAL_CERT_DOMAINS):
+        raise HTTPException(400, "cert_url domain not trusted")
+
     # Resolve per-merchant webhook ID: config takes priority over global env var
     webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID", "")
     if merchant_id:
@@ -2536,7 +2540,7 @@ async def api_astropods_status():
         "enabled": True,
         "demo": not gateway_configured,
         "gateway_configured": gateway_configured,
-        "model": "claude-sonnet-4-6",
+        "model": os.environ.get("ANCHOR_AI_MODEL", "claude-sonnet-4-6"),
         "role": "AI reasoning backbone for 109 oracle endpoints",
         "capabilities": ["model_routing", "rate_limiting", "billing_telemetry", "fallback_chain"],
         "note": "Connected via Anchor oracle layer — set ASTRO_GATEWAY_URL to route through external gateway"
@@ -2565,7 +2569,7 @@ async def api_astropods_chat(request: Request):
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     messages = body.get("messages", [{"role": "user", "content": "Hello from Anchor — PayPal AI Hackathon 2026"}])
-    model    = body.get("model", "claude-sonnet-4-6")
+    model    = body.get("model", os.environ.get("ANCHOR_AI_MODEL", "claude-sonnet-4-6"))
     try:
         resp = await gw.chat_completion(messages, model=model)
         return JSONResponse({"enabled": True, "response": resp})

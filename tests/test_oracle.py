@@ -22,17 +22,16 @@ def test_one_cent_always_accept():
     assert r.recommendation == Recommendation.ACCEPT
 
 def test_break_even_exactly():
-    """At exactly break-even win prob the Oracle must not recommend FIGHT."""
-    # Standard tier: break_even = (time_cost + 15) / (amount + 15)
+    """At exactly break-even win prob the Oracle must not recommend FIGHT (manual mode)."""
+    # Use manual fight mode so time_cost matches the test's formula
     time_cost = DEFAULT_HOURLY_RATE * HOURS_TO_FIGHT
     fee = PAYPAL_DISPUTE_FEE_STANDARD
     amount = 100.0
     be = (time_cost + fee) / (amount + fee)
-    # Manufacture an evidence with win_prob ~= break-even by using similar_dispute_win_rate
     r = calculate(
         amount,
         ClaimType.ITEM_NOT_RECEIVED,
-        Evidence(),
+        Evidence(is_automated_fight=False),
         similar_dispute_win_rate=be,
     )
     # ev_fight should be ≈ 0 (or slightly negative); must not be FIGHT
@@ -83,7 +82,9 @@ def test_all_claim_types_return_decision(claim):
     assert 0.0 <= r.confidence <= 1.0
 
 def test_unauthorized_no_comm_strongly_accepts():
-    r = calculate(300.0, ClaimType.UNAUTHORIZED, Evidence(seller_account_age_days=400))
+    # Manual fight mode: break_even = (75+15)/300 = 30% > UNAUTHORIZED base 10% → ACCEPT
+    r = calculate(300.0, ClaimType.UNAUTHORIZED,
+                  Evidence(seller_account_age_days=400, is_automated_fight=False))
     assert r.recommendation == Recommendation.ACCEPT
 
 def test_unauthorized_with_buyer_comm_may_fight():

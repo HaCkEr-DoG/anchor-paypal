@@ -312,6 +312,7 @@ def calculate(
         break_even = (time_cost + dispute_fee) / dispute_amount
     else:
         break_even = (time_cost + dispute_fee) / (dispute_amount + dispute_fee)
+    break_even = min(break_even, 1.0)  # cap: >1.0 means fighting is never EV-positive
 
     reasoning.append(
         f"Break-even win probability: {break_even:.0%} "
