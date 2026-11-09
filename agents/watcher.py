@@ -177,7 +177,9 @@ async def lifespan(app: FastAPI):
         else:
             print("[Watcher] WARNING: PostgreSQL init failed — falling back to ES/JSONL storage")
 
-    # Auto-seed default merchant policy on first boot if none exists
+    # Auto-seed default merchant policy on first boot if none exists.
+    # When AUTONOMOUS_ACTIONS_ENABLED=1 the operator has explicitly opted in,
+    # so treat the env-var-derived defaults as operator-reviewed (_reviewed=True).
     if os.environ.get("DATABASE_URL"):
         try:
             import agents.pg_store as pg_store
@@ -185,12 +187,29 @@ async def lifespan(app: FastAPI):
             import dataclasses as _dc
             _mid = os.environ.get("MERCHANT_ID", "default")
             _existing = await asyncio.to_thread(pg_store.get_policy, _mid)
-            if not _existing:
-                _default_cfg = GuardianConfig(merchant_id=_mid)
+            if not _existing or not _existing.get("_reviewed"):
+                _auto_accept = float(os.environ.get("AUTO_ACCEPT_BELOW", "60"))
+                _auto_fight = float(os.environ.get("AUTO_FIGHT_ABOVE", "200"))
+                _auto_prob = float(os.environ.get("AUTO_FIGHT_MIN_PROB", "0.60"))
+                _acct_age = int(os.environ.get("SELLER_ACCOUNT_AGE_DAYS", "730"))
+                _hourly = float(os.environ.get("SELLER_HOURLY_RATE", "50"))
+                _default_cfg = GuardianConfig(
+                    merchant_id=_mid,
+                    auto_accept_below=_auto_accept,
+                    auto_fight_above=_auto_fight,
+                    auto_fight_min_prob=_auto_prob,
+                    ask_range_low=_auto_accept,
+                    ask_range_high=_auto_fight,
+                    account_age_days=_acct_age,
+                    hourly_rate=_hourly,
+                )
                 _seed_dict = _dc.asdict(_default_cfg)
                 _seed_dict["_auto_seeded"] = True
+                _autonomous = os.environ.get("AUTONOMOUS_ACTIONS_ENABLED", "0") == "1"
+                if _autonomous:
+                    _seed_dict["_reviewed"] = True
                 await asyncio.to_thread(pg_store.save_policy, _mid, _seed_dict)
-                print(f"[Watcher] Seeded default merchant policy for {_mid}")
+                print(f"[Watcher] Seeded merchant policy for {_mid} (reviewed={_autonomous})")
         except Exception as _seed_exc:
             print(f"[Watcher] Policy auto-seed failed (non-fatal): {_seed_exc}")
 
