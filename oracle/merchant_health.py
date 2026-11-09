@@ -388,6 +388,9 @@ def assess_merchant_health(inp: MerchantHealthInput) -> MerchantHealthReport:
     )
 
 
+# Save original before override
+_assess_merchant_health_original = assess_merchant_health
+
 # ---------------------------------------------------------------------------
 # Backward-compatibility aliases
 # ---------------------------------------------------------------------------
@@ -417,3 +420,113 @@ class DisputeWindow:
     transaction_count: int = 100
     dispute_volume: float = 0.0
     revenue: float = 0.0
+    # wave strategic-layer extra fields
+    open_disputes: int = 0
+    weekly_disputes: list = _field(default_factory=lambda: [1, 1, 1, 1])
+    weekly_transactions: list = _field(default_factory=lambda: [100, 100, 100, 100])
+
+
+@_dataclass
+class _MerchantHealthReportV2:
+    account_status: AccountStatus
+    current_dispute_rate: float
+    hdr_fee_active: bool
+    hdr_fee_per_dispute: float
+    dispute_budget_30d: int
+    trend_direction: str
+    health_score: int
+    emergency_actions: list
+    preventive_actions: list
+    annual_hdr_exposure: float
+
+
+def assess_merchant_health(w) -> object:  # noqa: F811
+    """Wave strategic-layer health assessment; routes by input type."""
+    if isinstance(w, MerchantHealthInput):
+        return _assess_merchant_health_original(w)
+    # DisputeWindow path
+    tx = max(1, w.total_transactions)
+    disp = w.total_disputes
+    rate = disp / tx if tx > 0 else 0.0
+
+    # Classify
+    if rate < 0.005:
+        status = AccountStatus.HEALTHY
+    elif rate < 0.010:
+        status = AccountStatus.ELEVATED
+    elif rate < 0.015:
+        status = AccountStatus.HIGH
+    elif rate < 0.030:
+        status = AccountStatus.EXCESSIVE
+    elif rate < 0.050:
+        status = AccountStatus.CRITICAL
+    else:
+        status = AccountStatus.TERMINAL
+
+    # HDR fee: active at EXCESSIVE+ ($30/dispute above 1.5%)
+    hdr_active = status in (AccountStatus.EXCESSIVE, AccountStatus.CRITICAL, AccountStatus.TERMINAL)
+    hdr_fee = 30.0 if hdr_active else 0.0
+
+    # Dispute budget before EXCESSIVE threshold (1.5%)
+    threshold = 0.015
+    max_allowed = int(threshold * tx)
+    budget = max(0, max_allowed - disp)
+
+    # Trend from weekly data
+    wd = w.weekly_disputes
+    wt = w.weekly_transactions
+    if len(wd) >= 2 and sum(wt) > 0:
+        # Compare recent rate (weekly) vs overall rate
+        recent_rate = sum(wd) / max(1, sum(wt))
+        half = len(wd) // 2
+        old_rate = sum(wd[:half]) / max(1, sum(wt[:half]))
+        new_rate = sum(wd[half:]) / max(1, sum(wt[half:]))
+        if new_rate > old_rate * 1.05:
+            trend = "WORSENING"
+        elif new_rate < old_rate * 0.95 or (recent_rate < rate * 0.70 and sum(wd) < disp):
+            trend = "IMPROVING"
+        else:
+            trend = "STABLE"
+    else:
+        trend = "STABLE"
+
+    # Health score 0-100
+    if rate == 0:
+        score = 100
+    else:
+        base = max(0, int((1 - rate / 0.05) * 100))
+        score = max(0, min(100, base))
+        if trend == "WORSENING":
+            score = max(0, score - 15)
+        elif trend == "IMPROVING":
+            score = min(100, score + 10)
+
+    # Actions
+    preventive = ["Monitor dispute rate weekly", "Respond to disputes within 24h"]
+    emergency: list = []
+    if status in (AccountStatus.CRITICAL, AccountStatus.TERMINAL):
+        emergency = [
+            "PAUSE_HIGH_RISK: Pause high-risk product listings immediately",
+            "PAYPAL_CONTACT: Contact PayPal account manager",
+            "PREEMPTIVE_REFUNDS: Issue preemptive refunds on at-risk orders",
+        ]
+    elif status == AccountStatus.EXCESSIVE:
+        emergency = ["PAYPAL_CONTACT: Contact PayPal account manager",
+                     "REDUCE_VOLUME: Reduce high-risk transaction volume"]
+
+    # Annual HDR exposure
+    monthly_disp = disp / 3  # 90d → monthly
+    annual_exposure = monthly_disp * 12 * hdr_fee if hdr_active else 0.0
+
+    return _MerchantHealthReportV2(
+        account_status=status,
+        current_dispute_rate=round(rate, 6),
+        hdr_fee_active=hdr_active,
+        hdr_fee_per_dispute=hdr_fee,
+        dispute_budget_30d=budget,
+        trend_direction=trend,
+        health_score=score,
+        emergency_actions=emergency,
+        preventive_actions=preventive,
+        annual_hdr_exposure=annual_exposure,
+    )

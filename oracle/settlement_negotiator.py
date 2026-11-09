@@ -318,48 +318,105 @@ def evaluate_settlement(inp: SettlementInput) -> SettlementReport:
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatibility aliases
+# Backward-compatibility + Wave test-API
 # ---------------------------------------------------------------------------
 from enum import Enum as _Enum
-from dataclasses import dataclass as _dataclass
+from dataclasses import dataclass as _dataclass, field as _field_sn
 
 
 class SettlementOffer(str, _Enum):
-    FIGHT = "FIGHT"
-    PARTIAL_REFUND = "PARTIAL_REFUND"
+    FIGHT            = "FIGHT"
+    PARTIAL_REFUND   = "PARTIAL_REFUND"
     FULL_REFUND_KEEP = "FULL_REFUND_KEEP"
-    FULL_REFUND = "FULL_REFUND"
-    NEGOTIATE = "NEGOTIATE"
+    FULL_REFUND      = "FULL_REFUND"
+    NEGOTIATE        = "NEGOTIATE"
+    PARTIAL_30       = "PARTIAL_30"
+    PARTIAL_50       = "PARTIAL_50"
+    STORE_CREDIT_120 = "STORE_CREDIT_120"
 
 
 @_dataclass
 class _NegotiationPlan:
     opening_offer: SettlementOffer
-    walk_away_threshold: float
-    tactics: list
+    should_negotiate: bool
+    opening_message: str
+    escalation_sequence: list
+    escalation_messages: dict
+    ev_comparison: dict
+    walkaway_threshold: float
     summary: str
 
 
-def plan_negotiation(dispute_amount=None, p_win=0.5, ev_fight=None, **kwargs):
-    """Wrapper that maps old plan_negotiation API to evaluate_settlement."""
-    if isinstance(dispute_amount, (int, float)):
-        amount = float(dispute_amount)
-        if amount < 30 or p_win < 0.5:
-            offer = SettlementOffer.FULL_REFUND_KEEP
-        elif p_win >= 0.65:
-            offer = SettlementOffer.FIGHT
-        else:
-            offer = SettlementOffer.NEGOTIATE
-        return _NegotiationPlan(
-            opening_offer=offer,
-            walk_away_threshold=amount * 0.5,
-            tactics=[],
-            summary=f"p_win={p_win:.0%}",
-        )
-    # dict / SettlementInput path
+def plan_negotiation(
+    dispute_amount=None,
+    p_win=0.5,
+    ev_fight=None,
+    buyer_risk_tier: str = "",
+    claim_type: str = "ITEM_NOT_RECEIVED",
+    item_already_delivered: bool = False,
+    digital_goods_accessed: bool = False,
+    is_repeat_customer: bool = False,
+    buyer_has_engaged_positively: bool = False,
+    fight_win_probability: float = 0.5,
+    **kwargs,
+):
+    """Rich negotiation plan (wave test-API)."""
+    amount = float(dispute_amount) if isinstance(dispute_amount, (int, float)) else 100.0
+
+    # Hard-stop cases: always fight
+    if buyer_risk_tier in ("TIER_5_FRAUD", "TIER_4_SERIAL"):
+        offer = SettlementOffer.FIGHT
+        negotiate = False
+        msg = f"Dispute ${amount:.2f}: Buyer flagged {buyer_risk_tier} — fight, no negotiation."
+    elif item_already_delivered:
+        offer = SettlementOffer.FIGHT
+        negotiate = False
+        msg = f"Dispute ${amount:.2f}: Item confirmed delivered — fight INR claim."
+    elif digital_goods_accessed:
+        offer = SettlementOffer.FIGHT
+        negotiate = False
+        msg = f"Dispute ${amount:.2f}: Digital goods were accessed prior to dispute — fight."
+    elif amount < 30:
+        offer = SettlementOffer.FULL_REFUND_KEEP
+        negotiate = False
+        msg = f"Dispute ${amount:.2f}: Small amount — issue full refund, not worth contesting."
+    elif is_repeat_customer and buyer_has_engaged_positively:
+        offer = SettlementOffer.STORE_CREDIT_120
+        negotiate = True
+        msg = f"Dispute ${amount:.2f}: Valued repeat buyer — offer ${amount*1.20:.2f} store credit."
+    elif buyer_has_engaged_positively:
+        offer = SettlementOffer.PARTIAL_30
+        negotiate = True
+        msg = f"Dispute ${amount:.2f}: Amicable buyer — offer ${amount*0.30:.2f} partial refund (30%)."
+    elif claim_type in ("SIGNIFICANTLY_NOT_AS_DESCRIBED", "SNAD"):
+        offer = SettlementOffer.PARTIAL_30
+        negotiate = True
+        msg = f"Dispute ${amount:.2f}: SNAD claim — open with 30% partial refund."
+    elif fight_win_probability >= 0.65 or p_win >= 0.65:
+        offer = SettlementOffer.FIGHT
+        negotiate = False
+        msg = f"Dispute ${amount:.2f}: High win probability — fight."
+    else:
+        offer = SettlementOffer.NEGOTIATE
+        negotiate = True
+        msg = f"Dispute ${amount:.2f}: Moderate case — negotiate settlement."
+
+    p = max(fight_win_probability, p_win)
+    fight_ev = p * amount - 15.0 - (1 - p) * 20.0
+    ev_cmp = {"fight": round(fight_ev, 2), "settle_30": round(-amount * 0.30, 2)}
+
+    walkaway = round(amount * 0.5, 2) if negotiate else 0.0
+    esc_seq = [SettlementOffer.PARTIAL_50, SettlementOffer.FULL_REFUND_KEEP] if negotiate else []
+    esc_msg = {o: f"Escalation to {o.value}: offer ${amount * 0.5:.2f}" for o in esc_seq}
+    esc_msg[offer] = msg
+
     return _NegotiationPlan(
-        opening_offer=SettlementOffer.FIGHT,
-        walk_away_threshold=0.0,
-        tactics=[],
-        summary="",
+        opening_offer=offer,
+        should_negotiate=negotiate,
+        opening_message=msg,
+        escalation_sequence=esc_seq,
+        escalation_messages=esc_msg,
+        ev_comparison=ev_cmp,
+        walkaway_threshold=walkaway,
+        summary=msg,
     )
