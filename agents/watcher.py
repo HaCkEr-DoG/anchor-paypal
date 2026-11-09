@@ -82,6 +82,45 @@ _SECURITY_HEADERS = {
 
 _scheduler = AsyncIOScheduler()
 
+_OUTBOX_WORKER_ID = "anchor-web"  # heartbeat written by in-process outbox drain
+
+
+async def _drain_outbox_in_process() -> None:
+    """Drain the webhook outbox and approval jobs from the web process.
+
+    Runs as an APScheduler job when no dedicated worker is deployed
+    (WEBHOOK_OUTBOX_ENABLED=1 and RUN_SCHEDULER=1). Writes a heartbeat so
+    /health/ready can confirm the outbox is being drained.
+    """
+    if not os.environ.get("DATABASE_URL"):
+        return
+    import agents.pg_store as pg_store
+    try:
+        await asyncio.to_thread(pg_store.heartbeat_worker, _OUTBOX_WORKER_ID)
+        rows = await asyncio.to_thread(
+            pg_store.claim_pending_webhook_events, _OUTBOX_WORKER_ID, 20, 120
+        )
+        for row in rows:
+            event_id = row["event_id"]
+            try:
+                await process_persisted_webhook_event(
+                    row["payload"],
+                    row.get("merchant_id") or os.environ.get("MERCHANT_ID", "default"),
+                )
+            except UnsupportedWebhookEvent as exc:
+                await asyncio.to_thread(
+                    pg_store.mark_webhook_dead_letter, event_id, _OUTBOX_WORKER_ID, str(exc)
+                )
+            except Exception as exc:
+                print(f"[Watcher] Outbox event {event_id} failed: {exc}")
+                await asyncio.to_thread(
+                    pg_store.mark_webhook_failed, event_id, _OUTBOX_WORKER_ID, repr(exc)
+                )
+            else:
+                await asyncio.to_thread(pg_store.mark_event_processed, event_id, _OUTBOX_WORKER_ID)
+    except Exception as exc:
+        print(f"[Watcher] Outbox drain failed: {exc}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -135,6 +174,10 @@ async def lifespan(app: FastAPI):
             id="brief",
             timezone=ZoneInfo(_brief_tz),
         )
+        # When no dedicated worker is deployed, drain the outbox in-process.
+        if os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1" and os.environ.get("DATABASE_URL"):
+            _scheduler.add_job(_drain_outbox_in_process, "interval", seconds=10, id="outbox_drain")
+            print("[Watcher] In-process outbox drain enabled (no dedicated worker)")
         _scheduler.start()
         print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
     else:
@@ -857,16 +900,18 @@ async def health_ready():
         if os.environ.get("DATABASE_URL"):
             try:
                 import agents.pg_store as pg_store
-                worker_age = await asyncio.to_thread(pg_store.get_worker_heartbeat_age, "anchor-worker")
+                # Accept heartbeat from dedicated worker OR in-process drainer
+                dedicated_age = await asyncio.to_thread(pg_store.get_worker_heartbeat_age, "anchor-worker")
+                web_age = await asyncio.to_thread(pg_store.get_worker_heartbeat_age, _OUTBOX_WORKER_ID)
+                candidates = [a for a in (dedicated_age, web_age) if a is not None]
+                worker_age = min(candidates) if candidates else None
             except Exception:
                 worker_age = None
         checks["worker_heartbeat_age_seconds"] = worker_age
         checks["worker_running"] = worker_age is not None and worker_age < 90
-        # Only gate readiness on worker heartbeat when the web is NOT the scheduler.
-        # When RUN_SCHEDULER=1 the web owns scheduled tasks; there may be no separate
-        # worker process, and worker_running stays informational.
-        if os.environ.get("RUN_SCHEDULER", "1") != "1":
-            critical["worker_running"] = checks["worker_running"]
+        # The outbox must be drained by something — either the dedicated worker
+        # or the in-process drainer. Gate readiness on that regardless of scheduler mode.
+        critical["worker_running"] = checks["worker_running"]
 
     # Also degrade when safety gate reports HUMAN_REVIEW with no merchant policy
     if safety_degraded:
