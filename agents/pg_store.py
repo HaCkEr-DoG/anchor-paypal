@@ -1038,14 +1038,14 @@ def get_oldest_pending_job_age_seconds() -> Optional[float]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_utc))) AS age_s
+                SELECT EXTRACT(EPOCH FROM (NOW() - MIN(age_ts))) AS age_s
                 FROM (
-                    SELECT created_utc FROM webhook_outbox
-                    WHERE status = 'pending'
+                    SELECT received_utc AS age_ts FROM webhook_outbox
+                    WHERE status IN ('pending', 'processing')
                       AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
                     UNION ALL
-                    SELECT created_utc FROM approval_jobs
-                    WHERE status = 'pending'
+                    SELECT created_utc AS age_ts FROM approval_jobs
+                    WHERE status IN ('pending', 'processing')
                       AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
                 ) AS q
                 """

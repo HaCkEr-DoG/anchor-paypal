@@ -3429,11 +3429,12 @@ async def api_register_webhook(request: Request):
                 "registered_at": datetime.now(timezone.utc).isoformat(),
             })
         return JSONResponse(
-            {"error": f"PayPal API returned {r.status_code}", "detail": r.text},
+            {"error": f"PayPal API returned {r.status_code}"},
             status_code=r.status_code,
         )
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except Exception:
+        _log.exception("Webhook registration failed")
+        return JSONResponse({"error": "An internal error occurred"}, status_code=500)
 
 
 @app.get("/api/webhook/health")
@@ -3770,8 +3771,9 @@ async def api_startup_sync(request: Request):
         n = await _ss(merchant_id)
         return JSONResponse({"synced": n, "merchant_id": merchant_id,
                              "message": f"Loaded {n} open disputes into memory deadline tracker"})
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=500)
+    except Exception:
+        _log.exception("Deadline tracker startup sync failed")
+        return JSONResponse({"error": "An internal error occurred"}, status_code=500)
 
 
 # ── Oracle Calibration ────────────────────────────────────────────────────────
@@ -4553,8 +4555,9 @@ async def api_shopify_enrich(request: Request):
                 "dna": ctx.to_dna_kwargs(),
             },
         })
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        _log.exception("Oracle context endpoint failed")
+        return JSONResponse({"error": "An internal error occurred"}, status_code=400)
 
 
 @app.post("/api/integrations/zapier/dispute")
@@ -4590,8 +4593,9 @@ async def api_zapier_ingest(request: Request):
             "tracking_number": dispute.tracking_number,
             "anchor_body": dispute.to_anchor_body(),
         })
-    except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:
+        _log.exception("Zapier dispute normalization failed")
+        return JSONResponse({"error": "An internal error occurred"}, status_code=400)
 
 
 @app.post("/api/integrations/evidence/score")
@@ -7532,12 +7536,13 @@ async def api_surge_alert(request: Request):
         buckets = await asyncio.to_thread(
             _pg.get_dispute_velocity, merchant_id, hours_lookback
         )
-    except Exception as exc:
+    except Exception:
+        _log.exception("Risk alert fetch failed for %s", merchant_id)
         return JSONResponse({
             "merchant_id": merchant_id,
             "alert_severity": "normal",
             "source": "unavailable",
-            "error": str(exc),
+            "error": "An internal error occurred",
         }, status_code=200)
 
     if not buckets:

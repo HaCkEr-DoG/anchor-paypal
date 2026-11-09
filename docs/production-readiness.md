@@ -81,7 +81,7 @@ Idempotency: `PayPal-Request-Id` = `"an-" + sha256(order_id)[:32]` — same key 
 - **No versioned migration tool** (Alembic/Flyway absent). This is acceptable for sandbox; a migration tool is recommended before large schema changes in production.
 - Unique constraints: `webhook_outbox.event_id` PK, `approval_token_used.token_sig` PK, `approval_jobs.job_id` UUID PK, `merchant_policy.merchant_id` PK, `tracked_disputes.dispute_id` PK.
 - Connection pooling: thread-local psycopg2 connections (one per thread). Acceptable for a single-process Uvicorn worker; under load with multiple workers, a connection pool (pgbouncer or `psycopg2.pool`) is recommended.
-- Backup/restore: Render Postgres free tier offers daily backups; production upgrade should enable point-in-time recovery.
+- Backup/restore: **Render Postgres free tier has NO backups and expires after 90 days; it is explicitly not for production.** A paid Render Postgres plan is required for backups; a production upgrade should also enable point-in-time recovery.
 
 ---
 
@@ -91,7 +91,7 @@ Idempotency: `PayPal-Request-Id` = `"an-" + sha256(order_id)[:32]` — same key 
 
 | Check | Result |
 |-------|--------|
-| Security headers | `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`, `Cache-Control`, **`Strict-Transport-Security`** (added), **`Content-Security-Policy`** (added) — applied by `_request_middleware` on every response |
+| Security headers | `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`, `Cache-Control`, **`Strict-Transport-Security`** (added), **`Content-Security-Policy`** (added) — applied by `_request_middleware` on every response. Note: CSP requires `unsafe-inline` for scripts and styles because the dashboard uses inline `onclick` handlers and Google Fonts; this limits XSS protection for the dashboard page. |
 | Rate limiting | Sliding-window per-IP limiter on `/api/oracle/*` (120 req/min default) |
 | Brute-force lockout | IP locked after 10 auth failures in 300 s window |
 | Body-size limit | 512 KB default; configurable via `MAX_BODY_BYTES` |
