@@ -543,11 +543,17 @@ async def _global_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(RequestValidationError)
 async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    # Pydantic error objects include the rejected `input`; never echo it because
+    # it may contain tokens, buyer data, or other sensitive request values.
+    safe_errors = [
+        {key: item[key] for key in ("loc", "msg", "type") if key in item}
+        for item in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
         content={
             "error": "validation_error",
-            "detail": exc.errors(),
+            "detail": safe_errors,
             "path": str(request.url.path),
         },
     )
@@ -3513,8 +3519,12 @@ async def api_dispute_velocity(hours: int = 168):
     try:
         import agents.pg_store as pg_store
         buckets = await asyncio.to_thread(pg_store.get_dispute_velocity, merchant_id, hours)
-    except Exception as exc:
-        return JSONResponse({"available": False, "reason": str(exc)}, status_code=500)
+    except Exception:
+        _log.exception("Dispute velocity lookup failed")
+        return JSONResponse(
+            {"available": False, "reason": "An internal error occurred"},
+            status_code=500,
+        )
 
     if not buckets:
         return JSONResponse({

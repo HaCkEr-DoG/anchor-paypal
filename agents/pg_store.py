@@ -1027,26 +1027,36 @@ def get_audit_stats() -> Dict[str, Any]:
 
 def get_oldest_pending_job_age_seconds() -> Optional[float]:
     """
-    Return how many seconds the oldest un-leased pending job has been waiting,
-    across both webhook_outbox and approval_jobs.
+    Return seconds the oldest due or expired-lease job has been waiting.
+
+    Approval jobs are intentionally excluded while SHADOW_MODE is enabled,
+    because the worker holds them without claiming them in that mode.
 
     Returns None if there are no pending jobs (queue is empty or DB unreachable).
     A large value means the drainer/worker is stalled.
     """
     try:
         conn = _get_conn()
+        shadow_mode = os.environ.get("SHADOW_MODE", "0").strip().lower() in {"1", "true", "yes"}
+        approval_union = ""
+        if not shadow_mode:
+            approval_union = """
+                    UNION ALL
+                    SELECT created_utc AS age_ts FROM approval_jobs
+                    WHERE (status = 'pending' AND next_attempt_at <= NOW())
+                       OR (status = 'processing' AND
+                           (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+            """
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT EXTRACT(EPOCH FROM (NOW() - MIN(age_ts))) AS age_s
                 FROM (
                     SELECT received_utc AS age_ts FROM webhook_outbox
-                    WHERE status IN ('pending', 'processing')
-                      AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
-                    UNION ALL
-                    SELECT created_utc AS age_ts FROM approval_jobs
-                    WHERE status IN ('pending', 'processing')
-                      AND (lease_expires_at IS NULL OR lease_expires_at < NOW())
+                    WHERE (status = 'pending' AND next_attempt_at <= NOW())
+                       OR (status = 'processing' AND
+                           (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+                    {approval_union}
                 ) AS q
                 """
             )

@@ -81,7 +81,7 @@ Idempotency: `PayPal-Request-Id` = `"an-" + sha256(order_id)[:32]` — same key 
 - **No versioned migration tool** (Alembic/Flyway absent). This is acceptable for sandbox; a migration tool is recommended before large schema changes in production.
 - Unique constraints: `webhook_outbox.event_id` PK, `approval_token_used.token_sig` PK, `approval_jobs.job_id` UUID PK, `merchant_policy.merchant_id` PK, `tracked_disputes.dispute_id` PK.
 - Connection pooling: thread-local psycopg2 connections (one per thread). Acceptable for a single-process Uvicorn worker; under load with multiple workers, a connection pool (pgbouncer or `psycopg2.pool`) is recommended.
-- Backup/restore: **Render Postgres free tier has NO backups and expires after 90 days; it is explicitly not for production.** A paid Render Postgres plan is required for backups; a production upgrade should also enable point-in-time recovery.
+- Backup/restore: **Render Postgres free tier has NO backups and expires after 30 days; it is explicitly not for production.** A paid Render Postgres plan is required for backups; a production upgrade should also enable point-in-time recovery.
 
 ---
 
@@ -137,12 +137,12 @@ render.yaml configures:
 
 ### D10 — Tests / CI
 
-**Status: PASS**
+**Status: BLOCKED — full suite still fails**
 
 - `python3 -m compileall -q agents scripts oracle` — zero errors
-- Core tests (91 tests): `test_production_hardening`, `test_recovery`, `test_hardening`, `test_paypal_client`, `test_multitenant`, `test_oracle`, `test_dedup` — **87 passed** (after adding `Content-Security-Policy` header)
-- Full suite: 4027 collected, 3403 passed, 662 failed — all failures are in pre-hardening `test_wave*` files with outdated API signatures; no regressions introduced this pass
-- Oracle import errors: **all 15 import errors fixed** via backward-compatibility aliases appended to 11 oracle modules
+- Latest focused suite — **164 passed, as reported in the hardening session; not independently rerun during this review.**
+- Full suite was reported with 662 failures. The reported collection/pass/fail totals do not reconcile, and the claim that failures are pre-existing has not been established against a clean baseline. Do not describe the full suite as passing.
+- Compatibility aliases restore import names for some older tests but do not establish that the old interfaces work; several aliases remain placeholders.
 
 ---
 
@@ -197,11 +197,11 @@ render.yaml configures:
 - All safety flags are conservatively set: `SHADOW_MODE=1`, `AUTONOMOUS_ACTIONS_ENABLED=0`, `RECOVERY_MERCHANT_OPT_IN=0`
 - PostgreSQL schema auto-initialises on deploy (idempotent DDL)
 - Webhook pipeline: receive → outbox → drain → processed, with dedup and dead-letter
-- Approval pipeline: Slack notification → signed one-time link → queued job → drainer executes
+- Approval pipeline: Slack notification → signed one-time link → queued job → drainer executes outside Shadow mode; Shadow mode intentionally holds approval jobs.
 - Recovery pipeline: multi-guard capture with idempotency and SELECT FOR UPDATE SKIP LOCKED
-- Oracle pipeline: 158+ modules, all import cleanly, all backward-compat aliases in place
+- Oracle modules contain compatibility aliases for older tests; API compatibility is not fully verified.
 - Security headers: full set including CSP and HSTS applied on every response
-- 87 core tests pass; zero import errors; zero regressions in this hardening pass
+- 164 focused tests were reported passing in the latest hardening run; the full suite is still unresolved.
 
 **Required before switching to Live PayPal credentials:**
 
