@@ -529,14 +529,19 @@ function renderOracleFiltered(rows) {
 }
 
 // ── Disputes tab ────────────────────────────────────────────────────────────
+const _apiKey = (typeof window.__ANCHOR_API_KEY !== 'undefined') ? window.__ANCHOR_API_KEY : '';
+function _authHeaders() {
+  return _apiKey ? { 'X-API-Key': _apiKey } : {};
+}
+
 async function loadDisputes() {
   const statusBar = document.getElementById('disputes-status-bar');
   const body = document.getElementById('disputes-body');
   try {
-    const r = await fetch('/api/disputes', { signal: AbortSignal.timeout(10000) });
+    const r = await fetch('/api/disputes', { headers: _authHeaders(), signal: AbortSignal.timeout(10000) });
     const data = await r.json();
     if (r.status === 401 || r.status === 403) {
-      body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">Dispute data requires authentication — configure ORACLE_API_KEY in Render environment.</td></tr>';
+      body.innerHTML = '<tr><td colspan="4" style="color:var(--muted);padding:16px 0">Dispute data requires authentication — configure API_SECRET in Render environment.</td></tr>';
       statusBar.style.display = 'none';
       return;
     }
@@ -679,7 +684,7 @@ async function runScenario() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Reviewing evidence…';
   try {
-    const resp = await fetch('/api/demo/simulate-dispute', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({scenario:_selectedScenario}) });
+    const resp = await fetch('/api/demo/simulate-dispute', { method:'POST', headers:{'Content-Type':'application/json', ..._authHeaders()}, body: JSON.stringify({scenario:_selectedScenario}) });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const result = await resp.json();
     const oracle = result.oracle || {};

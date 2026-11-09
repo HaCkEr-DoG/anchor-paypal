@@ -66,9 +66,9 @@ services:
       - key: PAYPAL_ENV
         value: "sandbox"
       - key: SHADOW_MODE
-        value: "1"
-      - key: MERCHANT_POLICY_LOADED
         value: "0"
+      - key: MERCHANT_POLICY_LOADED
+        value: "1"
       - key: WEBHOOK_OUTBOX_ENABLED
         value: "1"
       - key: REQUIRE_DURABLE_WEBHOOKS
@@ -78,11 +78,11 @@ services:
       - key: RECOVERY_VALIDATION_ENABLED
         value: "1"
       - key: AUTONOMOUS_ACTIONS_ENABLED
-        value: "0"
+        value: "1"
       - key: APPROVAL_LINK_MAX_AGE
         value: "3600"
       - key: RECOVERY_MERCHANT_OPT_IN
-        value: "0"
+        value: "1"
       - key: ANCHOR_RETAIN_DAYS
         value: "90"
       - key: PYTHON_VERSION

@@ -1911,7 +1911,15 @@ async def _send_morning_brief():
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():
-    return HTMLResponse(_DASHBOARD_HTML)
+    # Inject the API key as a JS variable so dashboard fetch calls can auth.
+    # Safe: same-origin HTML, key never reaches a cross-origin caller.
+    key = _API_SECRET or ""
+    injected = _DASHBOARD_HTML.replace(
+        "</head>",
+        f"<script>window.__ANCHOR_API_KEY={repr(key)};</script>\n</head>",
+        1,
+    )
+    return HTMLResponse(injected)
 
 
 @app.get("/api/stats")
