@@ -1037,6 +1037,34 @@ async def seed_policy(request: Request):
     return JSONResponse({"error": "failed to save policy"}, status_code=500)
 
 
+@app.get("/api/admin/merchant-policy", tags=["admin"])
+async def get_merchant_policy(request: Request):
+    """Return current stored merchant policy and policy_is_loaded result. Protected by API_SECRET."""
+    api_secret = os.environ.get("API_SECRET", "")
+    auth = request.headers.get("X-API-Secret", "") or request.headers.get("X-API-Key", "")
+    if not api_secret or not hmac.compare_digest(auth, api_secret):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    env_approved = os.environ.get("MERCHANT_POLICY_LOADED", "").strip().lower() in {"1", "true", "yes"}
+    policy_record = None
+    if os.environ.get("DATABASE_URL"):
+        import asyncio
+        import agents.pg_store as pg_store
+        policy_record = await asyncio.to_thread(pg_store.get_policy, merchant_id)
+    from agents.config import policy_is_loaded
+    loaded = await policy_is_loaded(merchant_id)
+    return JSONResponse({
+        "merchant_id": merchant_id,
+        "env_merchant_policy_loaded": env_approved,
+        "env_autonomous_actions": os.environ.get("AUTONOMOUS_ACTIONS_ENABLED", "0"),
+        "policy_record_exists": policy_record is not None,
+        "policy_reviewed": (policy_record or {}).get("_reviewed"),
+        "policy_auto_seeded": (policy_record or {}).get("_auto_seeded"),
+        "policy_is_loaded_result": loaded,
+        "policy_merchant_id_stored": (policy_record or {}).get("merchant_id"),
+    })
+
+
 @app.put("/api/admin/merchant-policy", tags=["admin"])
 async def update_merchant_policy(request: Request):
     """Store an operator-reviewed merchant policy. Sets _reviewed:true so health/ready
