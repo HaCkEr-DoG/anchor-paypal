@@ -514,3 +514,99 @@ async def test_recovery_query_uses_pg_not_es(monkeypatch):
     agent = RecoveryAgent()
     await agent.scan_and_recover("merchant1")
     assert "merchant1" in queried, "get_stale_abandoned_orders must be called with merchant_id"
+
+
+# ---------------------------------------------------------------------------
+# _drain_outbox_in_process: approval draining, shadow-mode hold, heartbeat ordering
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_drain_outbox_drains_approval_jobs_when_not_shadow(monkeypatch):
+    """Approval jobs must be claimed and executed when SHADOW_MODE is off."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
+    import agents.pg_store as pg_store
+    import agents.watcher as watcher
+
+    approval_rows = [{"job_id": "j1", "dispute_id": "PP-D-001"}]
+    approval_drained = []
+    heartbeat_calls = []
+
+    monkeypatch.setattr(pg_store, "claim_pending_webhook_events", lambda *a, **kw: [])
+    monkeypatch.setattr(pg_store, "claim_pending_approval_jobs", lambda *a, **kw: approval_rows)
+    monkeypatch.setattr(pg_store, "complete_approval_job", lambda job_id, wid: approval_drained.append(job_id) or True)
+    monkeypatch.setattr(pg_store, "fail_approval_job", lambda *a, **kw: True)
+    monkeypatch.setattr(pg_store, "heartbeat_worker", lambda wid: heartbeat_calls.append(wid))
+    monkeypatch.setattr(watcher, "_execute_approved_fight", lambda dispute_id: approval_drained.append(dispute_id))
+
+    await watcher._drain_outbox_in_process()
+    assert "PP-D-001" in approval_drained, "Approval job must be executed when not in shadow mode"
+    assert heartbeat_calls, "Heartbeat must be written after successful cycle"
+
+
+@pytest.mark.asyncio
+async def test_drain_outbox_holds_approval_jobs_in_shadow_mode(monkeypatch):
+    """Approval jobs must NOT be drained while SHADOW_MODE=1."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("SHADOW_MODE", "1")
+    import agents.pg_store as pg_store
+    import agents.watcher as watcher
+
+    approval_claimed = []
+
+    monkeypatch.setattr(pg_store, "claim_pending_webhook_events", lambda *a, **kw: [])
+    monkeypatch.setattr(pg_store, "claim_pending_approval_jobs",
+                        lambda *a, **kw: approval_claimed.append(True) or [])
+    monkeypatch.setattr(pg_store, "heartbeat_worker", lambda wid: None)
+
+    await watcher._drain_outbox_in_process()
+    assert not approval_claimed, "claim_pending_approval_jobs must not be called in shadow mode"
+
+
+@pytest.mark.asyncio
+async def test_drain_outbox_heartbeat_written_after_cycle(monkeypatch):
+    """Heartbeat must be written after the queue cycle, not before."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.delenv("SHADOW_MODE", raising=False)
+    import agents.pg_store as pg_store
+    import agents.watcher as watcher
+
+    call_order = []
+
+    def _claim_webhooks(*a, **kw):
+        call_order.append("claim_webhooks")
+        return []
+
+    def _claim_approvals(*a, **kw):
+        call_order.append("claim_approvals")
+        return []
+
+    def _heartbeat(wid):
+        call_order.append("heartbeat")
+
+    monkeypatch.setattr(pg_store, "claim_pending_webhook_events", _claim_webhooks)
+    monkeypatch.setattr(pg_store, "claim_pending_approval_jobs", _claim_approvals)
+    monkeypatch.setattr(pg_store, "heartbeat_worker", _heartbeat)
+
+    await watcher._drain_outbox_in_process()
+    assert call_order[-1] == "heartbeat", (
+        f"heartbeat must be last; got order {call_order}"
+    )
+    assert call_order.index("claim_webhooks") < call_order.index("heartbeat")
+
+
+@pytest.mark.asyncio
+async def test_drain_outbox_no_heartbeat_on_claim_failure(monkeypatch):
+    """If claiming webhook events raises, the heartbeat must not be written."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    import agents.pg_store as pg_store
+    import agents.watcher as watcher
+
+    heartbeat_calls = []
+
+    monkeypatch.setattr(pg_store, "claim_pending_webhook_events",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("DB unavailable")))
+    monkeypatch.setattr(pg_store, "heartbeat_worker", lambda wid: heartbeat_calls.append(wid))
+
+    await watcher._drain_outbox_in_process()  # must not raise
+    assert not heartbeat_calls, "Heartbeat must not be written when the drain cycle fails"
