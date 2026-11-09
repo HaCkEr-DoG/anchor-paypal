@@ -214,6 +214,77 @@ def test_health_ready_has_merchant_policy(_client):
     assert "merchant_policy_loaded" in body["checks"], (
         "merchant_policy_loaded missing from /health/ready"
     )
+    assert "policy_is_default" in body["checks"], (
+        "policy_is_default missing from /health/ready"
+    )
+
+
+def test_policy_is_default_true_when_no_reviewed_marker(_client, monkeypatch):
+    """policy_is_default must be True when stored policy lacks _reviewed:True."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("MERCHANT_ID", "test-merchant")
+    import agents.pg_store as pg_store
+    from agents.config import GuardianConfig
+    import dataclasses
+    unreviewed = dataclasses.asdict(GuardianConfig(merchant_id="test-merchant"))
+    unreviewed["_auto_seeded"] = True  # old-style seeded, no _reviewed key
+    monkeypatch.setattr(pg_store, "get_policy", lambda mid: unreviewed)
+    monkeypatch.setattr(pg_store, "health_check", lambda: True)
+    r = _client.get("/health/ready")
+    assert r.json()["checks"]["policy_is_default"] is True, (
+        "policy without _reviewed:True must be flagged as default"
+    )
+
+
+def test_policy_is_default_false_when_reviewed_marker(_client, monkeypatch):
+    """policy_is_default must be False when stored policy has _reviewed:True."""
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("MERCHANT_ID", "test-merchant")
+    import agents.pg_store as pg_store
+    from agents.config import GuardianConfig
+    import dataclasses
+    reviewed = dataclasses.asdict(GuardianConfig(merchant_id="test-merchant"))
+    reviewed["_reviewed"] = True
+    monkeypatch.setattr(pg_store, "get_policy", lambda mid: reviewed)
+    monkeypatch.setattr(pg_store, "health_check", lambda: True)
+    r = _client.get("/health/ready")
+    assert r.json()["checks"]["policy_is_default"] is False, (
+        "policy with _reviewed:True must report policy_is_default:false"
+    )
+
+
+def test_update_merchant_policy_sets_reviewed_marker(_client, monkeypatch):
+    """PUT /api/admin/merchant-policy must save policy with _reviewed:True."""
+    import os
+    monkeypatch.setenv("API_SECRET", "testsecret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    monkeypatch.setenv("MERCHANT_ID", "test-merchant")
+    import agents.pg_store as pg_store
+    saved = {}
+    monkeypatch.setattr(pg_store, "save_policy", lambda mid, cfg: saved.update({"mid": mid, "cfg": cfg}) or True)
+    r = _client.put(
+        "/api/admin/merchant-policy",
+        json={"auto_accept_below": 55},
+        headers={"X-API-Secret": "testsecret"},
+    )
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+    assert saved["cfg"].get("_reviewed") is True, "_reviewed:True must be set"
+    assert "_auto_seeded" not in saved["cfg"], "_auto_seeded must be removed"
+    assert saved["cfg"].get("auto_accept_below") == 55, "operator override must be applied"
+
+
+def test_update_merchant_policy_rejects_unknown_keys(_client, monkeypatch):
+    """PUT /api/admin/merchant-policy must reject invalid config values."""
+    monkeypatch.setenv("API_SECRET", "testsecret")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    import agents.pg_store as pg_store
+    monkeypatch.setattr(pg_store, "save_policy", lambda mid, cfg: True)
+    r = _client.put(
+        "/api/admin/merchant-policy",
+        json={"auto_accept_below": "not-a-number"},
+        headers={"X-API-Secret": "testsecret"},
+    )
+    assert r.status_code == 422, "Invalid field type must return 422"
 
 
 def test_health_ready_pg_check_absent_when_no_database_url(_client, monkeypatch):

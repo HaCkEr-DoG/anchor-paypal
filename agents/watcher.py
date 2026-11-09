@@ -803,14 +803,16 @@ async def health_ready():
     merchant_id = os.environ.get("MERCHANT_ID", "default")
     from agents.config import policy_is_loaded
     merchant_policy_loaded = await policy_is_loaded(merchant_id)
-    # Check if the loaded policy was auto-seeded (not operator-reviewed)
-    policy_is_default = False
+    # policy_is_default: True unless the stored policy has _reviewed:True set by an operator.
+    # Absence of _reviewed (including old auto-seeded records without _auto_seeded marker)
+    # conservatively flags the policy as unreviewed.
+    policy_is_default = True
     if merchant_policy_loaded and os.environ.get("DATABASE_URL"):
         try:
             import agents.pg_store as pg_store
             _raw = await asyncio.to_thread(pg_store.get_policy, merchant_id)
             if isinstance(_raw, dict):
-                policy_is_default = bool(_raw.get("_auto_seeded", False))
+                policy_is_default = not bool(_raw.get("_reviewed", False))
         except Exception:
             pass
     safety = check_from_env(merchant_policy_loaded=merchant_policy_loaded)
@@ -897,6 +899,58 @@ async def seed_policy(request: Request):
     ok = await asyncio.to_thread(pg_store.save_policy, merchant_id, cfg_dict)
     if ok:
         return JSONResponse({"status": "seeded", "merchant_id": merchant_id})
+    return JSONResponse({"error": "failed to save policy"}, status_code=500)
+
+
+@app.put("/api/admin/merchant-policy", tags=["admin"])
+async def update_merchant_policy(request: Request):
+    """Store an operator-reviewed merchant policy. Sets _reviewed:true so health/ready
+    reports policy_is_default:false. Body is a JSON object whose keys override GuardianConfig
+    defaults; unknown keys are ignored. Protected by API_SECRET.
+
+    Example body: {"auto_accept_below": 50, "auto_fight_above": 150}
+    """
+    api_secret = os.environ.get("API_SECRET", "")
+    auth = request.headers.get("X-API-Secret", "")
+    if not api_secret or not hmac.compare_digest(auth, api_secret):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not os.environ.get("DATABASE_URL"):
+        return JSONResponse({"error": "DATABASE_URL not configured"}, status_code=503)
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    import dataclasses
+    import agents.pg_store as pg_store
+    from agents.config import GuardianConfig
+    # Build from defaults then apply operator overrides
+    base = dataclasses.asdict(GuardianConfig(merchant_id=merchant_id))
+    # Only allow known GuardianConfig fields; _reserved keys are ours
+    known = {f.name for f in dataclasses.fields(GuardianConfig)}
+    # Validate types for numeric fields before merging (dataclass won't coerce)
+    _float_fields = {f.name for f in dataclasses.fields(GuardianConfig) if f.type in ("float", float)}
+    _int_fields = {f.name for f in dataclasses.fields(GuardianConfig) if f.type in ("int", int)}
+    for k, v in body.items():
+        if k not in known:
+            continue
+        if k in _float_fields and not isinstance(v, (int, float)):
+            return JSONResponse({"error": f"{k} must be a number"}, status_code=422)
+        if k in _int_fields and not isinstance(v, int):
+            return JSONResponse({"error": f"{k} must be an integer"}, status_code=422)
+        base[k] = v
+    base["_reviewed"] = True
+    base.pop("_auto_seeded", None)
+    try:
+        # Validate the merged config constructs cleanly
+        GuardianConfig(**{k: v for k, v in base.items() if k in known})
+    except Exception as exc:
+        return JSONResponse({"error": f"invalid policy config: {exc}"}, status_code=422)
+    ok = await asyncio.to_thread(pg_store.save_policy, merchant_id, base)
+    if ok:
+        return JSONResponse({"status": "saved", "merchant_id": merchant_id, "reviewed": True})
     return JSONResponse({"error": "failed to save policy"}, status_code=500)
 
 

@@ -137,7 +137,7 @@ services:
       - key: REQUIRE_DURABLE_WEBHOOKS
         value: "1"
       - key: RUN_SCHEDULER
-        value: "1"
+        value: "0"
       - key: AUTONOMOUS_ACTIONS_ENABLED
         value: "0"
       - key: RECOVERY_MERCHANT_OPT_IN
