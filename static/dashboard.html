@@ -457,9 +457,9 @@
           <div class="stat-card-sub" id="stat-amount-sub">across active cases</div>
         </div>
         <div class="stat-card">
-          <div class="stat-card-label">Next Deadline</div>
-          <div class="stat-card-value" id="stat-deadline" style="font-size:20px;padding-top:6px">—</div>
-          <div class="stat-card-sub" id="stat-deadline-sub">—</div>
+          <div class="stat-card-label">Oracle Win Rate</div>
+          <div class="stat-card-value" id="stat-win-rate">—</div>
+          <div class="stat-card-sub" id="stat-win-rate-sub">avg across oracle-scored disputes</div>
         </div>
         <div class="stat-card">
           <div class="stat-card-label">Time Saved by Anchor</div>
@@ -593,6 +593,11 @@
           Confidence: <strong id="detail-confidence">—</strong>
           &nbsp;·&nbsp; Break-even at: <strong id="detail-breakeven">—</strong>
         </div>
+      </div>
+      <div class="detail-card" style="margin-top:16px">
+        <div class="detail-section-label">Intelligence Sources</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px">Data Anchor gathered to make this decision — vs. manual review which uses none of this.</div>
+        <div id="detail-intel-sources"></div>
       </div>
       <div class="detail-card" style="margin-top:16px">
         <div class="detail-section-label">Case History</div>
@@ -957,15 +962,18 @@ async function renderActionQueue() {
   document.getElementById('stat-amount').textContent = totalAmount != null ? '$' + Number(totalAmount).toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2}) + ' USD' : '—';
   document.getElementById('stat-amount-sub').textContent = `across ${pp.open_disputes || 0} active cases`;
 
-  const nextDeadline = pp.next_deadline;
-  if (nextDeadline) {
-    const d = new Date(nextDeadline);
-    document.getElementById('stat-deadline').textContent = d.toLocaleDateString('en-US', {month:'short',day:'numeric', hour:'numeric', minute:'2-digit'});
-    const diff = Math.round((d - Date.now()) / 36e5);
-    document.getElementById('stat-deadline-sub').textContent = diff > 0 ? `${diff} hour${diff!==1?'s':''} away` : 'Overdue';
+  // Load disputes (with PayPal fallback when audit log is empty)
+  await loadDisputes();
+
+  // Oracle Win Rate: avg win_probability across oracle-scored disputes
+  const withProb = _disputes.filter(d => d.win_probability != null);
+  if (withProb.length > 0) {
+    const avgWP = withProb.reduce((s, d) => s + d.win_probability, 0) / withProb.length;
+    document.getElementById('stat-win-rate').textContent = Math.round(avgWP * 100) + '%';
+    document.getElementById('stat-win-rate-sub').textContent = `avg across ${withProb.length} oracle-scored dispute${withProb.length !== 1 ? 's' : ''}`;
   } else {
-    document.getElementById('stat-deadline').textContent = 'No deadline';
-    document.getElementById('stat-deadline-sub').textContent = '—';
+    document.getElementById('stat-win-rate').textContent = '—';
+    document.getElementById('stat-win-rate-sub').textContent = 'Disputes not yet oracle-scored';
   }
 
   // Time Saved: auto-fought disputes × (90 min human − 10 min machine) at $50/hr
@@ -983,15 +991,7 @@ async function renderActionQueue() {
     ? `~$${dollarsSaved} saved across ${autoFought} auto-fought dispute${autoFought !== 1 ? 's' : ''}`
     : 'No auto-fought disputes yet';
 
-  // Load dispute rows for the action queue
-  try {
-    const r = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(10000) });
-    if (r.ok) {
-      const data = await r.json();
-      _disputes = data.rows || [];
-      renderQueueTable(_disputes.slice(0, 10), data.demo);
-    }
-  } catch(e) { /* silent */ }
+  renderQueueTable(_disputes.slice(0, 10), false);
 }
 
 function renderQueueTable(rows, isDemo) {
@@ -1074,17 +1074,23 @@ async function loadDisputes() {
                 _disputes = ppDisputes.map(d => {
                   const did = d.dispute_id || d.id;
                   const oracle = oracleMap[did];
-                  return oracle ? Object.assign({}, d, {
+                  const base = Object.assign({}, d, {
+                    due_date: d.seller_response_due_date || d.due_date,
+                  });
+                  return oracle ? Object.assign(base, {
                     win_probability: oracle.win_probability,
                     ev_fight: oracle.ev_fight,
                     recommendation: oracle.recommendation || oracle.action_type,
-                  }) : d;
+                    oracle_reasons: oracle.oracle_reasons || oracle.reasoning,
+                    channel3_score: oracle.channel3_score,
+                    kernel_summary: oracle.kernel_summary,
+                  }) : base;
                 });
               } else {
-                _disputes = ppDisputes;
+                _disputes = ppDisputes.map(d => Object.assign({}, d, { due_date: d.seller_response_due_date || d.due_date }));
               }
             } catch(e2) {
-              _disputes = ppDisputes;
+              _disputes = ppDisputes.map(d => Object.assign({}, d, { due_date: d.seller_response_due_date || d.due_date }));
             }
           }
         }
@@ -1361,14 +1367,35 @@ function openDisputeDetail(id) {
   document.getElementById('detail-breakeven').textContent =
     d.break_even_probability != null ? Math.round(d.break_even_probability * 100) + '%' : '—';
 
+  // Intelligence sources panel (vs Chargeflow: show exactly what Anchor used)
+  const intSrcEl = document.getElementById('detail-intel-sources');
+  if (intSrcEl) {
+    const sources = [
+      { label: 'PayPal Transaction API', status: 'active', detail: 'Dispute reason, amount, buyer history' },
+      { label: 'Channel3 Risk Intelligence', status: d.channel3_score != null ? 'active' : 'pending', detail: d.channel3_score != null ? `Risk score: ${d.channel3_score}` : 'Enrichment pending pipeline run' },
+      { label: 'Kernel AI Analysis', status: d.kernel_summary ? 'active' : 'pending', detail: d.kernel_summary || 'AI summary pending pipeline run' },
+      { label: 'Anchor Oracle', status: d.win_probability != null ? 'active' : 'pending', detail: d.win_probability != null ? `P(win)=${Math.round(d.win_probability*100)}% · EV=${d.ev_fight != null ? (Number(d.ev_fight)>=0?'+':'')+Number(d.ev_fight).toFixed(2) : '?'}` : 'Not yet scored' },
+    ];
+    intSrcEl.innerHTML = sources.map(s => `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border-light)">
+        <div>
+          <span style="font-size:12px;font-weight:600;color:var(--text)">${s.label}</span>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">${s.detail}</div>
+        </div>
+        <span style="font-size:11px;font-weight:600;flex-shrink:0;margin-left:12px;color:${s.status==='active'?'var(--ok)':'var(--muted)'}">${s.status==='active'?'✓ Active':'⏳ Pending'}</span>
+      </div>`).join('');
+  }
+
   // history
-  document.getElementById('detail-case-history').innerHTML = `
-    <div class="hist-step hist-done">✓ Webhook received</div>
-    <span class="hist-arrow">→</span>
-    <div class="hist-step hist-done">✓ Oracle analyzed</div>
-    <span class="hist-arrow">→</span>
-    <div class="hist-step hist-pending"><span class="hist-circle"></span> Pending merchant review</div>
-  `;
+  const histSteps = [
+    d.create_time ? `✓ Received ${new Date(d.create_time).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : '✓ Received',
+    d.win_probability != null ? '✓ Oracle scored' : '⏳ Oracle pending',
+    d.due_date ? `⏳ Due ${new Date(d.due_date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : '⏳ Pending merchant review',
+  ];
+  document.getElementById('detail-case-history').innerHTML = histSteps.map((s, i) => `
+    ${i > 0 ? '<span class="hist-arrow">→</span>' : ''}
+    <div class="hist-step ${s.startsWith('✓') ? 'hist-done' : 'hist-pending'}">${s.startsWith('⏳') ? '<span class="hist-circle"></span>' : ''}${s}</div>
+  `).join('');
 
   // store current dispute id
   document.getElementById('detail-btn-fight').dataset.disputeId = id;
