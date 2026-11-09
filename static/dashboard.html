@@ -6,6 +6,10 @@
   <title>Anchor Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+  <!-- AG Grid Community 31.3.2 — Disputes data grid -->
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/dist/ag-grid-community.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-grid.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.2/styles/ag-theme-alpine.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -321,8 +325,37 @@
     .result-label { color:var(--muted); }
     .result-value { font-weight:600; }
 
+    /* ── AG Grid overrides ── */
+    .ag-theme-alpine {
+      --ag-background-color: var(--surface);
+      --ag-odd-row-background-color: var(--bg);
+      --ag-header-background-color: var(--bg);
+      --ag-border-color: var(--border);
+      --ag-font-family: 'Inter', sans-serif;
+      --ag-font-size: 13px;
+      --ag-row-hover-color: rgba(37,99,235,0.04);
+      --ag-selected-row-background-color: rgba(37,99,235,0.08);
+    }
+    .ag-theme-alpine .ag-header-cell-label { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    #ag-disputes-grid { height: 420px; width: 100%; }
+    /* ── Triage Board (Bryntum-inspired) ── */
+    .triage-board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .triage-col { background: var(--bg); border-radius: var(--radius); padding: 12px; min-height: 320px; }
+    .triage-col-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 10px; }
+    .triage-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 8px; cursor: pointer; transition: box-shadow .15s; }
+    .triage-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .triage-card-id { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .triage-card-amt { font-size: 18px; font-weight: 700; color: var(--text); }
+    .triage-card-reason { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .triage-card-deadline { font-size: 11px; margin-top: 6px; display: flex; align-items: center; gap: 4px; }
+    .triage-card-deadline.urgent { color: var(--error); }
+    .triage-card-deadline.soon   { color: var(--warn); }
+    .triage-card-deadline.ok     { color: var(--ok); }
+    .triage-win-bar { height: 4px; border-radius: 2px; background: var(--border); margin-top: 8px; }
+    .triage-win-bar-fill { height: 100%; border-radius: 2px; background: var(--accent); }
     /* ── Responsive ── */
     @media(max-width:700px) {
+      .triage-board { grid-template-columns: 1fr; }
       .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
       .sidebar.open { transform: translateX(0); }
       .main-content { margin-left: 0; }
@@ -352,6 +385,10 @@
     <button class="nav-item" onclick="showPage('recoveries')" id="nav-recoveries">
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 019-9 9 9 0 010 18 9 9 0 01-9-9z"/><path d="M3 12h4M17 12l2.5-2.5M17 12l2.5 2.5"/></svg>
       Recoveries
+    </button>
+    <button class="nav-item" onclick="showPage('triage')" id="nav-triage">
+      <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="5" height="18" rx="1"/><rect x="10" y="3" width="5" height="13" rx="1"/><rect x="17" y="3" width="5" height="8" rx="1"/></svg>
+      Triage Board
     </button>
     <button class="nav-item" onclick="showPage('activitylog')" id="nav-activitylog">
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
@@ -476,7 +513,10 @@
       </div>
       <div id="disputes-banner" style="display:none;padding:8px 0;margin-bottom:12px;font-size:13px;font-weight:600;color:var(--error)"></div>
       <div class="card">
-        <table class="data-table" id="disputes-table">
+        <!-- AG Grid disputes table (powered by AG Grid Community 31.3.2) -->
+        <div id="ag-disputes-grid" class="ag-theme-alpine"></div>
+        <!-- Fallback plain table for no-JS / accessibility -->
+        <table class="data-table" id="disputes-table" style="display:none">
           <thead>
             <tr>
               <th>Dispute ID</th>
@@ -547,6 +587,33 @@
       <div class="detail-card" style="margin-top:16px">
         <div class="detail-section-label">Case History</div>
         <div class="case-history" id="detail-case-history"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Triage Board Page (Bryntum-inspired dispute scheduler) ──────────── -->
+  <div class="page" id="page-triage">
+    <div class="page-header" style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div class="page-title">Triage Board</div>
+        <div class="page-sub">Dispute kanban — sort by urgency, win probability, and evidence readiness.</div>
+      </div>
+      <button class="btn-secondary" onclick="loadTriageBoard()">↻ Refresh</button>
+    </div>
+    <div id="triage-board-container">
+      <div class="triage-board" id="triage-board">
+        <div class="triage-col">
+          <div class="triage-col-title">🔴 Fight (High EV)</div>
+          <div id="triage-col-fight"><div style="color:var(--muted);font-size:13px;padding:8px">Loading…</div></div>
+        </div>
+        <div class="triage-col">
+          <div class="triage-col-title">🟡 Review Needed</div>
+          <div id="triage-col-review"><div style="color:var(--muted);font-size:13px;padding:8px">Loading…</div></div>
+        </div>
+        <div class="triage-col">
+          <div class="triage-col-title">🟢 Accept (Low EV)</div>
+          <div id="triage-col-accept"><div style="color:var(--muted);font-size:13px;padding:8px">Loading…</div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -769,6 +836,7 @@ function showPage(id) {
   document.getElementById('nav-' + id).classList.add('active');
   _currentPage = id;
   if (id === 'disputes') loadDisputes();
+  if (id === 'triage') loadTriageBoard();
   if (id === 'recoveries') loadRecoveries();
   if (id === 'activitylog') loadActivityLog();
   if (id === 'settings') loadSettings();
@@ -1569,6 +1637,108 @@ async function runScenario() {
     alert('Sample run failed: ' + e.message);
   }
   btn.disabled = false; btn.textContent = 'Run sample review';
+}
+
+// ── AG Grid ───────────────────────────────────────────────────────────────────
+let _agDisputesApi = null;
+
+function _initAgGrid(rowData) {
+  const el = document.getElementById('ag-disputes-grid');
+  if (!el || typeof agGrid === 'undefined') return;
+  if (_agDisputesApi) {
+    _agDisputesApi.setGridOption('rowData', rowData);
+    return;
+  }
+  const colDefs = [
+    { field: 'dispute_id', headerName: 'Dispute ID', width: 190, cellRenderer: p => `<span style="font-family:monospace;font-size:12px">${p.value || '—'}</span>` },
+    { field: 'reason',     headerName: 'Reason',     flex: 1, minWidth: 160, valueFormatter: p => (p.value || '').replace(/_/g,' ') },
+    { field: 'amount',     headerName: 'Amount',     width: 100, type: 'numericColumn', valueFormatter: p => p.value != null ? '$' + Number(p.value).toFixed(2) : '—' },
+    { field: 'win_probability', headerName: 'Win %', width: 90, type: 'numericColumn',
+      valueFormatter: p => p.value != null ? Math.round(p.value * 100) + '%' : '—',
+      cellStyle: p => p.value == null ? {} : p.value >= 0.6 ? {color:'#059669',fontWeight:600} : p.value >= 0.4 ? {color:'#d97706',fontWeight:600} : {color:'#dc2626',fontWeight:600} },
+    { field: 'ev_fight',   headerName: 'EV(Fight)',  width: 100, type: 'numericColumn', valueFormatter: p => p.value != null ? (p.value >= 0 ? '+' : '') + '$' + Number(p.value).toFixed(2) : '—' },
+    { field: 'recommendation', headerName: 'Rec.',   width: 90,
+      cellRenderer: p => { const v = (p.value||'').toUpperCase(); const col = v==='FIGHT'?'var(--accent)':v==='ACCEPT'?'var(--ok)':'var(--warn)'; return `<span style="background:${col}15;color:${col};padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700">${v||'—'}</span>`; } },
+    { field: 'outcome',    headerName: 'Outcome',    width: 100,
+      cellRenderer: p => { const v = (p.value||'').toLowerCase(); return v ? `<span style="color:var(--muted);font-size:12px">${v}</span>` : '—'; } },
+  ];
+  const gridOptions = {
+    columnDefs: colDefs,
+    rowData: rowData,
+    defaultColDef: { resizable: true, sortable: true, filter: true },
+    animateRows: true,
+    rowSelection: 'single',
+    statusBar: { statusPanels: [{ statusPanel: 'agTotalAndFilteredRowCountComponent', align: 'left' }] },
+    onRowClicked: p => { if (p.data && p.data.dispute_id) { const d = _disputes.find(x => (x.dispute_id||x.id) === p.data.dispute_id); if (d) showDisputeDetail(d); } },
+  };
+  _agDisputesApi = agGrid.createGrid(el, gridOptions);
+}
+
+// Patch loadDisputes to also populate AG Grid
+const _origLoadDisputes = loadDisputes;
+loadDisputes = async function() {
+  await _origLoadDisputes();
+  // After disputes load, populate AG Grid from _disputes
+  setTimeout(() => {
+    if (_disputes && _disputes.length > 0) {
+      const rows = _disputes.map(d => ({
+        dispute_id: d.dispute_id || d.id || '',
+        reason: d.reason || d.dispute_life_cycle_stage || '',
+        amount: disputeAmt(d),
+        win_probability: d.win_probability ?? null,
+        ev_fight: d.ev_fight != null ? Number(d.ev_fight) : null,
+        recommendation: d.recommendation || d.action_type || '',
+        outcome: d.outcome || d.status || '',
+      }));
+      _initAgGrid(rows);
+    }
+  }, 500);
+};
+
+// ── Triage Board ──────────────────────────────────────────────────────────────
+function _triageCard(d) {
+  const id = d.dispute_id || d.id || '—';
+  const amt = disputeAmt(d);
+  const reason = (d.reason || d.dispute_life_cycle_stage || '').replace(/_/g,' ');
+  const wp = d.win_probability;
+  const rec = (d.recommendation || d.action_type || '').toUpperCase();
+  const deadline = disputeDeadline(d);
+  const daysLeft = (() => { const raw = d.next_response_due || d.seller_response_due_date; if (!raw) return 99; return Math.ceil((new Date(raw) - Date.now()) / 86400000); })();
+  const urgency = daysLeft <= 2 ? 'urgent' : daysLeft <= 5 ? 'soon' : 'ok';
+  const wpPct = wp != null ? Math.round(wp * 100) : null;
+  return `<div class="triage-card" onclick="(function(){const d=_disputes.find(x=>(x.dispute_id||x.id)==='${id}');if(d)showDisputeDetail(d);})()">
+    <div class="triage-card-id">${id}</div>
+    <div class="triage-card-amt">$${amt.toFixed(2)}</div>
+    <div class="triage-card-reason">${reason || '—'}</div>
+    <div class="triage-card-deadline ${urgency}">
+      <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      ${deadline} · ${daysLeft < 99 ? daysLeft + 'd left' : 'No deadline'}
+    </div>
+    ${wpPct != null ? `<div class="triage-win-bar"><div class="triage-win-bar-fill" style="width:${wpPct}%;background:${wpPct>=60?'var(--ok)':wpPct>=40?'var(--warn)':'var(--error)'}"></div></div>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px">${wpPct}% win probability</div>` : ''}
+  </div>`;
+}
+
+async function loadTriageBoard() {
+  if (!_disputes || _disputes.length === 0) {
+    // load disputes first if not cached
+    try {
+      const r = await fetch('/api/disputes', { headers: _auth(), signal: AbortSignal.timeout(8000) });
+      if (r.ok) { const data = await r.json(); _disputes = data.rows || []; }
+    } catch(e) {}
+  }
+  const cols = { fight: [], review: [], accept: [] };
+  for (const d of _disputes) {
+    const rec = (d.recommendation || d.action_type || '').toUpperCase();
+    if (rec === 'FIGHT') cols.fight.push(d);
+    else if (rec === 'ACCEPT') cols.accept.push(d);
+    else cols.review.push(d);
+  }
+  // Sort each column by deadline ascending
+  const byDeadline = arr => arr.sort((a,b) => { const da = a.next_response_due || a.seller_response_due_date || '9999'; const db = b.next_response_due || b.seller_response_due_date || '9999'; return da < db ? -1 : 1; });
+  document.getElementById('triage-col-fight').innerHTML  = byDeadline(cols.fight).map(_triageCard).join('') || '<div style="color:var(--muted);font-size:13px;padding:8px">None</div>';
+  document.getElementById('triage-col-review').innerHTML = byDeadline(cols.review).map(_triageCard).join('') || '<div style="color:var(--muted);font-size:13px;padding:8px">None</div>';
+  document.getElementById('triage-col-accept').innerHTML = byDeadline(cols.accept).map(_triageCard).join('') || '<div style="color:var(--muted);font-size:13px;padding:8px">None</div>';
 }
 </script>
 </body>
