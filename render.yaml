@@ -51,6 +51,10 @@ services:
         sync: false
       - key: ASTRO_GATEWAY_API_KEY
         sync: false
+      - key: KERNEL_API_KEY
+        sync: false
+      - key: KERNEL_PROJECT_ID
+        value: "e9foz2csyrvzit1k7a1ecrr9"
       - key: CHANNEL3_API_KEY
         sync: false
       - key: KERNEL_API_KEY
@@ -156,5 +160,55 @@ services:
         value: "90"
       - key: PAYPAL_WEBHOOK_ID
         value: "86192318VE190694L"
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+
+  # Render Workflows — batch dispute processing orchestration
+  # Dispatches parallel evidence-gathering tasks (Channel3, Kernel, audit log flush)
+  # across concurrent instances using Render's lightweight SDK.
+  - type: worker
+    name: anchor-dispute-workflow
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m scripts.dispute_workflow
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: anchor-db
+          property: connectionString
+      - key: PAYPAL_CLIENT_ID
+        fromService:
+          name: anchor-api
+          type: web
+          envVarKey: PAYPAL_CLIENT_ID
+      - key: PAYPAL_CLIENT_SECRET
+        fromService:
+          name: anchor-api
+          type: web
+          envVarKey: PAYPAL_CLIENT_SECRET
+      - key: PAYPAL_MERCHANT_ID
+        fromService:
+          name: anchor-api
+          type: web
+          envVarKey: PAYPAL_MERCHANT_ID
+      - key: MERCHANT_ID
+        fromService:
+          name: anchor-api
+          type: web
+          envVarKey: MERCHANT_ID
+      - key: CHANNEL3_API_KEY
+        fromService:
+          name: anchor-api
+          type: web
+          envVarKey: CHANNEL3_API_KEY
+      - key: KERNEL_API_KEY
+        fromService:
+          name: anchor-api
+          type: web
+          envVarKey: KERNEL_API_KEY
+      - key: PAYPAL_ENV
+        value: "sandbox"
       - key: PYTHON_VERSION
         value: "3.12.0"

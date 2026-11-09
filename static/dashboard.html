@@ -848,6 +848,7 @@ let _disputes = [];
 let _recoveries = [];
 let _logRows = [];
 let _selectedScenario = null;
+let _agDisputesGrid = null;
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
 let _health = null;
@@ -1102,11 +1103,102 @@ async function loadDisputes() {
         <td><button class="btn-link" onclick="event.stopPropagation();openDisputeDetail('${id}')">Review</button></td>
       </tr>`;
     }).join('');
+    // ── AG Grid update ──────────────────────────────────────────────────────
+    _renderDisputesGrid(_disputes);
   } catch(e) {
     banner.style.display = 'block';
     banner.textContent = 'Error loading disputes: ' + e.message;
     tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">Could not load disputes.</td></tr>';
   }
+}
+
+function _renderDisputesGrid(rows) {
+  const el = document.getElementById('ag-disputes-grid');
+  if (!el || typeof agGrid === 'undefined') return;
+  const rowData = rows.map(d => ({
+    id: d.dispute_id || d.id || '—',
+    reason: (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g, ' '),
+    amount: disputeAmt(d),
+    status: (d.status || 'Unknown').replace(/_/g, ' '),
+    recommendation: d.recommendation || d.action_type || '—',
+    win_prob: d.win_probability != null ? Math.round(d.win_probability * 100) + '%' : '—',
+    _raw: d,
+  }));
+  const colDefs = [
+    { field: 'id', headerName: 'Dispute ID', flex: 1.5, cellClass: 'mono',
+      cellRenderer: p => `<span style="font-family:monospace">${p.value}</span>` },
+    { field: 'reason', headerName: 'Reason', flex: 2 },
+    { field: 'amount', headerName: 'Amount', flex: 1, type: 'numericColumn',
+      valueFormatter: p => '$' + p.value.toFixed(2) + ' USD' },
+    { field: 'status', headerName: 'Status', flex: 1.2 },
+    { field: 'recommendation', headerName: 'Recommendation', flex: 1.2,
+      cellRenderer: p => {
+        const v = (p.value||'').toLowerCase();
+        if (v.includes('fight')) return `<span class="rec-fight">Fight</span>`;
+        if (v.includes('accept')) return `<span class="rec-accept">Accept</span>`;
+        return p.value;
+      }},
+    { field: 'win_prob', headerName: 'Win %', flex: 0.8 },
+    { headerName: '', flex: 0.7, sortable: false, filter: false,
+      cellRenderer: p => `<button class="btn-link" onclick="openDisputeDetail('${p.data.id}')">Review</button>` },
+  ];
+  if (!_agDisputesGrid) {
+    _agDisputesGrid = agGrid.createGrid(el, {
+      columnDefs: colDefs,
+      rowData,
+      defaultColDef: { sortable: true, filter: true, resizable: true },
+      pagination: true,
+      paginationPageSize: 10,
+      onRowClicked: e => openDisputeDetail(e.data.id),
+      rowClass: 'ag-row-pointer',
+    });
+  } else {
+    _agDisputesGrid.setGridOption('rowData', rowData);
+  }
+}
+
+// ── Triage Board (Bryntum-inspired dispute scheduler) ────────────────────────
+async function loadTriageBoard() {
+  if (!_disputes.length) await loadDisputes();
+  const cols = { fight: [], review: [], accept: [] };
+  for (const d of _disputes) {
+    const wp = d.win_probability != null ? d.win_probability : (d.ev_win_prob != null ? d.ev_win_prob : null);
+    const rec = (d.recommendation || d.action_type || '').toLowerCase();
+    const dueMs = d.due_date ? new Date(d.due_date).getTime() : null;
+    const now = Date.now();
+    const daysLeft = dueMs ? Math.ceil((dueMs - now) / 86400000) : null;
+    const urgency = daysLeft == null ? 'ok' : daysLeft <= 2 ? 'urgent' : daysLeft <= 5 ? 'soon' : 'ok';
+    const card = { d, wp, daysLeft, urgency };
+    if (rec.includes('fight') || (wp != null && wp >= 0.55)) cols.fight.push(card);
+    else if (rec.includes('accept') || (wp != null && wp < 0.3)) cols.accept.push(card);
+    else cols.review.push(card);
+  }
+  const renderCard = ({ d, wp, daysLeft, urgency }) => {
+    const id = d.dispute_id || d.id || '—';
+    const amt = disputeAmt(d).toFixed(2);
+    const reason = (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g, ' ');
+    const wpPct = wp != null ? Math.round(wp * 100) : null;
+    const deadlineHtml = daysLeft != null
+      ? `<div class="triage-card-deadline ${urgency}">${urgency === 'urgent' ? '⚠' : urgency === 'soon' ? '⏱' : '✓'} ${daysLeft}d left</div>`
+      : '';
+    const barHtml = wpPct != null
+      ? `<div class="triage-win-bar"><div class="triage-win-bar-fill" style="width:${wpPct}%"></div></div>`
+      : '';
+    return `<div class="triage-card" onclick="openDisputeDetail('${id}')">
+      <div class="triage-card-id">${id}</div>
+      <div class="triage-card-amt">$${amt} USD</div>
+      <div class="triage-card-reason">${reason}</div>
+      ${deadlineHtml}
+      ${barHtml}
+      ${wpPct != null ? `<div style="font-size:11px;color:var(--muted);margin-top:2px">Win probability: ${wpPct}%</div>` : ''}
+    </div>`;
+  };
+  document.getElementById('triage-col-fight').innerHTML = cols.fight.length
+    ? cols.fight.map(renderCard).join('') : '<div style="color:var(--muted);font-size:13px;padding:8px">No high-EV disputes</div>';
+  document.getElementById('triage-col-review').innerHTML = cols.review.length
+    ? cols.review.map(renderCard).join('') : '<div style="color:var(--muted);font-size:13px;padding:8px">No disputes pending review</div>';
+  document.getElementById('triage-col-accept').innerHTML = cols.accept.length
+    ? cols.accept.map(renderCard).join('') : '<div style="color:var(--muted);font-size:13px;padding:8px">No low-EV disputes</div>';
 }
 
 function openDisputeDetail(id) {

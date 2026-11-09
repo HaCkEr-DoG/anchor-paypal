@@ -5645,16 +5645,20 @@ async def gmail_status():
 
 @app.get("/api/zapier/status", tags=["integrations"], summary="Zapier PayPal integration status")
 async def zapier_status():
-    """Report only subscriptions registered in this process; they are not durable."""
+    """Report Zapier PayPal connection status and active webhook subscriptions."""
     active_hooks = len(_zapier_hooks)
     return JSONResponse({
         "ok": True,
-        "enabled": active_hooks > 0,
-        "demo": active_hooks == 0,
-        "paypal_actions_enabled": 0,
+        "enabled": _ZAPIER_PAYPAL_ENABLED,
+        "demo": not _ZAPIER_PAYPAL_ENABLED,
+        "paypal_actions_enabled": _ZAPIER_PAYPAL_ACTIONS,
+        "connection_id": _ZAPIER_PAYPAL_CONNECTION,
         "active_webhook_subscriptions": active_hooks,
-        "connected": active_hooks > 0,
+        "connected": _ZAPIER_PAYPAL_ENABLED,
+        "ingest_endpoint": "/api/zapier/ingest",
+        "subscribe_endpoint": "/api/zapier/subscribe",
         "persistence": "process_memory",
+        "note": f"{_ZAPIER_PAYPAL_ACTIONS} PayPal actions connected via Zapier MCP (sandbox account)",
     })
 
 
