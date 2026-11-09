@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: anchor
+      POSTGRES_PASSWORD: anchor_dev_pass
+      POSTGRES_DB: anchor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anchor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://anchor:anchor_dev_pass@db:5432/anchor
+      SHADOW_MODE: "1"
+      AUTONOMOUS_ACTIONS_ENABLED: "0"
+      RECOVERY_MERCHANT_OPT_IN: "0"
+      WEBHOOK_OUTBOX_ENABLED: "1"
+      RUN_SCHEDULER: "1"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: python -m scripts.webhook_worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://anchor:anchor_dev_pass@db:5432/anchor
+      SHADOW_MODE: "1"
+      AUTONOMOUS_ACTIONS_ENABLED: "0"
+      RECOVERY_MERCHANT_OPT_IN: "0"
+      WEBHOOK_OUTBOX_ENABLED: "1"
+      RUN_SCHEDULER: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

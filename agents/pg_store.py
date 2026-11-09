@@ -1025,6 +1025,44 @@ def get_audit_stats() -> Dict[str, Any]:
         return {}
 
 
+def purge_old_records(retain_days: int = 90) -> dict:
+    """
+    Delete audit_log and completed/failed webhook_outbox rows older than
+    retain_days. Called nightly by the scheduler. Returns counts removed.
+
+    Default retention: 90 days.  Override with ANCHOR_RETAIN_DAYS env var.
+    """
+    retain = int(os.environ.get("ANCHOR_RETAIN_DAYS", retain_days))
+    removed: dict = {"audit_log": 0, "webhook_outbox": 0, "approval_jobs": 0}
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM audit_log WHERE timestamp_utc < NOW() - (%s * INTERVAL '1 day')",
+                (retain,),
+            )
+            removed["audit_log"] = cur.rowcount
+            cur.execute(
+                """DELETE FROM webhook_outbox
+                   WHERE status IN ('completed', 'failed')
+                     AND received_utc < NOW() - (%s * INTERVAL '1 day')""",
+                (retain,),
+            )
+            removed["webhook_outbox"] = cur.rowcount
+            cur.execute(
+                """DELETE FROM approval_jobs
+                   WHERE status IN ('completed', 'failed')
+                     AND created_utc < NOW() - (%s * INTERVAL '1 day')""",
+                (retain,),
+            )
+            removed["approval_jobs"] = cur.rowcount
+        conn.commit()
+        logger.info("pg_store: purged records older than %d days: %s", retain, removed)
+    except Exception as exc:
+        logger.error("pg_store: purge_old_records failed: %s", exc)
+    return removed
+
+
 def get_oldest_pending_job_age_seconds() -> Optional[float]:
     """
     Return seconds the oldest due or expired-lease job has been waiting.

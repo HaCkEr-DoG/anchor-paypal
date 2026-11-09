@@ -218,6 +218,12 @@ async def lifespan(app: FastAPI):
         if os.environ.get("WEBHOOK_OUTBOX_ENABLED", "0") == "1" and os.environ.get("DATABASE_URL"):
             _scheduler.add_job(_drain_outbox_in_process, "interval", seconds=10, id="outbox_drain")
             print("[Watcher] In-process queue drainer enabled")
+        if os.environ.get("DATABASE_URL"):
+            async def _run_nightly_purge():
+                import agents.pg_store as _pg
+                await asyncio.to_thread(_pg.purge_old_records)
+            _scheduler.add_job(_run_nightly_purge, "cron", hour=3, minute=0, id="nightly_purge")
+            print("[Watcher] Nightly purge job scheduled at 03:00 UTC")
         _scheduler.start()
         print(f"[Watcher] Scheduler started — recovery every 15 min, deadlines every 30 min, brief at {_brief_hour:02d}:00 {_brief_tz}")
     else:

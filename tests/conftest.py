@@ -1,9 +1,5 @@
 import os
-import sys
 import pytest
-
-# Add project root to sys.path so "agents" and other top-level packages resolve
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Ensure tests don't hit real external services
 os.environ.setdefault("ELASTICSEARCH_URL", "")
