@@ -1329,13 +1329,23 @@ function openDisputeDetail(id) {
   const _populateOraclePanel = (wp, ef, beProb, conf, reasons) => {
     document.getElementById('detail-win-prob').textContent = wp != null ? Math.round(wp * 100) + '%' : '—';
     document.getElementById('detail-ev-fight').textContent = ef != null ? ((Number(ef) >= 0 ? '+' : '') + '$' + Number(ef).toFixed(2)) : '—';
-    document.getElementById('detail-confidence').textContent = conf != null ? Math.round(conf * 100) + '%' : (wp != null ? '—' : '—');
+    document.getElementById('detail-confidence').textContent = conf != null ? Math.round(conf * 100) + '%' : '—';
     document.getElementById('detail-breakeven').textContent = beProb != null ? Math.round(beProb * 100) + '%' : '—';
     const reasonsEl = document.getElementById('detail-oracle-reasons');
     if (reasons && reasons.length) {
       reasonsEl.innerHTML = reasons.map(r =>
         `<div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--ok);flex-shrink:0">▸</span><span>${r}</span></div>`
       ).join('');
+    }
+    // update Intel Sources panel now that oracle has scored
+    const intSrcEl = document.getElementById('detail-intel-sources');
+    if (intSrcEl && wp != null) {
+      const oracleRow = intSrcEl.querySelector('[data-src="oracle"]');
+      if (oracleRow) {
+        oracleRow.querySelector('.src-status').textContent = '✓ Active';
+        oracleRow.querySelector('.src-status').style.color = 'var(--ok)';
+        oracleRow.querySelector('.src-detail').textContent = `P(win)=${Math.round(wp*100)}% · EV=${ef != null ? (Number(ef)>=0?'+':'')+Number(ef).toFixed(2) : '?'}`;
+      }
     }
   };
 
@@ -1402,18 +1412,18 @@ function openDisputeDetail(id) {
   const intSrcEl = document.getElementById('detail-intel-sources');
   if (intSrcEl) {
     const sources = [
-      { label: 'PayPal Transaction API', status: 'active', detail: 'Dispute reason, amount, buyer history' },
-      { label: 'Channel3 Risk Intelligence', status: d.channel3_score != null ? 'active' : 'pending', detail: d.channel3_score != null ? `Risk score: ${d.channel3_score}` : 'Enrichment pending pipeline run' },
-      { label: 'Kernel AI Analysis', status: d.kernel_summary ? 'active' : 'pending', detail: d.kernel_summary || 'AI summary pending pipeline run' },
-      { label: 'Anchor Oracle', status: d.win_probability != null ? 'active' : 'pending', detail: d.win_probability != null ? `P(win)=${Math.round(d.win_probability*100)}% · EV=${d.ev_fight != null ? (Number(d.ev_fight)>=0?'+':'')+Number(d.ev_fight).toFixed(2) : '?'}` : 'Not yet scored' },
+      { key: 'paypal', label: 'PayPal Transaction API', status: 'active', detail: 'Dispute reason, amount, buyer history' },
+      { key: 'channel3', label: 'Channel3 Risk Intelligence', status: d.channel3_score != null ? 'active' : 'pending', detail: d.channel3_score != null ? `Risk score: ${d.channel3_score}` : 'Enrichment pending pipeline run' },
+      { key: 'kernel', label: 'Kernel AI Analysis', status: d.kernel_summary ? 'active' : 'pending', detail: d.kernel_summary || 'AI summary pending pipeline run' },
+      { key: 'oracle', label: 'Anchor Oracle', status: d.win_probability != null ? 'active' : 'pending', detail: d.win_probability != null ? `P(win)=${Math.round(d.win_probability*100)}% · EV=${d.ev_fight != null ? (Number(d.ev_fight)>=0?'+':'')+Number(d.ev_fight).toFixed(2) : '?'}` : 'Scoring…' },
     ];
     intSrcEl.innerHTML = sources.map(s => `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border-light)">
+      <div data-src="${s.key}" style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border-light)">
         <div>
           <span style="font-size:12px;font-weight:600;color:var(--text)">${s.label}</span>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">${s.detail}</div>
+          <div class="src-detail" style="font-size:11px;color:var(--muted);margin-top:2px">${s.detail}</div>
         </div>
-        <span style="font-size:11px;font-weight:600;flex-shrink:0;margin-left:12px;color:${s.status==='active'?'var(--ok)':'var(--muted)'}">${s.status==='active'?'✓ Active':'⏳ Pending'}</span>
+        <span class="src-status" style="font-size:11px;font-weight:600;flex-shrink:0;margin-left:12px;color:${s.status==='active'?'var(--ok)':'var(--muted)'}">${s.status==='active'?'✓ Active':'⏳ Pending'}</span>
       </div>`).join('');
   }
 
@@ -1441,23 +1451,45 @@ function backToDisputeList() {
 async function approveDisputeAction(action) {
   const id = document.getElementById('detail-btn-fight').dataset.disputeId;
   if (!id) return;
-  if (!confirm(`${action === 'fight' ? 'Submit evidence to fight' : 'Accept liability for'} dispute ${id}?`)) return;
+  const label = action === 'fight' ? 'Submit evidence to fight' : 'Accept liability for';
+  if (!confirm(`${label} dispute ${id}?\n\nThis will send a request to PayPal.`)) return;
+
+  const btn = action === 'fight'
+    ? document.getElementById('detail-btn-fight')
+    : document.getElementById('detail-btn-accept');
+  btn.disabled = true;
+  btn.textContent = action === 'fight' ? 'Submitting…' : 'Accepting…';
+
   try {
-    const r = await fetch(`/api/disputes/${id}/action`, {
+    const url = action === 'fight'
+      ? `/api/paypal/disputes/${encodeURIComponent(id)}/provide-evidence`
+      : `/api/paypal/disputes/${encodeURIComponent(id)}/accept`;
+    const body = action === 'fight'
+      ? { evidence_type: 'PROOF_OF_FULFILLMENT', notes: 'Merchant contests this dispute. Evidence of fulfillment available.' }
+      : { note: 'Merchant accepts this claim.' };
+    const r = await fetch(url, {
       method: 'POST',
-      headers: { ...{ 'Content-Type': 'application/json' }, ..._auth() },
-      body: JSON.stringify({ action }),
+      headers: { 'Content-Type': 'application/json', ..._auth() },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
     });
     if (r.ok) {
-      alert(`Action submitted: ${action}. Anchor will process momentarily.`);
+      const data = await r.json();
+      const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
+      alert(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`);
       backToDisputeList();
-      loadDisputes();
+      await loadDisputes();
     } else {
-      const e = await r.json();
-      alert('Error: ' + (e.detail || r.status));
+      let msg = r.status;
+      try { const e = await r.json(); msg = e.detail || e.error || msg; } catch(_) {}
+      alert('Error: ' + msg);
+      btn.disabled = false;
+      btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
     }
   } catch(e) {
     alert('Network error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
   }
 }
 
