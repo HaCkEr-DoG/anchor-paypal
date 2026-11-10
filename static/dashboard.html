@@ -839,7 +839,7 @@ function disputeDeadline(d) {
   // DB: next_response_due | PayPal API: seller_response_due_date
   const raw = d.next_response_due || d.seller_response_due_date;
   if (!raw) return '—';
-  return new Date(raw).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return new Date(raw).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
 // ── Page switching ────────────────────────────────────────────────────────────
@@ -1429,9 +1429,9 @@ function openDisputeDetail(id) {
 
   // history
   const histSteps = [
-    d.create_time ? `✓ Received ${new Date(d.create_time).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : '✓ Received',
+    d.create_time ? `✓ Received ${new Date(d.create_time).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : '✓ Received',
     d.win_probability != null ? '✓ Oracle scored' : '⏳ Oracle pending',
-    d.due_date ? `⏳ Due ${new Date(d.due_date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : '⏳ Pending merchant review',
+    d.due_date ? `⏳ Due ${new Date(d.due_date).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}` : '⏳ Pending merchant review',
   ];
   document.getElementById('detail-case-history').innerHTML = histSteps.map((s, i) => `
     ${i > 0 ? '<span class="hist-arrow">→</span>' : ''}
@@ -1905,7 +1905,7 @@ function _initAgGrid(rowData) {
     animateRows: true,
     rowSelection: 'single',
     statusBar: { statusPanels: [{ statusPanel: 'agTotalAndFilteredRowCountComponent', align: 'left' }] },
-    onRowClicked: p => { if (p.data && p.data.dispute_id) { const d = _disputes.find(x => (x.dispute_id||x.id) === p.data.dispute_id); if (d) showDisputeDetail(d); } },
+    onRowClicked: p => { if (p.data && p.data.dispute_id) { openDisputeDetail(p.data.dispute_id); } },
   };
   _agDisputesApi = agGrid.createGrid(el, gridOptions);
 }
@@ -1942,7 +1942,7 @@ function _triageCard(d) {
   const daysLeft = (() => { const raw = d.next_response_due || d.seller_response_due_date; if (!raw) return 99; return Math.ceil((new Date(raw) - Date.now()) / 86400000); })();
   const urgency = daysLeft <= 2 ? 'urgent' : daysLeft <= 5 ? 'soon' : 'ok';
   const wpPct = wp != null ? Math.round(wp * 100) : null;
-  return `<div class="triage-card" onclick="(function(){const d=_disputes.find(x=>(x.dispute_id||x.id)==='${id}');if(d)showDisputeDetail(d);})()">
+  return `<div class="triage-card" onclick="openDisputeDetail('${id}')">
     <div class="triage-card-id">${id}</div>
     <div class="triage-card-amt">$${amt.toFixed(2)}</div>
     <div class="triage-card-reason">${reason || '—'}</div>
