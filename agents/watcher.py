@@ -2020,7 +2020,7 @@ async def api_stats(request: Request):
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
 
     if not es_url or not es_key:
-        return JSONResponse({"demo": True})
+        return JSONResponse({"disputes_total": 0, "disputes_fought": 0, "disputes_accepted": 0, "disputes_pending": 0, "revenue_protected": 0, "orders_recovered": 0, "revenue_recovered": 0, "source": "no_data"})
 
     import httpx
     query = {
@@ -2083,7 +2083,7 @@ async def api_stats(request: Request):
         }
     except Exception as e:
         print(f"[Dashboard] stats query failed: {e}")
-        return JSONResponse({"demo": True})
+        return JSONResponse({"error": str(e), "source": "no_data"}, status_code=500)
 
 
 @app.get("/api/dashboard/summary")
@@ -2211,7 +2211,7 @@ async def api_disputes(request: Request):
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
 
     if not es_url or not es_key:
-        return JSONResponse({"rows": [], "demo": True})
+        return JSONResponse({"rows": [], "source": "no_data"})
 
     import httpx
     query = {
@@ -2432,7 +2432,7 @@ async def api_recoveries(request: Request):
     es_key = os.environ.get("ELASTICSEARCH_API_KEY")
 
     if not es_url or not es_key:
-        return JSONResponse({"rows": [], "demo": True})
+        return JSONResponse({"rows": [], "source": "no_data"})
 
     import httpx
     query = {
@@ -2674,10 +2674,10 @@ async def paypal_disputes(request: Request, state: str = "REQUIRED_ACTION", page
     Returns demo data when keys are absent.
     """
     _require_api_key(request)
-    from agents.paypal_client import get_client, _demo_status
+    from agents.paypal_client import get_client
     client = get_client()
     if not client.configured():
-        return JSONResponse({"demo": True, "items": _demo_status()["urgent_items"]})
+        return JSONResponse({"error": "PayPal credentials not configured", "items": []}, status_code=503)
     try:
         data = await client.list_disputes(dispute_state=state, page_size=page_size)
         return JSONResponse(data)
@@ -2698,7 +2698,7 @@ async def api_accept_dispute(dispute_id: str, request: Request):
     from agents.paypal_client import get_client
     client = get_client()
     if not client.configured():
-        return JSONResponse({"demo": True, "status": "accepted", "dispute_id": dispute_id})
+        return JSONResponse({"error": "PayPal credentials not configured"}, status_code=503)
     try:
         body = {}
         try:
@@ -2747,7 +2747,7 @@ async def api_dispute_links(dispute_id: str, request: Request):
     from agents.paypal_client import get_client
     client = get_client()
     if not client.configured():
-        return JSONResponse({"demo": True})
+        return JSONResponse({"error": "PayPal credentials not configured"}, status_code=503)
     try:
         d = await client.get_dispute(dispute_id)
         return JSONResponse({"dispute_id": dispute_id, "status": d.get("status"), "links": d.get("links", [])})
@@ -2766,7 +2766,7 @@ async def api_provide_evidence(dispute_id: str, request: Request):
     from agents.paypal_client import get_client
     client = get_client()
     if not client.configured():
-        return JSONResponse({"demo": True, "status": "submitted", "dispute_id": dispute_id})
+        return JSONResponse({"error": "PayPal credentials not configured"}, status_code=503)
     try:
         body = await request.json()
         ev_type = body.get("evidence_type", "PROOF_OF_FULFILLMENT")
@@ -2835,7 +2835,7 @@ async def api_send_dispute_message(dispute_id: str, request: Request):
     from agents.paypal_client import get_client
     client = get_client()
     if not client.configured():
-        return JSONResponse({"demo": True, "status": "sent", "dispute_id": dispute_id})
+        return JSONResponse({"error": "PayPal credentials not configured"}, status_code=503)
     try:
         body = await request.json()
         result = await client.send_message(dispute_id, message=body.get("message", ""))
@@ -2855,7 +2855,7 @@ async def api_appeal_dispute(dispute_id: str, request: Request):
     from agents.paypal_client import get_client
     client = get_client()
     if not client.configured():
-        return JSONResponse({"demo": True, "status": "appealed", "dispute_id": dispute_id})
+        return JSONResponse({"error": "PayPal credentials not configured"}, status_code=503)
     try:
         body = await request.json()
         result = await client.appeal_dispute(dispute_id, evidences=body.get("evidences", []))
@@ -2939,19 +2939,7 @@ async def kernel_screenshot(request: Request):
     kb = KernelBrowser()
 
     if not kb.enabled():
-        return JSONResponse({
-            "enabled": False,
-            "demo": True,
-            "note": "Set KERNEL_API_KEY to capture real screenshots",
-            "demo_result": {
-                "url": "https://www.ups.com/track?tracknum=1Z999AA10123456784",
-                "carrier": "UPS",
-                "status": "Delivered — October 28, 2026 at 2:14 P.M.",
-                "screenshot_size_kb": 184,
-                "spin_up_ms": 28,
-                "stealth": True,
-            },
-        })
+        return JSONResponse({"enabled": False, "error": "KERNEL_API_KEY not configured"}, status_code=503)
 
     try:
         body = await request.json()

@@ -310,17 +310,8 @@
     .alert-err { background: #fef2f2; color: #991b1b; border-bottom: 1px solid #fca5a5; }
 
     /* ── Modal ── */
-    .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:200; align-items:center; justify-content:center; }
-    .modal-overlay.open { display:flex; }
+
     .modal { background:var(--surface); border-radius:12px; padding:28px; width:520px; max-width:94vw; max-height:88vh; overflow-y:auto; position:relative; }
-    .modal-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
-    .modal-title { font-size:16px; font-weight:700; }
-    .modal-close { background:none; border:none; font-size:22px; cursor:pointer; color:var(--muted); line-height:1; padding:4px; }
-    .sim-label { font-size:10px; background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:4px; font-weight:700; letter-spacing:.04em; display:inline-block; margin-bottom:14px; }
-    .scenario-btn { background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 14px; cursor:pointer; font-size:13px; display:block; width:100%; text-align:left; margin-bottom:8px; transition:border-color .15s; }
-    .scenario-btn:hover, .scenario-btn.selected { border-color:var(--accent); background:#eff6ff; }
-    .drawer-result { display:none; margin-top:16px; background:var(--bg); border-radius:var(--radius-sm); padding:16px; }
-    .drawer-result.show { display:block; }
     .result-row { display:flex; justify-content:space-between; padding:5px 0; font-size:13px; border-bottom:1px solid var(--border-light); }
     .result-row:last-child { border-bottom:none; }
     .result-label { color:var(--muted); }
@@ -439,7 +430,6 @@
           </div>
           <div class="empty-state-title">Awaiting PayPal Events</div>
           <div class="empty-state-sub">Anchor is connected and monitoring your webhook stream. Disputes and pending recoveries will appear here once received.</div>
-          <button class="btn-secondary" onclick="sendTestWebhook()">Send Test Webhook</button>
         </div>
       </div>
     </div>
@@ -771,32 +761,6 @@
 
 </div><!-- /main-content -->
 
-<!-- ── Sample Decision Modal ───────────────────────────────────────────── -->
-<div class="modal-overlay" id="modal-overlay" onclick="if(event.target===this)closeModal()">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title">Settlement Oracle — Sample Run</div>
-      <button class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
-    </div>
-    <div class="sim-label">SIMULATED · No PayPal action will be executed</div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Select a scenario and run the full 158-module oracle pipeline. Results are computed locally — no PayPal API calls are made.</p>
-    <button class="scenario-btn" onclick="selectScenario(this,'inr_fight')" aria-pressed="false">📦 INR — $245 · item not received, strong seller evidence</button>
-    <button class="scenario-btn" onclick="selectScenario(this,'snad_fight')" aria-pressed="false">🔁 SNAD — $320 · item not as described, photos available</button>
-    <button class="scenario-btn" onclick="selectScenario(this,'unauthorized_accept')" aria-pressed="false">🔐 Unauthorized — $180 · no 3DS, no CVV match → accept</button>
-    <button class="scenario-btn" onclick="selectScenario(this,'micro_accept')" aria-pressed="false">💲 Micro — $18.50 · below auto-accept threshold</button>
-    <button class="btn-primary" id="run-btn" disabled onclick="runScenario()" style="width:100%;margin-top:8px">Run sample review</button>
-    <div class="drawer-result" id="drawer-result">
-      <div class="result-row"><span class="result-label">Recommendation</span><span class="result-value" id="res-rec">—</span></div>
-      <div class="result-row"><span class="result-label">EV Fight</span><span class="result-value" id="res-ev-fight">—</span></div>
-      <div class="result-row"><span class="result-label">EV Accept</span><span class="result-value" id="res-ev-accept">—</span></div>
-      <div class="result-row"><span class="result-label">Win probability</span><span class="result-value" id="res-win-prob">—</span></div>
-      <div class="result-row"><span class="result-label">Evidence multiplier</span><span class="result-value" id="res-evidence">—</span></div>
-      <div style="margin-top:12px;font-size:12px;color:var(--muted)" id="res-ai-status"></div>
-      <ul id="res-ai-claims" style="margin:8px 0 0 16px;font-size:12px;color:var(--text)"></ul>
-      <div id="res-ai-gaps" style="margin-top:6px;font-size:12px;color:var(--muted)"></div>
-    </div>
-  </div>
-</div>
 
 <script>
 // ── File-protocol guard ───────────────────────────────────────────────────────
@@ -871,7 +835,6 @@ let _disputes = [];
 const _esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 let _recoveries = [];
 let _logRows = [];
-let _selectedScenario = null;
 let _agDisputesGrid = null;
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -1017,8 +980,7 @@ function renderQueueTable(rows, isDemo) {
     const openCount = pp.open_disputes || 0;
     if (openCount > 0) {
       tbody.innerHTML = `<tr><td colspan="7" style="padding:20px">
-        <div style="color:var(--muted);margin-bottom:6px">${openCount} dispute${openCount!==1?'s':''} reported by PayPal — awaiting webhook sync. Send a test webhook to populate the queue.</div>
-        <button class="btn-secondary" style="font-size:12px;padding:6px 14px" onclick="sendTestWebhook()">Send Test Webhook</button>
+        <div style="color:var(--muted);">${openCount} dispute${openCount!==1?'s':''} reported by PayPal — awaiting webhook sync.</div>
       </td></tr>`;
     } else {
       tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted);padding:20px">No disputes in queue.</td></tr>';
@@ -1115,8 +1077,7 @@ async function loadDisputes() {
       const openCount = pp.open_disputes || 0;
       if (openCount > 0) {
         tbody.innerHTML = `<tr><td colspan="6" style="padding:20px">
-          <div style="color:var(--muted);margin-bottom:8px">${openCount} dispute${openCount!==1?'s':''} found in PayPal but not yet synced to local storage. Run a simulation to trigger the pipeline.</div>
-          <button class="btn-secondary" style="font-size:12px;padding:6px 14px" onclick="sendTestWebhook()">Run Dispute Simulation</button>
+          <div style="color:var(--muted);">${openCount} dispute${openCount!==1?'s':''} found in PayPal — webhook sync pending. Disputes will populate automatically when received.</div>
         </td></tr>`;
       } else {
         tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);padding:20px">No disputes found. Disputes will appear here once received via PayPal webhook.</td></tr>';
@@ -1598,8 +1559,7 @@ async function approveDisputeAction(action) {
     });
     if (r.ok) {
       const data = await r.json();
-      const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
-      _showInlineResult(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`, true);
+      _showInlineResult(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}.`, true);
       if (action !== 'fight') {
         const loc = _disputes.find(x => (x.dispute_id || x.id) === id);
         if (loc) loc.status = 'RESOLVED';
@@ -1945,27 +1905,6 @@ async function loadSettings() {
   }
 }
 
-// ── Send Test Webhook / Simulate Dispute ─────────────────────────────────────
-async function sendTestWebhook() {
-  try {
-    const r = await fetch('/api/demo/simulate-dispute', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ..._auth() },
-      body: JSON.stringify({ scenario: 'inr_fight' }),
-    });
-    const data = await r.json().catch(() => ({}));
-    if (r.ok) {
-      const rec = data.recommendation || data.action || '';
-      const ev = data.ev_fight != null ? ` · EV fight: $${Number(data.ev_fight).toFixed(2)}` : '';
-      alert(`Simulation complete!\nRecommendation: ${rec}${ev}\n\nCheck Activity Log for the full decision trace.`);
-      loadOverview();
-      if (_currentPage === 'activitylog') loadActivityLog();
-    } else {
-      alert('Simulation failed: ' + (data.detail || r.status));
-    }
-  } catch(e) { alert('Network error: ' + e.message); }
-}
-
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function fmtUptime(s) {
   if (s == null) return '—';
@@ -1973,55 +1912,6 @@ function fmtUptime(s) {
   if (s < 3600) return Math.floor(s/60) + 'm';
   if (s < 86400) return Math.floor(s/3600) + 'h ' + Math.floor((s%3600)/60) + 'm';
   return Math.floor(s/86400) + 'd ' + Math.floor((s%86400)/3600) + 'h';
-}
-
-// ── Sample Decision Modal ─────────────────────────────────────────────────────
-function openModal() {
-  document.getElementById('modal-overlay').classList.add('open');
-}
-function closeModal() {
-  document.getElementById('modal-overlay').classList.remove('open');
-  document.getElementById('drawer-result').classList.remove('show');
-  document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('selected'));
-  _selectedScenario = null;
-  document.getElementById('run-btn').disabled = true;
-}
-function selectScenario(btn, id) {
-  document.querySelectorAll('.scenario-btn').forEach(b => b.classList.remove('selected'));
-  btn.classList.add('selected');
-  _selectedScenario = id;
-  document.getElementById('run-btn').disabled = false;
-}
-async function runScenario() {
-  if (!_selectedScenario) return;
-  const btn = document.getElementById('run-btn');
-  btn.disabled = true; btn.textContent = 'Running…';
-  try {
-    const r = await fetch('/api/oracle/sample', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scenario: _selectedScenario }),
-      signal: AbortSignal.timeout(20000),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-    document.getElementById('res-rec').textContent = data.recommendation || '—';
-    document.getElementById('res-ev-fight').textContent = data.ev_fight != null ? '$' + data.ev_fight.toFixed(2) : '—';
-    document.getElementById('res-ev-accept').textContent = data.ev_accept != null ? '$' + data.ev_accept.toFixed(2) : '—';
-    document.getElementById('res-win-prob').textContent = data.win_probability != null ? Math.round(data.win_probability * 100) + '%' : '—';
-    document.getElementById('res-evidence').textContent = data.evidence_multiplier != null ? data.evidence_multiplier.toFixed(2) + '×' : '—';
-    const aiStatus = document.getElementById('res-ai-status');
-    if (data.ai_analysis) {
-      aiStatus.textContent = data.ai_analysis.status || '';
-      const claims = data.ai_analysis.claims || [];
-      document.getElementById('res-ai-claims').innerHTML = claims.map(c => `<li>${c}</li>`).join('');
-      document.getElementById('res-ai-gaps').textContent = data.ai_analysis.gaps ? 'Gaps: ' + data.ai_analysis.gaps.join(', ') : '';
-    }
-    document.getElementById('drawer-result').classList.add('show');
-  } catch(e) {
-    alert('Sample run failed: ' + e.message);
-  }
-  btn.disabled = false; btn.textContent = 'Run sample review';
 }
 
 // ── AG Grid ───────────────────────────────────────────────────────────────────
