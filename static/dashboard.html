@@ -1455,9 +1455,19 @@ function openDisputeDetail(id) {
   `).join('');
 
   // store current dispute id + reason (for evidence type mapping)
-  document.getElementById('detail-btn-fight').dataset.disputeId = id;
-  document.getElementById('detail-btn-accept').dataset.disputeId = id;
-  document.getElementById('detail-btn-fight').dataset.reason = (d.reason || d.dispute_reason || '').toUpperCase();
+  const fightBtn = document.getElementById('detail-btn-fight');
+  const acceptBtn = document.getElementById('detail-btn-accept');
+  fightBtn.dataset.disputeId = id;
+  acceptBtn.dataset.disputeId = id;
+  fightBtn.dataset.reason = (d.reason || d.dispute_reason || '').toUpperCase();
+
+  // reset button state and banner from any previous dispute action
+  fightBtn.disabled = false;
+  fightBtn.textContent = 'Approve: Submit Evidence';
+  acceptBtn.disabled = false;
+  acceptBtn.textContent = 'Accept Liability';
+  const banner = document.getElementById('detail-result-banner');
+  if (banner) banner.style.display = 'none';
 }
 
 function backToDisputeList() {
