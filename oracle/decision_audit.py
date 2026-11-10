@@ -42,6 +42,8 @@ _ring: deque = deque(maxlen=_MAX_MEMORY_ENTRIES)
 class AuditAction(str, Enum):
     AUTO_ACCEPT    = "AUTO_ACCEPT"
     AUTO_FIGHT     = "AUTO_FIGHT"
+    MANUAL_ACCEPT  = "MANUAL_ACCEPT"   # merchant accepted from dashboard
+    MANUAL_FIGHT   = "MANUAL_FIGHT"    # merchant submitted evidence from dashboard
     REQUEST_APPROVAL = "REQUEST_APPROVAL"
     GATHER_EVIDENCE  = "GATHER_EVIDENCE"
     SKIPPED          = "SKIPPED"          # oracle ran but no PayPal call made

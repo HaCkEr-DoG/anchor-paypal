@@ -1712,15 +1712,28 @@ async function loadActivityLog() {
       const data = await auditRes.json();
       const entries = data.entries || data.rows || [];
       if (entries.length) {
-        _logRows = entries.map(e => ({
-          timestamp: e.timestamp || e.created_at,
-          env: e.is_sandbox ? 'sandbox' : 'live',
-          event: 'Oracle Decision',
-          reference: e.dispute_id || e.id || '—',
-          detail: `${(e.recommendation||'').replace(/_/g,' ')} · win_prob: ${e.win_probability != null ? Math.round(e.win_probability*100)+'%' : '—'} · EV fight: ${e.ev_fight != null ? '$'+Number(e.ev_fight).toFixed(2) : '—'}`,
-          result: e.recommendation && e.recommendation.includes('FIGHT') ? 'success' : 'pending',
-          result_text: (e.recommendation||'').replace(/_/g,' ') || 'Logged',
-        }));
+        _logRows = entries.map(e => {
+          const action = (e.action || '').toUpperCase();
+          const isManual = action.startsWith('MANUAL_');
+          const eventLabel = isManual ? 'Dispute Action' : 'Oracle Decision';
+          let detail;
+          if (action === 'MANUAL_ACCEPT') {
+            detail = `Merchant accepted liability · ${e.guardian_reason || ''}`;
+          } else if (action === 'MANUAL_FIGHT') {
+            detail = `Merchant submitted evidence · ${e.guardian_reason || ''}`;
+          } else {
+            detail = `${(e.recommendation||'').replace(/_/g,' ')} · win_prob: ${e.win_probability != null ? Math.round(e.win_probability*100)+'%' : '—'} · EV fight: ${e.ev_fight != null ? '$'+Number(e.ev_fight).toFixed(2) : '—'}`;
+          }
+          return {
+            timestamp: e.timestamp_utc || e.timestamp || e.created_at,
+            env: e.is_sandbox ? 'sandbox' : 'live',
+            event: eventLabel,
+            reference: e.dispute_id || e.id || '—',
+            detail,
+            result: isManual ? 'success' : (e.recommendation && e.recommendation.includes('FIGHT') ? 'success' : 'pending'),
+            result_text: isManual ? (action === 'MANUAL_ACCEPT' ? 'Accepted' : 'Evidence Sent') : ((e.recommendation||'').replace(/_/g,' ') || 'Logged'),
+          };
+        });
         renderLog(_logRows);
         return;
       }

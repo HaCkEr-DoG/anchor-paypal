@@ -2701,6 +2701,24 @@ async def api_accept_dispute(dispute_id: str, request: Request):
             "dispute_id": dispute_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+        try:
+            from oracle.decision_audit import log_decision, AuditAction
+            dispute_meta = body.get("_meta", {})
+            log_decision(
+                dispute_id=dispute_id,
+                action=AuditAction.MANUAL_ACCEPT,
+                oracle_ev_fight=dispute_meta.get("ev_fight", 0.0),
+                oracle_win_probability=dispute_meta.get("win_prob", 0.0),
+                oracle_recommendation="ACCEPT",
+                guardian_reason="Merchant manually accepted from dashboard",
+                amount_usd=dispute_meta.get("amount_usd", 0.0),
+                claim_type=dispute_meta.get("claim_type", "UNKNOWN"),
+                paypal_api_calls=[{"endpoint": f"POST /v1/customer/disputes/{dispute_id}/accept-claim", "result": "200"}],
+                is_sandbox=os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
+                notes=body.get("note", ""),
+            )
+        except Exception:
+            pass
         return JSONResponse({"status": "accepted", "dispute_id": dispute_id, "paypal_response": result})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2761,6 +2779,24 @@ async def api_provide_evidence(dispute_id: str, request: Request):
             documents=body.get("documents"),
         )
         _log.info("provide-evidence %s OK: %s", dispute_id, result)
+        try:
+            from oracle.decision_audit import log_decision, AuditAction
+            dispute_meta = body.get("_meta", {})
+            log_decision(
+                dispute_id=dispute_id,
+                action=AuditAction.MANUAL_FIGHT,
+                oracle_ev_fight=dispute_meta.get("ev_fight", 0.0),
+                oracle_win_probability=dispute_meta.get("win_prob", 0.0),
+                oracle_recommendation="FIGHT",
+                guardian_reason=f"Merchant submitted evidence ({ev_type}) from dashboard",
+                amount_usd=dispute_meta.get("amount_usd", 0.0),
+                claim_type=dispute_meta.get("claim_type", "UNKNOWN"),
+                paypal_api_calls=[{"endpoint": f"POST /v1/customer/disputes/{dispute_id}/provide-evidence", "result": "200"}],
+                is_sandbox=os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
+                notes=notes,
+            )
+        except Exception:
+            pass
         return JSONResponse({"status": "submitted", "dispute_id": dispute_id, "paypal_response": result})
     except Exception as e:
         msg = str(e)
