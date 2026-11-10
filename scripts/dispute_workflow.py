@@ -149,4 +149,9 @@ async def run_workflow():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_workflow())
+    import time
+    _INTERVAL = int(os.environ.get("WORKFLOW_INTERVAL_SECONDS", "21600"))  # default 6 hours
+    while True:
+        asyncio.run(run_workflow())
+        _log.info("Sleeping %ds until next run", _INTERVAL)
+        time.sleep(_INTERVAL)
