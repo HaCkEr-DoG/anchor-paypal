@@ -1474,12 +1474,14 @@ function openDisputeDetail(id) {
     <div class="hist-step ${s.startsWith('✓') ? 'hist-done' : 'hist-pending'}">${s.startsWith('⏳') ? '<span class="hist-circle"></span>' : ''}${s}</div>
   `).join('');
 
-  // store current dispute id + reason (for evidence type mapping)
+  // store current dispute id + reason + amount + claim_type (for evidence type mapping and audit log)
   const fightBtn = document.getElementById('detail-btn-fight');
   const acceptBtn = document.getElementById('detail-btn-accept');
   fightBtn.dataset.disputeId = id;
   acceptBtn.dataset.disputeId = id;
   fightBtn.dataset.reason = (d.reason || d.dispute_reason || '').toUpperCase();
+  fightBtn.dataset.amountUsd = disputeAmt(d).toFixed(2);
+  fightBtn.dataset.claimType = (d.reason || d.dispute_reason || d.claim_type || 'UNKNOWN').toUpperCase();
 
   // reset button state and banner from any previous dispute action
   fightBtn.disabled = false;
@@ -1582,9 +1584,12 @@ async function approveDisputeAction(action) {
       : reason.includes('NOT_RECEIVED') || reason.includes('INR')
       ? 'PROOF_OF_FULFILLMENT'
       : 'ITEM_DESCRIPTION';
+    const _amtUsd = parseFloat(document.getElementById('detail-btn-fight').dataset.amountUsd || '0');
+    const _claimType = document.getElementById('detail-btn-fight').dataset.claimType || 'UNKNOWN';
+    const _meta = { amount_usd: _amtUsd, claim_type: _claimType };
     const body = action === 'fight'
-      ? { evidence_type: evidenceType, notes: 'Merchant contests this dispute. Evidence provided.' }
-      : { note: 'Merchant accepts this claim.' };
+      ? { evidence_type: evidenceType, notes: 'Merchant contests this dispute. Evidence provided.', _meta }
+      : { note: 'Merchant accepts this claim.', _meta };
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ..._auth() },
