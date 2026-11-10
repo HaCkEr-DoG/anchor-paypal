@@ -1411,19 +1411,15 @@ function openDisputeDetail(id) {
   const workerOk = _overview && _overview.system && _overview.system.scheduler_running;
   const paypalOk = _overview && _overview.paypal && _overview.paypal.connected;
   const actionsEl = document.getElementById('detail-actions');
-  const noteEl = document.getElementById('detail-action-note');
   if (!workerOk) {
     document.getElementById('detail-btn-fight').disabled = true;
     document.getElementById('detail-btn-accept').disabled = true;
-    noteEl.textContent = 'Decision actions are disabled until the worker is back online.';
   } else if (!paypalOk) {
     document.getElementById('detail-btn-fight').disabled = true;
     document.getElementById('detail-btn-accept').disabled = true;
-    noteEl.textContent = 'Decision actions are disabled until the PayPal connection is restored.';
   } else {
     document.getElementById('detail-btn-fight').disabled = false;
     document.getElementById('detail-btn-accept').disabled = false;
-    noteEl.textContent = 'Anchor will not act without your approval.';
   }
 
   // oracle reasons already populated above in _populateOraclePanel / on-the-fly branch
