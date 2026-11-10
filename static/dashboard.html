@@ -1313,8 +1313,15 @@ function openDisputeDetail(id) {
     </div>
   `).join('');
 
-  const rec = d.recommendation || d.action_type || 'FIGHT';
-  const isFight = rec.toLowerCase().includes('fight');
+  // Derive recommendation from EV when oracle data available; fall back to stored rec
+  const _evFight = d.ev_fight != null ? Number(d.ev_fight) : null;
+  let isFight;
+  if (_evFight != null) {
+    isFight = _evFight >= 0;
+  } else {
+    const rec = d.recommendation || d.action_type || '';
+    isFight = rec === '' || rec.toLowerCase().includes('fight');
+  }
   document.getElementById('detail-rec').textContent = isFight ? 'Fight Dispute' : 'Accept Liability';
   document.getElementById('detail-rec').className = 'de-rec ' + (isFight ? 'rec-fight' : 'rec-accept');
 
@@ -1379,6 +1386,12 @@ function openDisputeDetail(id) {
       // build reasons from oracle response or synthesize from data
       const reasons = calc.reasoning || calc.oracle_reasons || calc.reasons || _synthesizeReasons(calc, d, claimType, amount, hasTracking);
       _populateOraclePanel(wp, ef, beProb, conf, reasons);
+      // Update recommendation label based on live EV
+      if (ef != null) {
+        const fightNow = Number(ef) >= 0;
+        document.getElementById('detail-rec').textContent = fightNow ? 'Fight Dispute' : 'Accept Liability';
+        document.getElementById('detail-rec').className = 'de-rec ' + (fightNow ? 'rec-fight' : 'rec-accept');
+      }
     }).catch(() => {
       document.getElementById('detail-win-prob').textContent = '—';
       document.getElementById('detail-ev-fight').textContent = '—';

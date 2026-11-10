@@ -84,7 +84,7 @@ _SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'none'; "
         "style-src 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
-        "font-src https://fonts.gstatic.com; "
+        "font-src https://fonts.gstatic.com data:; "
         "script-src 'unsafe-inline' https://cdn.jsdelivr.net; "
         "connect-src 'self'; "
         "img-src 'self' data:; "
