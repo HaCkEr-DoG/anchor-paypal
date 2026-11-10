@@ -4024,20 +4024,30 @@ async def api_poll_open_disputes(request: Request, background: BackgroundTasks):
             except Exception as _oe:
                 _log.warning("Oracle failed for %s during poll-ingest: %s", dispute_id, _oe)
                 win_prob, ev_fight, rec = 0.0, 0.0, "UNKNOWN"
-            from oracle.decision_audit import log_decision, AuditAction
-            log_decision(
-                dispute_id=dispute_id,
-                action=AuditAction.SKIPPED,
-                oracle_ev_fight=ev_fight,
-                oracle_win_probability=win_prob,
-                oracle_recommendation=rec,
-                guardian_reason="Polled from PayPal — awaiting merchant action",
-                amount_usd=amount,
-                claim_type=reason,
-                paypal_api_calls=[],
-                is_sandbox=os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
-                notes=f"Ingested via poll-open-disputes on {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
-            )
+            # Write directly to pg_store to bypass the silent-exception path in
+            # decision_audit._try_append_pg so failures surface immediately.
+            if os.environ.get("DATABASE_URL"):
+                from oracle.decision_audit import _make_entry_id, AuditAction, AuditOutcome
+                import agents.pg_store as pg_store
+                entry_dict = {
+                    "entry_id": _make_entry_id(dispute_id),
+                    "dispute_id": dispute_id,
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "action": AuditAction.SKIPPED.value,
+                    "oracle_ev_fight": ev_fight,
+                    "oracle_win_probability": win_prob,
+                    "oracle_recommendation": rec,
+                    "guardian_reason": "Polled from PayPal — awaiting merchant action",
+                    "amount_usd": amount,
+                    "claim_type": reason,
+                    "paypal_api_calls": [],
+                    "outcome": AuditOutcome.PENDING.value,
+                    "outcome_updated_utc": None,
+                    "notes": f"Ingested via poll-open-disputes on {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                    "is_sandbox": os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
+                }
+                ok = await asyncio.to_thread(pg_store.append_audit_entry, entry_dict)
+                _log.info("poll-ingest %s: DB write %s", dispute_id, "OK" if ok else "conflict/no-op")
             # Also kick off the full pipeline in background (Oracle, Guardian, etc.)
             synthetic_event = {
                 "id": f"POLL-{dispute_id}",
