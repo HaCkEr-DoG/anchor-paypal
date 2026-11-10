@@ -3970,6 +3970,72 @@ async def api_startup_sync(request: Request):
         return JSONResponse({"error": "An internal error occurred"}, status_code=500)
 
 
+@app.post("/api/admin/poll-open-disputes")
+async def api_poll_open_disputes(request: Request, background: BackgroundTasks):
+    """
+    POST /api/admin/poll-open-disputes
+
+    Fetches open disputes directly from PayPal and ingests any that are not yet
+    in the audit log. Bridges the gap when a webhook was missed because Render
+    free-tier was sleeping at delivery time. Requires X-API-Key.
+    """
+    _require_api_key(request)
+    merchant_id = os.environ.get("MERCHANT_ID", "default")
+    try:
+        from agents.paypal_client import get_client
+        client = get_client()
+        if not client.configured():
+            return JSONResponse({"error": "PayPal credentials not configured"}, status_code=503)
+
+        # Fetch all disputes requiring action from PayPal
+        resp = await client.list_disputes(dispute_state="REQUIRED_ACTION", page_size=50)
+        items = resp.get("items", []) if isinstance(resp, dict) else []
+
+        # Get existing dispute IDs from DB to avoid duplicates
+        existing_ids: set = set()
+        if os.environ.get("DATABASE_URL"):
+            import agents.pg_store as pg_store
+            rows = await asyncio.to_thread(pg_store.get_audit_entries, 500)
+            existing_ids = {r.get("dispute_id") for r in (rows or []) if r.get("dispute_id")}
+
+        ingested = []
+        skipped = []
+        for item in items:
+            dispute_id = item.get("dispute_id")
+            if not dispute_id:
+                continue
+            if dispute_id in existing_ids:
+                skipped.append(dispute_id)
+                continue
+            # Synthesize a CUSTOMER.DISPUTE.CREATED event structure
+            synthetic_event = {
+                "id": f"POLL-{dispute_id}",
+                "event_type": "CUSTOMER.DISPUTE.CREATED",
+                "create_time": item.get("create_time", datetime.now(timezone.utc).isoformat()),
+                "resource": {
+                    "dispute_id": dispute_id,
+                    "dispute_amount": item.get("dispute_amount", {}),
+                    "reason": item.get("reason", "ITEM_NOT_RECEIVED"),
+                    "status": item.get("status", "WAITING_FOR_SELLER_RESPONSE"),
+                    "dispute_life_cycle_stage": item.get("dispute_life_cycle_stage", "INQUIRY"),
+                    "disputed_transactions": item.get("disputed_transactions", []),
+                    "seller_response_due_date": item.get("seller_response_due_date"),
+                    "links": item.get("links", []),
+                },
+            }
+            background.add_task(_handle_dispute_created, synthetic_event, merchant_id)
+            ingested.append(dispute_id)
+
+        return JSONResponse({
+            "ingested": ingested,
+            "skipped_already_known": skipped,
+            "total_paypal_open": len(items),
+        })
+    except Exception:
+        _log.exception("poll-open-disputes failed")
+        return JSONResponse({"error": "An internal error occurred"}, status_code=500)
+
+
 # ── Oracle Calibration ────────────────────────────────────────────────────────
 
 @app.get("/api/oracle/calibration/{merchant_id}")
