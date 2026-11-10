@@ -581,6 +581,14 @@
             <button class="btn-primary" id="detail-btn-fight" onclick="approveDisputeAction('fight')">Approve: Submit Evidence</button>
             <button class="btn-secondary" id="detail-btn-accept" onclick="approveDisputeAction('accept')">Accept Liability</button>
           </div>
+          <div id="detail-confirm-banner" style="display:none;margin-top:12px;padding:12px;background:var(--surface2,#1e2130);border:1px solid var(--warning,#f59e0b);border-radius:8px;font-size:13px">
+            <div id="detail-confirm-text" style="margin-bottom:10px;color:var(--text)"></div>
+            <div style="display:flex;gap:8px">
+              <button class="btn-primary" id="detail-confirm-yes" style="padding:6px 16px;font-size:13px">Confirm</button>
+              <button class="btn-secondary" id="detail-confirm-no" style="padding:6px 16px;font-size:13px">Cancel</button>
+            </div>
+          </div>
+          <div id="detail-result-banner" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:13px"></div>
           <div class="de-note" id="detail-action-note">Anchor will not act without your approval.</div>
         </div>
       </div>
@@ -1461,49 +1469,84 @@ function backToDisputeList() {
   document.getElementById('disputes-detail-view').style.display = 'none';
 }
 
+function _showInlineResult(msg, ok) {
+  const el = document.getElementById('detail-result-banner');
+  if (!el) return;
+  el.style.display = 'block';
+  el.style.background = ok ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
+  el.style.border = `1px solid ${ok ? '#10b981' : '#ef4444'}`;
+  el.style.color = ok ? '#10b981' : '#ef4444';
+  el.textContent = msg;
+}
+
 async function approveDisputeAction(action) {
   const id = document.getElementById('detail-btn-fight').dataset.disputeId;
   if (!id) return;
-  const label = action === 'fight' ? 'Submit evidence to fight' : 'Accept liability for';
-  if (!confirm(`${label} dispute ${id}?\n\nThis will send a request to PayPal.`)) return;
 
-  const btn = action === 'fight'
-    ? document.getElementById('detail-btn-fight')
-    : document.getElementById('detail-btn-accept');
-  btn.disabled = true;
-  btn.textContent = action === 'fight' ? 'Submitting…' : 'Accepting…';
+  // Show inline confirm banner instead of browser confirm()
+  const banner = document.getElementById('detail-confirm-banner');
+  const textEl = document.getElementById('detail-confirm-text');
+  const yesBtn = document.getElementById('detail-confirm-yes');
+  const noBtn = document.getElementById('detail-confirm-no');
+  const resultEl = document.getElementById('detail-result-banner');
+  if (resultEl) resultEl.style.display = 'none';
 
-  try {
-    const url = action === 'fight'
-      ? `/api/paypal/disputes/${encodeURIComponent(id)}/provide-evidence`
-      : `/api/paypal/disputes/${encodeURIComponent(id)}/accept`;
-    const body = action === 'fight'
-      ? { evidence_type: 'PROOF_OF_FULFILLMENT', notes: 'Merchant contests this dispute. Evidence of fulfillment available.' }
-      : { note: 'Merchant accepts this claim.' };
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ..._auth() },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (r.ok) {
-      const data = await r.json();
-      const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
-      alert(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`);
-      backToDisputeList();
-      await loadDisputes();
-    } else {
-      let msg = r.status;
-      try { const e = await r.json(); msg = e.detail || e.error || msg; } catch(_) {}
-      alert('Error: ' + msg);
+  const label = action === 'fight'
+    ? `Submit evidence to fight dispute ${id}?`
+    : `Accept liability for dispute ${id}?`;
+  textEl.textContent = label + ' This will send a request to PayPal.';
+  banner.style.display = 'block';
+
+  await new Promise(resolve => {
+    const onYes = () => { cleanup(); resolve(true); };
+    const onNo  = () => { cleanup(); resolve(false); };
+    function cleanup() {
+      yesBtn.removeEventListener('click', onYes);
+      noBtn.removeEventListener('click', onNo);
+      banner.style.display = 'none';
+    }
+    yesBtn.addEventListener('click', onYes);
+    noBtn.addEventListener('click', onNo);
+  }).then(async confirmed => {
+    if (!confirmed) return;
+
+    const btn = action === 'fight'
+      ? document.getElementById('detail-btn-fight')
+      : document.getElementById('detail-btn-accept');
+    btn.disabled = true;
+    btn.textContent = action === 'fight' ? 'Submitting…' : 'Accepting…';
+
+    try {
+      const url = action === 'fight'
+        ? `/api/paypal/disputes/${encodeURIComponent(id)}/provide-evidence`
+        : `/api/paypal/disputes/${encodeURIComponent(id)}/accept`;
+      const body = action === 'fight'
+        ? { evidence_type: 'PROOF_OF_FULFILLMENT', notes: 'Merchant contests this dispute. Evidence of fulfillment available.' }
+        : { note: 'Merchant accepts this claim.' };
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ..._auth() },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
+        _showInlineResult(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`, true);
+        setTimeout(() => { backToDisputeList(); loadDisputes(); }, 1800);
+      } else {
+        let msg = r.status;
+        try { const e = await r.json(); msg = e.detail || e.error || msg; } catch(_) {}
+        _showInlineResult('Error: ' + msg, false);
+        btn.disabled = false;
+        btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
+      }
+    } catch(e) {
+      _showInlineResult('Network error: ' + e.message, false);
       btn.disabled = false;
       btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
     }
-  } catch(e) {
-    alert('Network error: ' + e.message);
-    btn.disabled = false;
-    btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
-  }
+  });
 }
 
 // ── Recoveries ────────────────────────────────────────────────────────────────
