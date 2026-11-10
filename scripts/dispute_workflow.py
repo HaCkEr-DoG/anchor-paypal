@@ -120,7 +120,7 @@ async def run_workflow():
     try:
         import agents.pg_store as pg_store
         import asyncio as _asyncio
-        rows = await _asyncio.to_thread(pg_store.get_audit_log, 100)
+        rows = await _asyncio.to_thread(pg_store.get_audit_entries, 100)
         disputes = [r for r in (rows or []) if r.get("outcome") in (None, "", "OPEN", "PENDING")]
         _log.info("Loaded %d open disputes for enrichment", len(disputes))
     except Exception as exc:
@@ -139,7 +139,10 @@ async def run_workflow():
         tasks.append(_refresh_oracle_score(d))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    ok = sum(1 for r in results if isinstance(r, dict) and r.get("channel3") == "ok" or r.get("oracle") == "ok")
+    ok = sum(
+        1 for r in results
+        if isinstance(r, dict) and (r.get("channel3") == "ok" or r.get("oracle") == "ok" or r.get("kernel") == "ok")
+    )
     _log.info("Workflow complete — %d/%d tasks succeeded", ok, len(tasks))
 
 
