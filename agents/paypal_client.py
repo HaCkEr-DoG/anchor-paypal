@@ -133,7 +133,16 @@ class PayPalClient:
                 await asyncio.sleep(min(retry_after, 60))
                 headers = {**await self._headers(), **caller_headers}
                 response = await c.request(method, url, headers=headers, **kwargs)
-            response.raise_for_status()
+            if response.is_error:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = response.text
+                raise httpx.HTTPStatusError(
+                    f"{response.status_code} {response.reason_phrase}: {body}",
+                    request=response.request,
+                    response=response,
+                )
             return response
 
     # ── Disputes ─────────────────────────────────────────────────────────────

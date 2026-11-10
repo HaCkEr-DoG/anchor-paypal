@@ -2728,7 +2728,12 @@ async def api_provide_evidence(dispute_id: str, request: Request):
         )
         return JSONResponse({"status": "submitted", "dispute_id": dispute_id, "paypal_response": result})
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        msg = str(e)
+        status = 500
+        import httpx as _httpx
+        if isinstance(e, _httpx.HTTPStatusError):
+            status = e.response.status_code
+        return JSONResponse({"error": msg, "detail": msg}, status_code=status)
 
 
 @app.post("/api/paypal/disputes/{dispute_id}/send-message")
