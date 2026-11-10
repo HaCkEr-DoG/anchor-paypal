@@ -1565,6 +1565,10 @@ async function approveDisputeAction(action) {
       const data = await r.json();
       const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
       _showInlineResult(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`, true);
+      if (action !== 'fight') {
+        const loc = _disputes.find(x => (x.dispute_id || x.id) === id);
+        if (loc) loc.status = 'RESOLVED';
+      }
       setTimeout(() => { backToDisputeList(); loadDisputes(); }, 1800);
     } else {
       let msg = r.status;
@@ -2050,8 +2054,10 @@ async function loadTriageBoard() {
       if (r.ok) { const data = await r.json(); _disputes = data.rows || []; }
     } catch(e) {}
   }
+  const CLOSED_STATUSES = new Set(['RESOLVED','CLOSED','CANCELLED','ADJUDICATED']);
   const cols = { fight: [], review: [], accept: [] };
   for (const d of _disputes) {
+    if (CLOSED_STATUSES.has((d.status || '').toUpperCase())) continue;
     const rec = (d.recommendation || d.action_type || '').toUpperCase();
     if (rec === 'FIGHT') cols.fight.push(d);
     else if (rec === 'ACCEPT') cols.accept.push(d);
