@@ -84,10 +84,13 @@ async def _refresh_oracle_score(dispute: dict) -> dict:
     if existing_wp is not None and float(existing_wp) > 0.001:
         return {"dispute_id": dispute_id, "oracle": "skipped_already_scored"}
     try:
-        from oracle.decision import calculate as oracle_calculate
+        from oracle.decision import calculate as oracle_calculate, ClaimType, Evidence
         amount = float(dispute.get("amount", 0) or dispute.get("amount_usd", 0))
-        reason = dispute.get("claim_type") or dispute.get("reason") or "ITEM_NOT_RECEIVED"
-        result = oracle_calculate(claim_type=reason, amount=amount)
+        reason = (dispute.get("claim_type") or dispute.get("reason") or "ITEM_NOT_RECEIVED").upper()
+        valid_types = {e.value: e for e in ClaimType}
+        ct = valid_types.get(reason, ClaimType.ITEM_NOT_RECEIVED)
+        evidence = Evidence()
+        result = oracle_calculate(dispute_amount=amount, claim_type=ct, evidence=evidence)
         # Persist the score back to the audit log so the dashboard can show it
         if os.environ.get("DATABASE_URL"):
             import agents.pg_store as pg_store
