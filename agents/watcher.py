@@ -3224,6 +3224,31 @@ async def demo_simulate_dispute(request: Request):
         ),
     }
 
+    # Persist simulation to audit log so Activity Log shows oracle decisions
+    try:
+        from oracle.decision_audit import log_decision, AuditAction
+        _action_map = {
+            "AUTO_ACCEPT": AuditAction.AUTO_ACCEPT,
+            "AUTO_FIGHT":  AuditAction.AUTO_FIGHT,
+            "REQUEST_APPROVAL": AuditAction.REQUEST_APPROVAL,
+            "GATHER_EVIDENCE": AuditAction.GATHER_EVIDENCE,
+        }
+        log_decision(
+            dispute_id=scenario["dispute_id"],
+            action=_action_map.get(guardian_action, AuditAction.AUTO_ACCEPT),
+            oracle_ev_fight=round(oracle.ev_fight, 4),
+            oracle_win_probability=round(oracle.win_probability, 4),
+            oracle_recommendation=oracle.recommendation.value,
+            guardian_reason=guardian_reason,
+            amount_usd=scenario["amount"],
+            claim_type=scenario["claim_type"],
+            paypal_api_calls=simulated_calls,
+            is_sandbox=True,
+            notes=f"Simulated via dashboard — scenario: {scenario_key}",
+        )
+    except Exception:
+        pass  # non-fatal; response still returns full output
+
     return JSONResponse({
         "scenario": {
             "key": scenario_key,
