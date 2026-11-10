@@ -4007,7 +4007,38 @@ async def api_poll_open_disputes(request: Request, background: BackgroundTasks):
             if dispute_id in existing_ids:
                 skipped.append(dispute_id)
                 continue
-            # Synthesize a CUSTOMER.DISPUTE.CREATED event structure
+            # Write an audit log entry directly so the dashboard shows it
+            # immediately without waiting for the pipeline background task.
+            reason = (item.get("reason") or "ITEM_NOT_RECEIVED").upper()
+            amount = float((item.get("dispute_amount") or {}).get("value", 0) or 0)
+            try:
+                from oracle.decision import calculate as oracle_calculate, ClaimType, Evidence
+                valid_types = {e.value: e for e in ClaimType}
+                ct = valid_types.get(reason, ClaimType.ITEM_NOT_RECEIVED)
+                oracle_result = oracle_calculate(
+                    dispute_amount=amount, claim_type=ct, evidence=Evidence()
+                )
+                win_prob = oracle_result.win_probability
+                ev_fight = oracle_result.ev_fight
+                rec = oracle_result.recommendation.value if hasattr(oracle_result.recommendation, "value") else str(oracle_result.recommendation)
+            except Exception as _oe:
+                _log.warning("Oracle failed for %s during poll-ingest: %s", dispute_id, _oe)
+                win_prob, ev_fight, rec = 0.0, 0.0, "UNKNOWN"
+            from oracle.decision_audit import log_decision, AuditAction
+            log_decision(
+                dispute_id=dispute_id,
+                action=AuditAction.SKIPPED,
+                oracle_ev_fight=ev_fight,
+                oracle_win_probability=win_prob,
+                oracle_recommendation=rec,
+                guardian_reason="Polled from PayPal — awaiting merchant action",
+                amount_usd=amount,
+                claim_type=reason,
+                paypal_api_calls=[],
+                is_sandbox=os.environ.get("PAYPAL_ENV", "sandbox") == "sandbox",
+                notes=f"Ingested via poll-open-disputes on {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+            )
+            # Also kick off the full pipeline in background (Oracle, Guardian, etc.)
             synthetic_event = {
                 "id": f"POLL-{dispute_id}",
                 "event_type": "CUSTOMER.DISPUTE.CREATED",
@@ -4015,7 +4046,7 @@ async def api_poll_open_disputes(request: Request, background: BackgroundTasks):
                 "resource": {
                     "dispute_id": dispute_id,
                     "dispute_amount": item.get("dispute_amount", {}),
-                    "reason": item.get("reason", "ITEM_NOT_RECEIVED"),
+                    "reason": reason,
                     "status": item.get("status", "WAITING_FOR_SELLER_RESPONSE"),
                     "dispute_life_cycle_stage": item.get("dispute_life_cycle_stage", "INQUIRY"),
                     "disputed_transactions": item.get("disputed_transactions", []),
