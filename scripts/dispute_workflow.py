@@ -84,11 +84,10 @@ async def _refresh_oracle_score(dispute: dict) -> dict:
     if existing_wp is not None and float(existing_wp) > 0:
         return {"dispute_id": dispute_id, "oracle": "skipped_already_scored"}
     try:
-        from oracle.decision import OracleDecision
-        od = OracleDecision()
+        from oracle.decision import calculate as oracle_calculate
         amount = float(dispute.get("amount", 0) or dispute.get("amount_usd", 0))
         reason = dispute.get("reason", "") or dispute.get("claim_type", "ITEM_NOT_RECEIVED")
-        result = od.calculate(claim_type=reason, amount=amount)
+        result = oracle_calculate(claim_type=reason, amount=amount)
         # Persist the score back to the audit log so the dashboard can show it
         if os.environ.get("DATABASE_URL"):
             import agents.pg_store as pg_store
@@ -97,14 +96,14 @@ async def _refresh_oracle_score(dispute: dict) -> dict:
                 dispute_id,
                 result.win_probability,
                 result.ev_fight,
-                result.recommendation,
+                result.recommendation.value if hasattr(result.recommendation, "value") else str(result.recommendation),
             )
         return {
             "dispute_id": dispute_id,
             "oracle": "ok",
             "win_probability": result.win_probability,
             "ev_fight": result.ev_fight,
-            "recommendation": result.recommendation,
+            "recommendation": result.recommendation.value if hasattr(result.recommendation, "value") else str(result.recommendation),
         }
     except Exception as exc:
         _log.warning("Oracle refresh failed for %s: %s", dispute_id, exc)
