@@ -2706,6 +2706,21 @@ async def api_accept_dispute(dispute_id: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.get("/api/paypal/disputes/{dispute_id}/links")
+async def api_dispute_links(dispute_id: str, request: Request):
+    """Return HATEOAS links for a dispute to verify which actions are permitted."""
+    _require_api_key(request)
+    from agents.paypal_client import get_client
+    client = get_client()
+    if not client.configured():
+        return JSONResponse({"demo": True})
+    try:
+        d = await client.get_dispute(dispute_id)
+        return JSONResponse({"dispute_id": dispute_id, "status": d.get("status"), "links": d.get("links", [])})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/api/paypal/disputes/{dispute_id}/provide-evidence")
 async def api_provide_evidence(dispute_id: str, request: Request):
     """
