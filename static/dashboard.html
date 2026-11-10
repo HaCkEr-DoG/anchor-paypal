@@ -1907,10 +1907,20 @@ async function loadSettings() {
     const names = { apimatic:'APIMatic', channel3:'Channel3', postman:'Postman', astropods:'AstroPods', render:'Render', bryntum:'Bryntum', aggrid:'AG Grid', kernel:'KERNEL', zapier:'Zapier', shopify:'Shopify', google_drive:'Google Drive', gmail:'Gmail' };
     intEl.innerHTML = intKeys.map(k => {
       const v = intMap[k] || {};
-      const ok = v.ok === true;
+      const d = v.data || {};
+      if (!v.ok) {
+        return `<div class="setting-row">
+          <div class="setting-label">${names[k] || k}</div>
+          <div class="setting-miss">Error</div>
+        </div>`;
+      }
+      // demo===true, enabled===false, or api_key_set===false → key missing
+      const noKey = d.demo === true || d.enabled === false || d.api_key_set === false;
+      const label = noKey ? 'No API key' : 'Connected';
+      const cls = noKey ? 'setting-miss' : 'setting-ok';
       return `<div class="setting-row">
         <div class="setting-label">${names[k] || k}</div>
-        <div class="${ok ? 'setting-ok' : 'setting-miss'}">${ok ? 'Connected' : 'Error'}</div>
+        <div class="${cls}">${label}</div>
       </div>`;
     }).join('');
   }
