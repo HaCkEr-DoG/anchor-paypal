@@ -2720,12 +2720,16 @@ async def api_provide_evidence(dispute_id: str, request: Request):
         return JSONResponse({"demo": True, "status": "submitted", "dispute_id": dispute_id})
     try:
         body = await request.json()
+        ev_type = body.get("evidence_type", "PROOF_OF_FULFILLMENT")
+        notes   = body.get("notes", "")
+        _log.info("provide-evidence %s type=%s notes=%r", dispute_id, ev_type, notes)
         result = await client.provide_evidence(
             dispute_id,
-            evidence_type=body.get("evidence_type", "PROOF_OF_FULFILLMENT"),
-            notes=body.get("notes", ""),
+            evidence_type=ev_type,
+            notes=notes,
             documents=body.get("documents"),
         )
+        _log.info("provide-evidence %s OK: %s", dispute_id, result)
         return JSONResponse({"status": "submitted", "dispute_id": dispute_id, "paypal_response": result})
     except Exception as e:
         msg = str(e)
