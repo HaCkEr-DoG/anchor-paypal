@@ -626,7 +626,7 @@ def update_audit_oracle_score(
                     ORDER BY timestamp_utc DESC
                     LIMIT 1
                 )
-                  AND (oracle_win_probability IS NULL OR oracle_win_probability = 0)
+                  AND (oracle_win_probability IS NULL OR oracle_win_probability < 0.001)
                 """,
                 (win_probability, ev_fight, recommendation, dispute_id),
             )
@@ -1025,7 +1025,7 @@ def get_audit_stats() -> Dict[str, Any]:
                 SELECT
                     COUNT(*)                                        AS total_logged,
                     SUM(amount_usd)                                 AS total_amount,
-                    AVG(oracle_win_probability)                     AS avg_win_probability,
+                    AVG(CASE WHEN oracle_win_probability > 0.001 AND action NOT LIKE 'MANUAL_%' THEN oracle_win_probability END) AS avg_win_probability,
                     SUM(CASE WHEN is_sandbox THEN 1 ELSE 0 END)    AS sandbox_count
                 FROM audit_log
                 """
