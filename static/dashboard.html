@@ -198,6 +198,7 @@
     .badge-live { background: #d1fae5; color: #065f46; }
     .badge-review { background: #fef3c7; color: #92400e; }
     .badge-auto { background: #d1fae5; color: #065f46; }
+    .badge-fight { background: #dbeafe; color: #1e40af; }
     .badge-error { background: #fee2e2; color: #991b1b; }
     .badge-blue { background: #eff6ff; color: #1d4ed8; }
     .badge-gray { background: #f3f4f6; color: #6b7280; }
@@ -1126,12 +1127,25 @@ async function loadDisputes() {
       const id = d.dispute_id || d.id || '—';
       const amount = '$' + disputeAmt(d).toFixed(2);
       const reason = (d.reason || 'ITEM_NOT_RECEIVED').replace(/_/g,' ');
+      const act = (d.action_type || '').toLowerCase();
       const statusBadge = d.status === 'REQUIRED_ACTION'
         ? '<span class="badge badge-review">Awaiting Review</span>'
         : d.status === 'AUTO_ACTIONED'
         ? '<span class="badge badge-auto">Auto-Actioned</span>'
         : d.status === 'RESOLVED'
         ? '<span class="badge badge-auto">Resolved</span>'
+        : act === 'auto_fight'
+        ? '<span class="badge badge-fight">Auto-Fought</span>'
+        : act === 'auto_accept'
+        ? '<span class="badge badge-auto">Auto-Accepted</span>'
+        : act === 'manual_accept'
+        ? '<span class="badge badge-auto">Accepted</span>'
+        : act === 'manual_fight'
+        ? '<span class="badge badge-fight">Evidence Sent</span>'
+        : act === 'request_approval'
+        ? '<span class="badge badge-review">Pending Approval</span>'
+        : act
+        ? `<span class="badge badge-gray">${act.replace(/_/g,' ')}</span>`
         : `<span class="badge badge-gray">${(d.status||'Unknown').replace(/_/g,' ')}</span>`;
       const rec = d.recommendation || d.action_type || '';
       const recText = rec.toLowerCase().includes('fight') ? '<span class="rec-fight">Fight</span>'
