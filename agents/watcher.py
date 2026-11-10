@@ -787,7 +787,7 @@ async def api_prod_overview():
             _active_items = [d for d in _all_items if d.get("status","").upper() not in _CLOSED]
             _total_amount = sum(
                 float(d.get("dispute_amount", {}).get("value") or 0)
-                for d in _all_items
+                for d in _active_items
             )
             paypal = {
                 "connected": True,
