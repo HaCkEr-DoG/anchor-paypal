@@ -1246,6 +1246,36 @@ async function loadTriageBoard() {
     ? cols.accept.map(renderCard).join('') : '<div style="color:var(--muted);font-size:13px;padding:8px">No low-EV disputes</div>';
 }
 
+function _synthesizeReasons(calc, d, claimType, amount, hasTracking) {
+  const wp = calc.win_probability ?? calc.win_prob;
+  const ef = calc.ev_fight ?? calc.expected_value;
+  const be = calc.break_even_probability ?? calc.break_even;
+  const reasons = [];
+  const dueDate = d.due_date || d.seller_response_due_date;
+  const daysLeft = dueDate ? Math.ceil((new Date(dueDate) - Date.now()) / 86400000) : null;
+
+  if (claimType === 'ITEM_NOT_RECEIVED') {
+    reasons.push(`Claim type is Item Not Received (INR) — seller can refute with proof of delivery or tracking confirmation.`);
+    if (hasTracking) reasons.push(`Tracking number on file: strong evidence for seller that shipment was sent.`);
+    else reasons.push(`No tracking number found — delivery proof will be required to contest this dispute.`);
+  } else if (claimType === 'SIGNIFICANTLY_NOT_AS_DESCRIBED') {
+    reasons.push(`Claim type is Significantly Not As Described (SNAD) — seller must demonstrate item matched listing description.`);
+  } else if (claimType === 'UNAUTHORIZED') {
+    reasons.push(`Claim type is Unauthorized Transaction — high bar to contest; buyer asserts they did not make this purchase.`);
+  }
+
+  if (amount != null) {
+    if (amount < 25) reasons.push(`Low dispute amount ($${Number(amount).toFixed(2)}) — cost of fighting may exceed recovery value; check EV before proceeding.`);
+    else reasons.push(`Dispute amount $${Number(amount).toFixed(2)} — worth evaluating fight cost vs expected recovery.`);
+  }
+  if (be != null) reasons.push(`Break-even win rate for this dispute: ${Math.round(be * 100)}% — if Anchor estimates your win probability above this, fighting is EV-positive.`);
+  if (wp != null) reasons.push(`Oracle win probability: ${Math.round(wp * 100)}% — based on claim type, amount, and evidence signals.`);
+  if (ef != null) reasons.push(`Expected value of fighting: ${Number(ef) >= 0 ? '+' : ''}$${Number(ef).toFixed(2)} after estimated fees and time cost.`);
+  if (daysLeft != null) reasons.push(`${daysLeft} day${daysLeft !== 1 ? 's' : ''} remaining to respond — ${daysLeft <= 2 ? 'urgent: respond immediately' : daysLeft <= 5 ? 'act soon to avoid default ruling' : 'sufficient time to build evidence'}.`);
+
+  return reasons;
+}
+
 function openDisputeDetail(id) {
   const d = _disputes.find(x => (x.dispute_id||x.id) === id);
   if (!d) { showPage('disputes'); return; }
@@ -1296,14 +1326,27 @@ function openDisputeDetail(id) {
   const evAccept = amount > 0 ? `-$${totalAcceptCost.toFixed(2)} (refund $${amount.toFixed(2)} + $${ppFee.toFixed(0)} PayPal fee)` : '—';
   document.getElementById('detail-ev-accept').textContent = evAccept;
 
+  const _populateOraclePanel = (wp, ef, beProb, conf, reasons) => {
+    document.getElementById('detail-win-prob').textContent = wp != null ? Math.round(wp * 100) + '%' : '—';
+    document.getElementById('detail-ev-fight').textContent = ef != null ? ((Number(ef) >= 0 ? '+' : '') + '$' + Number(ef).toFixed(2)) : '—';
+    document.getElementById('detail-confidence').textContent = conf != null ? Math.round(conf * 100) + '%' : (wp != null ? '—' : '—');
+    document.getElementById('detail-breakeven').textContent = beProb != null ? Math.round(beProb * 100) + '%' : '—';
+    const reasonsEl = document.getElementById('detail-oracle-reasons');
+    if (reasons && reasons.length) {
+      reasonsEl.innerHTML = reasons.map(r =>
+        `<div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--ok);flex-shrink:0">▸</span><span>${r}</span></div>`
+      ).join('');
+    }
+  };
+
   if (winProb != null && d.ev_fight != null) {
-    document.getElementById('detail-win-prob').textContent = Math.round(winProb * 100) + '%';
-    const evFight = (Number(d.ev_fight) >= 0 ? '+' : '') + '$' + Number(d.ev_fight).toFixed(2);
-    document.getElementById('detail-ev-fight').textContent = evFight;
+    _populateOraclePanel(winProb, d.ev_fight, d.break_even_probability, d.confidence, d.oracle_reasons || d.reasoning);
   } else {
-    // win_probability not stored (dispute processed before oracle fix) — compute on the fly
+    // compute oracle on the fly for disputes not yet run through the pipeline
     document.getElementById('detail-win-prob').textContent = 'computing…';
     document.getElementById('detail-ev-fight').textContent = 'computing…';
+    document.getElementById('detail-oracle-reasons').innerHTML =
+      '<em style="color:var(--muted)">Running oracle analysis…</em>';
     const reason = (d.reason || d.reason_code || 'ITEM_NOT_RECEIVED').toUpperCase();
     const claimTypeMap = {
       'MERCHANDISE_OR_SERVICE_NOT_RECEIVED': 'ITEM_NOT_RECEIVED',
@@ -1321,15 +1364,16 @@ function openDisputeDetail(id) {
     }).then(r => r.json()).then(calc => {
       const wp = calc.win_probability ?? calc.win_prob;
       const ef = calc.ev_fight ?? calc.expected_value;
-      document.getElementById('detail-win-prob').textContent = wp != null ? Math.round(wp * 100) + '%' : '—';
-      if (ef != null) {
-        document.getElementById('detail-ev-fight').textContent = (Number(ef) >= 0 ? '+' : '') + '$' + Number(ef).toFixed(2);
-      } else {
-        document.getElementById('detail-ev-fight').textContent = '—';
-      }
+      const beProb = calc.break_even_probability ?? calc.break_even;
+      const conf = calc.confidence;
+      // build reasons from oracle response or synthesize from data
+      const reasons = calc.reasoning || calc.oracle_reasons || calc.reasons || _synthesizeReasons(calc, d, claimType, amount, hasTracking);
+      _populateOraclePanel(wp, ef, beProb, conf, reasons);
     }).catch(() => {
       document.getElementById('detail-win-prob').textContent = '—';
       document.getElementById('detail-ev-fight').textContent = '—';
+      document.getElementById('detail-oracle-reasons').innerHTML =
+        '<em style="color:var(--muted)">Oracle unavailable — check service health.</em>';
     });
   }
 
@@ -1352,20 +1396,7 @@ function openDisputeDetail(id) {
     noteEl.textContent = 'Anchor will not act without your approval.';
   }
 
-  // oracle reasons panel
-  const reasonsEl = document.getElementById('detail-oracle-reasons');
-  const reasons = d.oracle_reasons || d.reasoning || [];
-  if (reasons.length) {
-    reasonsEl.innerHTML = reasons.map(r =>
-      `<div style="display:flex;gap:8px;align-items:flex-start"><span style="color:var(--ok);flex-shrink:0">▸</span><span>${r}</span></div>`
-    ).join('');
-  } else {
-    reasonsEl.innerHTML = '<em style="color:var(--muted)">No oracle reasons available — reprocess dispute to generate explanation.</em>';
-  }
-  document.getElementById('detail-confidence').textContent =
-    d.confidence != null ? Math.round(d.confidence * 100) + '%' : '—';
-  document.getElementById('detail-breakeven').textContent =
-    d.break_even_probability != null ? Math.round(d.break_even_probability * 100) + '%' : '—';
+  // oracle reasons already populated above in _populateOraclePanel / on-the-fly branch
 
   // Intelligence sources panel (vs Chargeflow: show exactly what Anchor used)
   const intSrcEl = document.getElementById('detail-intel-sources');
