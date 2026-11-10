@@ -78,25 +78,37 @@ async def _capture_kernel_screenshot(dispute: dict) -> dict:
 
 
 async def _refresh_oracle_score(dispute: dict) -> dict:
-    """Re-run oracle for disputes with null win_probability."""
+    """Re-run oracle for disputes with null/zero win_probability and persist the result."""
+    dispute_id = dispute.get("dispute_id", "")
+    existing_wp = dispute.get("win_probability")
+    if existing_wp is not None and float(existing_wp) > 0:
+        return {"dispute_id": dispute_id, "oracle": "skipped_already_scored"}
     try:
-        if dispute.get("win_probability") is not None:
-            return {"dispute_id": dispute.get("dispute_id", ""), "oracle": "skipped_already_scored"}
         from oracle.decision import OracleDecision
         od = OracleDecision()
-        amount = float(dispute.get("amount", 0))
-        reason = dispute.get("reason", "ITEM_NOT_RECEIVED")
+        amount = float(dispute.get("amount", 0) or dispute.get("amount_usd", 0))
+        reason = dispute.get("reason", "") or dispute.get("claim_type", "ITEM_NOT_RECEIVED")
         result = od.calculate(claim_type=reason, amount=amount)
+        # Persist the score back to the audit log so the dashboard can show it
+        if os.environ.get("DATABASE_URL"):
+            import agents.pg_store as pg_store
+            await asyncio.to_thread(
+                pg_store.update_audit_oracle_score,
+                dispute_id,
+                result.win_probability,
+                result.ev_fight,
+                result.recommendation,
+            )
         return {
-            "dispute_id": dispute.get("dispute_id", ""),
+            "dispute_id": dispute_id,
             "oracle": "ok",
             "win_probability": result.win_probability,
             "ev_fight": result.ev_fight,
             "recommendation": result.recommendation,
         }
     except Exception as exc:
-        _log.warning("Oracle refresh failed for %s: %s", dispute.get("dispute_id"), exc)
-        return {"dispute_id": dispute.get("dispute_id", ""), "oracle": "error", "error": str(exc)}
+        _log.warning("Oracle refresh failed for %s: %s", dispute_id, exc)
+        return {"dispute_id": dispute_id, "oracle": "error", "error": str(exc)}
 
 
 async def run_workflow():

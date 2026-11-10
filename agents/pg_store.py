@@ -599,6 +599,49 @@ def append_audit_entry(entry: dict) -> bool:
         return False
 
 
+def update_audit_oracle_score(
+    dispute_id: str,
+    win_probability: float,
+    ev_fight: float,
+    recommendation: str,
+) -> bool:
+    """
+    Patch the most-recent audit entry for dispute_id with oracle scores.
+    Used by the dispute workflow to persist oracle results computed
+    after the initial action was logged (e.g. MANUAL_ACCEPT with 0 scores).
+    Returns True on update, False on no-op or error.
+    """
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE audit_log
+                SET oracle_win_probability = %s,
+                    oracle_ev_fight = %s,
+                    oracle_recommendation = %s
+                WHERE entry_id = (
+                    SELECT entry_id FROM audit_log
+                    WHERE dispute_id = %s
+                    ORDER BY timestamp_utc DESC
+                    LIMIT 1
+                )
+                  AND (oracle_win_probability IS NULL OR oracle_win_probability = 0)
+                """,
+                (win_probability, ev_fight, recommendation, dispute_id),
+            )
+            updated = cur.rowcount >= 1
+        conn.commit()
+        return updated
+    except Exception as exc:
+        logger.error("pg_store: update_audit_oracle_score failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return False
+
+
 def get_config_value(key: str) -> Optional[str]:
     """Read a service-level config value from service_config table."""
     try:
