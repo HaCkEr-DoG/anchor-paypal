@@ -749,6 +749,19 @@
         </div>
       </div>
     </div>
+    <div class="card" style="padding:24px;margin-bottom:16px">
+      <div class="settings-section">
+        <div class="settings-section-title">Dispute Sync</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">
+          If a dispute was created while Render was sleeping, the webhook may have been missed.
+          Use this to pull open disputes directly from PayPal and ingest any that are missing.
+        </div>
+        <button class="btn-primary" onclick="pollOpenDisputes()" id="btn-poll-disputes" style="font-size:13px;padding:8px 18px">
+          Sync from PayPal
+        </button>
+        <div id="poll-result" style="margin-top:10px;font-size:13px;display:none"></div>
+      </div>
+    </div>
     <div class="card" style="padding:24px">
       <div class="settings-section">
         <div class="settings-section-title">Sponsor Integrations</div>
@@ -1833,6 +1846,41 @@ function filterLog() {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+async function pollOpenDisputes() {
+  const btn = document.getElementById('btn-poll-disputes');
+  const res = document.getElementById('poll-result');
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  res.style.display = 'none';
+  try {
+    const r = await fetch('/api/admin/poll-open-disputes', { method: 'POST', headers: _auth() });
+    const d = await r.json();
+    if (!r.ok) {
+      res.style.color = 'var(--error)';
+      res.textContent = d.error || 'Sync failed.';
+    } else {
+      const ing = d.ingested || [];
+      const skip = d.skipped_already_known || [];
+      if (ing.length > 0) {
+        res.style.color = 'var(--ok)';
+        res.textContent = `Ingested ${ing.length} new dispute(s): ${ing.join(', ')}. ${skip.length} already known.`;
+        setTimeout(() => { showPage('overview'); loadOverview(); }, 2000);
+      } else {
+        res.style.color = 'var(--muted)';
+        res.textContent = `No new disputes found. ${skip.length} already in system. (PayPal total open: ${d.total_paypal_open || 0})`;
+      }
+    }
+    res.style.display = 'block';
+  } catch(e) {
+    res.style.color = 'var(--error)';
+    res.textContent = 'Network error: ' + e.message;
+    res.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sync from PayPal';
+  }
+}
+
 async function loadSettings() {
   const el = document.getElementById('settings-rows');
   if (!_overview) await loadOverview();
