@@ -2195,12 +2195,14 @@ async def api_disputes(request: Request):
         rows = [{
             "dispute_id": entry.get("dispute_id", ""),
             "amount": entry.get("amount_usd", 0),
+            "reason": entry.get("claim_type", ""),
             "action_type": str(entry.get("action", "")).lower(),
             "reasoning": entry.get("guardian_reason", ""),
             "recommendation": entry.get("oracle_recommendation", ""),
             "win_probability": entry.get("oracle_win_probability"),
             "ev_fight": entry.get("oracle_ev_fight"),
             "outcome": entry.get("outcome", ""),
+            "notes": entry.get("notes", ""),
             "timestamp": entry.get("timestamp_utc").isoformat() if hasattr(entry.get("timestamp_utc"), "isoformat") else entry.get("timestamp_utc", ""),
             "is_sandbox": entry.get("is_sandbox", True),
         } for entry in entries]
