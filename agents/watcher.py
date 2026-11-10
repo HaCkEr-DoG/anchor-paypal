@@ -2738,6 +2738,22 @@ async def api_provide_evidence(dispute_id: str, request: Request):
         ev_type = body.get("evidence_type", "PROOF_OF_FULFILLMENT")
         notes   = body.get("notes", "")
         _log.info("provide-evidence %s type=%s notes=%r", dispute_id, ev_type, notes)
+
+        # Preflight: check HATEOAS links to confirm provide-evidence is permitted
+        dispute_data = await client.get_dispute(dispute_id)
+        links = dispute_data.get("links", [])
+        allowed_hrefs = [l.get("href", "") for l in links]
+        _log.info("provide-evidence preflight links for %s: %s", dispute_id, allowed_hrefs)
+        permitted = any("provide-evidence" in h for h in allowed_hrefs)
+        if not permitted:
+            dispute_status = dispute_data.get("status", "UNKNOWN")
+            _log.warning("provide-evidence not in HATEOAS links for %s (status=%s)", dispute_id, dispute_status)
+            return JSONResponse(
+                {"error": f"PayPal does not allow evidence submission for this dispute (status: {dispute_status}). Available actions: {[l.get('rel') for l in links]}",
+                 "detail": f"provide-evidence not in HATEOAS links (status={dispute_status})"},
+                status_code=422,
+            )
+
         result = await client.provide_evidence(
             dispute_id,
             evidence_type=ev_type,
@@ -2752,6 +2768,7 @@ async def api_provide_evidence(dispute_id: str, request: Request):
         import httpx as _httpx
         if isinstance(e, _httpx.HTTPStatusError):
             status = e.response.status_code
+        _log.error("provide-evidence %s FAILED: %s", dispute_id, msg)
         return JSONResponse({"error": msg, "detail": msg}, status_code=status)
 
 
