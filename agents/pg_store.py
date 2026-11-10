@@ -1072,6 +1072,24 @@ def get_audit_stats() -> Dict[str, Any]:
         return {}
 
 
+def delete_audit_entries_by_dispute_id(dispute_id: str) -> int:
+    """Delete all audit_log rows for a given dispute_id. Returns count deleted."""
+    try:
+        conn = _get_conn()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM audit_log WHERE dispute_id=%s", (dispute_id,))
+            deleted = cur.rowcount
+        conn.commit()
+        return deleted
+    except Exception as exc:
+        logger.error("pg_store: delete_audit_entries_by_dispute_id failed: %s", exc)
+        try:
+            _get_conn().rollback()
+        except Exception:
+            pass
+        return 0
+
+
 def purge_old_records(retain_days: int = 90) -> dict:
     """
     Delete audit_log and completed/failed webhook_outbox rows older than

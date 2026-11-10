@@ -2192,6 +2192,15 @@ async def api_disputes(request: Request):
     if os.environ.get("DATABASE_URL"):
         import agents.pg_store as pg_store
         entries = await asyncio.to_thread(pg_store.get_audit_entries, 200)
+        def _derive_status(entry: dict) -> str:
+            outcome = (entry.get("outcome") or "").upper()
+            action = str(entry.get("action") or "").upper()
+            if outcome in ("WON", "LOST", "SETTLED", "WITHDRAWN"):
+                return "RESOLVED"
+            if action in ("AUTO_FIGHT", "AUTO_ACCEPT"):
+                return "AUTO_ACTIONED"
+            return "REQUIRED_ACTION"
+
         rows = [{
             "dispute_id": entry.get("dispute_id", ""),
             "amount": entry.get("amount_usd", 0),
@@ -2202,6 +2211,7 @@ async def api_disputes(request: Request):
             "win_probability": entry.get("oracle_win_probability"),
             "ev_fight": entry.get("oracle_ev_fight"),
             "outcome": entry.get("outcome", ""),
+            "status": _derive_status(entry),
             "notes": entry.get("notes", ""),
             "timestamp": entry.get("timestamp_utc").isoformat() if hasattr(entry.get("timestamp_utc"), "isoformat") else entry.get("timestamp_utc", ""),
             "is_sandbox": entry.get("is_sandbox", True),
@@ -4075,6 +4085,22 @@ async def api_poll_open_disputes(request: Request, background: BackgroundTasks):
     except Exception:
         _log.exception("poll-open-disputes failed")
         return JSONResponse({"error": "An internal error occurred"}, status_code=500)
+
+
+@app.delete("/api/admin/audit-entry/{dispute_id}")
+async def api_delete_audit_entry(request: Request, dispute_id: str):
+    """
+    DELETE /api/admin/audit-entry/{dispute_id}
+    Remove all audit_log rows for a dispute (cleanup of demo/erroneous entries).
+    Requires X-API-Key.
+    """
+    _require_api_key(request)
+    if not os.environ.get("DATABASE_URL"):
+        return JSONResponse({"error": "No database configured"}, status_code=503)
+    import agents.pg_store as pg_store
+    deleted = await asyncio.to_thread(pg_store.delete_audit_entries_by_dispute_id, dispute_id)
+    _log.info("admin: deleted %d audit_log rows for dispute %s", deleted, dispute_id)
+    return JSONResponse({"deleted": deleted, "dispute_id": dispute_id})
 
 
 # ── Oracle Calibration ────────────────────────────────────────────────────────
