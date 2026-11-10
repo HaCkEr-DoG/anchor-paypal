@@ -1459,9 +1459,10 @@ function openDisputeDetail(id) {
     <div class="hist-step ${s.startsWith('✓') ? 'hist-done' : 'hist-pending'}">${s.startsWith('⏳') ? '<span class="hist-circle"></span>' : ''}${s}</div>
   `).join('');
 
-  // store current dispute id
+  // store current dispute id + reason (for evidence type mapping)
   document.getElementById('detail-btn-fight').dataset.disputeId = id;
   document.getElementById('detail-btn-accept').dataset.disputeId = id;
+  document.getElementById('detail-btn-fight').dataset.reason = (d.reason || d.dispute_reason || '').toUpperCase();
 }
 
 function backToDisputeList() {
@@ -1470,83 +1471,118 @@ function backToDisputeList() {
 }
 
 function _showInlineResult(msg, ok) {
+  // Also update the inline banner in the detail panel
   const el = document.getElementById('detail-result-banner');
-  if (!el) return;
-  el.style.display = 'block';
-  el.style.background = ok ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
-  el.style.border = `1px solid ${ok ? '#10b981' : '#ef4444'}`;
-  el.style.color = ok ? '#10b981' : '#ef4444';
-  el.textContent = msg;
+  if (el) {
+    el.style.display = 'block';
+    el.style.background = ok ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
+    el.style.border = `1px solid ${ok ? '#10b981' : '#ef4444'}`;
+    el.style.color = ok ? '#10b981' : '#ef4444';
+    el.textContent = msg;
+  }
+  // Floating top toast — prominent, full-width, colour-coded
+  let toast = document.getElementById('_global-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = '_global-toast';
+    toast.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;padding:16px 24px;font-size:15px;font-weight:600;text-align:center;cursor:pointer;transition:opacity 0.4s;';
+    toast.addEventListener('click', () => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); });
+    document.body.appendChild(toast);
+  }
+  toast.style.background = ok ? '#059669' : '#dc2626';
+  toast.style.color = '#fff';
+  toast.style.opacity = '1';
+  toast.textContent = msg;
+  clearTimeout(toast._timer);
+  if (ok) toast._timer = setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); }, 4000);
 }
 
 async function approveDisputeAction(action) {
   const id = document.getElementById('detail-btn-fight').dataset.disputeId;
   if (!id) return;
 
-  // Show inline confirm banner instead of browser confirm()
-  const banner = document.getElementById('detail-confirm-banner');
-  const textEl = document.getElementById('detail-confirm-text');
-  const yesBtn = document.getElementById('detail-confirm-yes');
-  const noBtn = document.getElementById('detail-confirm-no');
+  // Show fixed full-screen confirm overlay
   const resultEl = document.getElementById('detail-result-banner');
   if (resultEl) resultEl.style.display = 'none';
 
   const label = action === 'fight'
     ? `Submit evidence to fight dispute ${id}?`
     : `Accept liability for dispute ${id}?`;
-  textEl.textContent = label + ' This will send a request to PayPal.';
-  banner.style.display = 'block';
 
-  await new Promise(resolve => {
-    const onYes = () => { cleanup(); resolve(true); };
-    const onNo  = () => { cleanup(); resolve(false); };
-    function cleanup() {
-      yesBtn.removeEventListener('click', onYes);
-      noBtn.removeEventListener('click', onNo);
-      banner.style.display = 'none';
+  const confirmed = await new Promise(resolve => {
+    let overlay = document.getElementById('_confirm-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = '_confirm-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;';
+      document.body.appendChild(overlay);
     }
-    yesBtn.addEventListener('click', onYes);
-    noBtn.addEventListener('click', onNo);
-  }).then(async confirmed => {
-    if (!confirmed) return;
+    overlay.innerHTML = `
+      <div style="background:#1e2130;border:2px solid #f59e0b;border-radius:12px;padding:28px 32px;max-width:460px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,0.6);text-align:center;">
+        <div style="font-size:22px;margin-bottom:12px;">${action === 'fight' ? '⚔️' : '🤝'}</div>
+        <div style="font-size:15px;font-weight:600;color:#f59e0b;margin-bottom:8px;">${action === 'fight' ? 'Submit Evidence' : 'Accept Liability'}</div>
+        <div style="font-size:13px;color:#cbd5e1;margin-bottom:20px;">${label}<br><span style="color:#94a3b8;font-size:12px;">This will send a live request to PayPal Sandbox.</span></div>
+        <div style="display:flex;gap:12px;justify-content:center;">
+          <button id="_overlay-yes" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer;">Confirm</button>
+          <button id="_overlay-no" style="background:#374151;color:#e2e8f0;border:1px solid #4b5563;border-radius:6px;padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer;">Cancel</button>
+        </div>
+      </div>`;
+    overlay.style.display = 'flex';
+    function done(val) {
+      overlay.style.display = 'none';
+      resolve(val);
+    }
+    overlay.querySelector('#_overlay-yes').onclick = () => done(true);
+    overlay.querySelector('#_overlay-no').onclick  = () => done(false);
+    overlay.onclick = e => { if (e.target === overlay) done(false); };
+  });
 
-    const btn = action === 'fight'
-      ? document.getElementById('detail-btn-fight')
-      : document.getElementById('detail-btn-accept');
-    btn.disabled = true;
-    btn.textContent = action === 'fight' ? 'Submitting…' : 'Accepting…';
+  if (!confirmed) return;
 
-    try {
-      const url = action === 'fight'
-        ? `/api/paypal/disputes/${encodeURIComponent(id)}/provide-evidence`
-        : `/api/paypal/disputes/${encodeURIComponent(id)}/accept`;
-      const body = action === 'fight'
-        ? { evidence_type: 'PROOF_OF_FULFILLMENT', notes: 'Merchant contests this dispute. Evidence of fulfillment available.' }
-        : { note: 'Merchant accepts this claim.' };
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ..._auth() },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (r.ok) {
-        const data = await r.json();
-        const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
-        _showInlineResult(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`, true);
-        setTimeout(() => { backToDisputeList(); loadDisputes(); }, 1800);
-      } else {
-        let msg = r.status;
-        try { const e = await r.json(); msg = e.detail || e.error || msg; } catch(_) {}
-        _showInlineResult('Error: ' + msg, false);
-        btn.disabled = false;
-        btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
-      }
-    } catch(e) {
-      _showInlineResult('Network error: ' + e.message, false);
+  const btn = action === 'fight'
+    ? document.getElementById('detail-btn-fight')
+    : document.getElementById('detail-btn-accept');
+  btn.disabled = true;
+  btn.textContent = action === 'fight' ? 'Submitting…' : 'Accepting…';
+
+  try {
+    const url = action === 'fight'
+      ? `/api/paypal/disputes/${encodeURIComponent(id)}/provide-evidence`
+      : `/api/paypal/disputes/${encodeURIComponent(id)}/accept`;
+    const reason = (document.getElementById('detail-btn-fight').dataset.reason || '').toUpperCase();
+    const evidenceType = reason.includes('NOT_AS_DESCRIBED') || reason.includes('SNAD') || reason.includes('MERCHANDISE') || reason.includes('SERVICE')
+      ? 'ITEM_DESCRIPTION'
+      : reason.includes('UNAUTHORIZED')
+      ? 'AUTHORIZATION'
+      : reason.includes('NOT_RECEIVED') || reason.includes('INR')
+      ? 'PROOF_OF_FULFILLMENT'
+      : 'ITEM_DESCRIPTION';
+    const body = action === 'fight'
+      ? { evidence_type: evidenceType, notes: 'Merchant contests this dispute. Evidence provided.' }
+      : { note: 'Merchant accepts this claim.' };
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ..._auth() },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      const demo = data.demo ? ' (demo mode — no PayPal action taken)' : '';
+      _showInlineResult(`✓ ${action === 'fight' ? 'Evidence submitted' : 'Claim accepted'}${demo}.`, true);
+      setTimeout(() => { backToDisputeList(); loadDisputes(); }, 1800);
+    } else {
+      let msg = r.status;
+      try { const e = await r.json(); msg = e.detail || e.error || msg; } catch(_) {}
+      _showInlineResult('Error: ' + msg, false);
       btn.disabled = false;
       btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
     }
-  });
+  } catch(e) {
+    _showInlineResult('Network error: ' + e.message, false);
+    btn.disabled = false;
+    btn.textContent = action === 'fight' ? 'Approve: Submit Evidence' : 'Accept Liability';
+  }
 }
 
 // ── Recoveries ────────────────────────────────────────────────────────────────
