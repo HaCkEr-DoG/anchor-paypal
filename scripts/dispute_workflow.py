@@ -80,13 +80,13 @@ async def _capture_kernel_screenshot(dispute: dict) -> dict:
 async def _refresh_oracle_score(dispute: dict) -> dict:
     """Re-run oracle for disputes with null/zero win_probability and persist the result."""
     dispute_id = dispute.get("dispute_id", "")
-    existing_wp = dispute.get("win_probability")
-    if existing_wp is not None and float(existing_wp) > 0:
+    existing_wp = dispute.get("oracle_win_probability") or dispute.get("win_probability")
+    if existing_wp is not None and float(existing_wp) > 0.001:
         return {"dispute_id": dispute_id, "oracle": "skipped_already_scored"}
     try:
         from oracle.decision import calculate as oracle_calculate
         amount = float(dispute.get("amount", 0) or dispute.get("amount_usd", 0))
-        reason = dispute.get("reason", "") or dispute.get("claim_type", "ITEM_NOT_RECEIVED")
+        reason = dispute.get("claim_type") or dispute.get("reason") or "ITEM_NOT_RECEIVED"
         result = oracle_calculate(claim_type=reason, amount=amount)
         # Persist the score back to the audit log so the dashboard can show it
         if os.environ.get("DATABASE_URL"):
