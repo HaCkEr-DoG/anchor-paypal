@@ -3492,9 +3492,16 @@ async def api_audit_log(limit: int = 50):
         import agents.pg_store as pg_store
         pg_entries = await asyncio.to_thread(pg_store.get_audit_entries, capped)
         if pg_entries:
+            serialized = []
+            for e in pg_entries:
+                row = dict(e)
+                for k, v in row.items():
+                    if hasattr(v, "isoformat"):
+                        row[k] = v.isoformat()
+                serialized.append(row)
             return JSONResponse({
-                "entries": pg_entries,
-                "count": len(pg_entries),
+                "entries": serialized,
+                "count": len(serialized),
                 "source": "postgresql",
                 "note": "Entries labeled is_sandbox=true are test/demo decisions",
             })
