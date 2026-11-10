@@ -972,8 +972,12 @@ async function renderActionQueue() {
   // Load disputes (with PayPal fallback when audit log is empty)
   await loadDisputes();
 
-  // Oracle Win Rate: avg win_probability across oracle-scored disputes
-  const withProb = _disputes.filter(d => d.win_probability != null);
+  // Oracle Win Rate: avg win_probability across oracle-auto-scored disputes only
+  // Exclude manual actions (action_type starts with "manual_") which have win_probability=0
+  const withProb = _disputes.filter(d =>
+    d.win_probability != null && d.win_probability > 0 &&
+    !(d.action_type || '').toLowerCase().startsWith('manual_')
+  );
   if (withProb.length > 0) {
     const avgWP = withProb.reduce((s, d) => s + d.win_probability, 0) / withProb.length;
     document.getElementById('stat-win-rate').textContent = Math.round(avgWP * 100) + '%';
@@ -984,9 +988,11 @@ async function renderActionQueue() {
   }
 
   // Time Saved: auto-fought disputes × (90 min human − 10 min machine) at $50/hr
+  // Only count AUTO_FIGHT oracle actions, not manual submissions
   const autoFought = _disputes.filter(d => {
-    const rec = (d.recommendation || d.action_type || '').toLowerCase();
-    return rec.includes('fight') && d.win_probability != null;
+    const act = (d.action_type || '').toLowerCase();
+    const rec = (d.recommendation || '').toLowerCase();
+    return (act === 'auto_fight' || (act !== 'manual_fight' && rec.includes('fight'))) && d.win_probability != null && d.win_probability > 0;
   }).length;
   const timeSavedMins = autoFought * (90 - 10);
   const timeSavedHrs = (timeSavedMins / 60).toFixed(1);

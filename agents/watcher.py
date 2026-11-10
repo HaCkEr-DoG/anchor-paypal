@@ -782,10 +782,18 @@ async def api_prod_overview():
             urgent_data = await asyncio.wait_for(pp.list_disputes(dispute_state="REQUIRED_ACTION", page_size=50), timeout=8.0)
             all_data = await asyncio.wait_for(pp.list_disputes(page_size=50), timeout=8.0)
             webhook_data = await asyncio.wait_for(pp.list_webhooks(), timeout=5.0)
+            _all_items = all_data.get("items", [])
+            _CLOSED = {"RESOLVED", "CLOSED", "CANCELLED"}
+            _active_items = [d for d in _all_items if d.get("status","").upper() not in _CLOSED]
+            _total_amount = sum(
+                float(d.get("dispute_amount", {}).get("value") or 0)
+                for d in _all_items
+            )
             paypal = {
                 "connected": True,
-                "open_disputes": int(all_data.get("total_items") or len(all_data.get("items",[]))),
+                "open_disputes": len(_active_items),
                 "urgent_disputes": int(urgent_data.get("total_items") or len(urgent_data.get("items",[]))),
+                "total_disputed_amount": round(_total_amount, 2),
                 "webhook_registrations": len(webhook_data.get("webhooks",[])),
                 "environment": os.environ.get("PAYPAL_ENV","sandbox"),
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -2097,16 +2105,22 @@ async def api_dashboard_summary(request: Request):
         urgent_items = urgent_data.get("items", [])
         all_items = all_data.get("items", [])
         urgent_count = urgent_data.get("total_items")
-        open_count = all_data.get("total_items")
+        _CLOSED = {"RESOLVED", "CLOSED", "CANCELLED"}
+        active_items = [d for d in all_items if d.get("status", "").upper() not in _CLOSED]
+        total_disputed_amount = round(sum(
+            float(d.get("dispute_amount", {}).get("value") or 0)
+            for d in all_items
+        ), 2)
         summary = {
             "connected": True,
             "source": "PayPal sandbox" if paypal_env == "sandbox" else "PayPal",
             "environment": paypal_env,
             "urgent_disputes": int(urgent_count) if urgent_count is not None else len(urgent_items),
-            "open_disputes": int(open_count) if open_count is not None else len(all_items),
+            "open_disputes": len(active_items),
+            "total_disputed_amount": total_disputed_amount,
             "dispute_counts_complete": (
                 (urgent_count is not None or len(urgent_items) < 50)
-                and (open_count is not None or len(all_items) < 50)
+                and len(all_items) < 50
             ),
             "webhook_registrations": len(webhook_data.get("webhooks", [])),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
